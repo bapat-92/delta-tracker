@@ -40,7 +40,7 @@ td input{min-width:70px}
     <label>API base (leave for default)<input id="base" value="https://api.india.delta.exchange"></label>
     <label>BTC per lot<input id="lot" type="number" step="0.0001" value="0.001"></label>
     <label>Loss limit (USD)<input id="limit" type="number" value="500"></label>
-    <label>Refresh (sec)<input id="sec" type="number" min="2" value="5"></label>
+    <label>Refresh (sec)<input id="sec" type="number" min="2" value="300"></label>
     <button id="start">Start / apply</button>
   </div>
   <p class="note">Public prices only, so no API key is needed. If you get "Failed to fetch", the API may block browser requests (CORS): put a proxy URL in the API base. Entry price is the premium per 1 BTC you got or paid. BTC per lot is an assumption, so check the contract specs.</p>
@@ -76,6 +76,20 @@ td input{min-width:70px}
   <b>Combined premium of added sells</b>
   <div class="note" id="chartNote"></div>
   <div id="chart"></div>
+</div>
+
+<div class="card">
+  <b>Margin estimate (rough)</b>
+  <div class="row" style="margin:8px 0">
+    <label>Leverage (x)<input id="lev" type="number" min="1" value="100"></label>
+  </div>
+  <div class="kpi">
+    <div>Short notional<b id="mNot">–</b></div>
+    <div>Est. initial margin<b id="mMar">–</b></div>
+    <div>Premium cost of long legs<b id="mLong">–</b></div>
+    <div>Net P&amp;L as % of margin<b id="mPct">–</b></div>
+  </div>
+  <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
 </div>
 
 <script>
@@ -147,6 +161,7 @@ async function tick(){
       b.textContent = f(pc); b.className = "pc " + sg(pc);
     });
     updateChart(res);
+    updateMargin(res, net);
     if (spot){
       $("spot").textContent = f(spot, 0);
       let best = null;
@@ -173,6 +188,28 @@ async function tick(){
 
 function start(){ clearInterval(timer); tick(); timer = setInterval(tick, Math.max(2, Number($("sec").value) || 5) * 1000); }
 $("start").onclick = start;
+let lastRes = null, lastNet = 0;
+function updateMargin(res, net){
+  lastRes = res; lastNet = net;
+  const lev = Number($("lev").value) || 1, lot = Number($("lot").value) || 0;
+  let spot = null;
+  for (const t of res){ if (t && num(t.spot_price)){ spot = num(t.spot_price); break; } }
+  if (!spot) return;
+  let notional = 0, longCost = 0;
+  legs.forEach((L, i) => {
+    const t = res[i]; if (!t) return;
+    const qty = (Number(L.lots) || 0) * lot;
+    if (L.side === -1) notional += qty * spot;
+    else longCost += qty * (num(t.mark_price) || 0);
+  });
+  const margin = notional / lev;
+  $("mNot").textContent = "$" + f(notional, 0);
+  $("mMar").textContent = "$" + f(margin, 0);
+  $("mLong").textContent = "$" + f(longCost, 0);
+  $("mPct").textContent = margin > 0 ? f(net / margin * 100, 1) + "%" : "–";
+  $("mPct").className = sg(net);
+}
+
 const MAX_ADDED = 4;
 let series = [], seriesKey = "";
 
@@ -266,6 +303,7 @@ async function findPrem(){
   } catch (e){ out.textContent = "Error: " + e.message; }
 }
 $("find").onclick = findPrem;
+$("lev").oninput = () => { if (lastRes) updateMargin(lastRes, lastNet); };
 $("fout").addEventListener("click", e => {
   const s = e.target.dataset.add; if (!s) return;
   const cap = $("fcap"), added = legs.filter(L => L.fromFinder);
