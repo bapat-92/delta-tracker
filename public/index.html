@@ -89,7 +89,12 @@ td input{min-width:70px}
     <div>Premium cost of long legs<b id="mLong">–</b></div>
     <div>Net P&amp;L as % of margin<b id="mPct">–</b></div>
   </div>
-  <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
+  <div class="kpi" style="margin-top:10px">
+    <div>Max profit at expiry<b id="mMaxP" class="g">–</b></div>
+    <div>Max profit as % of margin<b id="mMaxPct" class="g">–</b></div>
+    <div>Max loss at expiry<b id="mMaxL" class="l">–</b></div>
+  </div>
+  <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
 </div>
 
 <script>
@@ -188,6 +193,18 @@ async function tick(){
 
 function start(){ clearInterval(timer); tick(); timer = setInterval(tick, Math.max(2, Number($("sec").value) || 5) * 1000); }
 $("start").onclick = start;
+function payoffStats(lot){
+  const ls = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)).map(L => {
+    const p = L.s.split("-");
+    return {c: p[0] === "C", k: Number(p[2]), side: L.side === -1 ? -1 : 1, q: Number(L.lots) * lot, e: Number(L.entry) || 0};
+  });
+  if (!ls.length) return null;
+  const pnl = S => ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const vals = [0, ...ls.map(l => l.k)].map(pnl);
+  const slope = ls.reduce((a, l) => a + (l.c ? l.side * l.q : 0), 0);   // P&L slope above the highest strike
+  return {max: slope > 0 ? Infinity : Math.max(...vals), min: slope < 0 ? -Infinity : Math.min(...vals)};
+}
+
 let lastRes = null, lastNet = 0;
 function updateMargin(res, net){
   lastRes = res; lastNet = net;
@@ -208,6 +225,11 @@ function updateMargin(res, net){
   $("mLong").textContent = "$" + f(longCost, 0);
   $("mPct").textContent = margin > 0 ? f(net / margin * 100, 1) + "%" : "–";
   $("mPct").className = sg(net);
+  const st = payoffStats(lot);
+  if (!st){ ["mMaxP", "mMaxPct", "mMaxL"].forEach(id => $(id).textContent = "–"); return; }
+  $("mMaxP").textContent = st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0);
+  $("mMaxPct").textContent = st.max === Infinity || !(margin > 0) ? "–" : f(st.max / margin * 100, 1) + "%";
+  $("mMaxL").textContent = st.min === -Infinity ? "Unlimited" : "$" + f(st.min, 0);
 }
 
 const MAX_ADDED = 4;
