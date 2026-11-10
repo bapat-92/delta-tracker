@@ -109,6 +109,25 @@ td input{min-width:70px}
   <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
 </div>
 
+<div class="card">
+  <b>Position sizing</b>
+  <div class="row" style="margin:8px 0">
+    <label>Total capital (USD)<input id="cap" type="number" min="0" placeholder="e.g. 10000"></label>
+    <label>Margin share (%)<input id="msh" type="number" min="0" step="1" value="25"></label>
+    <label>Premium target (% of capital)<input id="ptg" type="number" min="0" step="0.5" value="2"></label>
+  </div>
+  <div class="kpi">
+    <div>Margin budget<b id="zBud">–</b></div>
+    <div>Lots per added sell leg<b id="zLots">–</b></div>
+    <div>Premium target<b id="zTgt">–</b></div>
+    <div>Combined premium needed (per 1 BTC)<b id="zNeed">–</b></div>
+    <div>Your combined entry premium (per 1 BTC)<b id="zHave">–</b></div>
+    <div>Premium at these lots<b id="zGot">–</b></div>
+  </div>
+  <p><button id="applyLots">Apply lots to added sells</button> <span id="zMsg" class="note"></span></p>
+  <p class="note">Lots are sized so the estimated margin (short lots × BTC per lot × spot ÷ leverage, the leverage box above) equals the margin share of your capital, split equally across the sells you added from the finder. The premium target is a share of capital you want to collect, and the premium figures use the entry prices in the table. Capital is in USD, and the margin estimate is rough, so check Delta's order preview before trading.</p>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const DEFAULT = [
@@ -179,6 +198,7 @@ async function tick(){
     });
     updateChart(res);
     updateMargin(res, net);
+    updateSizing();
     if (spot){
       $("spot").textContent = f(spot, 0);
       let best = null;
@@ -256,6 +276,44 @@ function updateMargin(res, net){
   $("mMaxP").textContent = st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0);
   $("mMaxPct").textContent = st.max === Infinity || !(margin > 0) ? "–" : f(st.max / margin * 100, 1) + "%";
   $("mMaxL").textContent = st.min === -Infinity ? "Unlimited" : "$" + f(st.min, 0);
+}
+
+function sizeCalc(){
+  if (!lastRes) return null;
+  const cap = Number($("cap").value) || 0, share = Number($("msh").value) || 0, tg = Number($("ptg").value) || 0;
+  const lev = Number($("lev").value) || 1, lot = Number($("lot").value) || 0;
+  let spot = null;
+  for (const t of lastRes){ if (t && num(t.spot_price)){ spot = num(t.spot_price); break; } }
+  const added = legs.filter(L => L.fromFinder);
+  const c = {cap, share, tg, lev, lot, spot, added, ok: cap > 0 && spot && lot > 0};
+  if (!c.ok) return c;
+  c.budget = cap * share / 100;
+  c.total = Math.floor(c.budget * lev / (lot * spot));
+  c.per = added.length ? Math.floor(c.total / added.length) : 0;
+  return c;
+}
+
+function updateSizing(){
+  const c = sizeCalc(); if (!c) return;
+  const ids = ["zBud", "zLots", "zTgt", "zNeed", "zHave", "zGot"];
+  if (!c.ok){ ids.forEach(id => $(id).textContent = "–"); return; }
+  const tgt = c.cap * c.tg / 100;
+  $("zBud").textContent = "$" + f(c.budget, 0);
+  $("zTgt").textContent = "$" + f(tgt, 0);
+  if (!c.added.length){
+    ["zLots", "zNeed", "zHave", "zGot"].forEach(id => $(id).textContent = "–");
+    $("zMsg").textContent = "Add sells from the finder first.";
+    return;
+  }
+  const have = c.added.reduce((a, L) => a + (Number(L.entry) || 0), 0);
+  const need = c.per > 0 ? tgt / (c.lot * c.per) : null;
+  const got = have * c.lot * c.per;
+  $("zLots").textContent = f(c.per, 0) + " (total " + f(c.per * c.added.length, 0) + ")";
+  $("zNeed").textContent = need === null ? "–" : "$" + f(need, 0);
+  $("zHave").textContent = "$" + f(have, 0);
+  $("zGot").textContent = "$" + f(got, 0) + " (" + f(got / c.cap * 100, 2) + "% of capital)";
+  $("zGot").className = got >= tgt ? "g" : "l";
+  $("zMsg").textContent = got >= tgt ? "" : "Premium is below your target at this margin cap: choose strikes closer to spot, or accept a lower target.";
 }
 
 const MAX_ADDED = 4;
@@ -351,7 +409,21 @@ async function findPrem(){
   } catch (e){ out.textContent = "Error: " + e.message; }
 }
 $("find").onclick = findPrem;
-["lev", "slx", "slb"].forEach(id => { $(id).oninput = () => { if (lastRes) updateMargin(lastRes, lastNet); }; });
+["lev", "slx", "slb"].forEach(id => { $(id).oninput = () => { if (lastRes) updateMargin(lastRes, lastNet); updateSizing(); }; });
+try { const cf = JSON.parse(localStorage.getItem("cfg")); if (cf){ $("cap").value = cf.cap || ""; $("msh").value = cf.msh || 25; $("ptg").value = cf.ptg || 2; } } catch (e) {}
+["cap", "msh", "ptg"].forEach(id => { $(id).oninput = () => {
+  try { localStorage.setItem("cfg", JSON.stringify({cap: $("cap").value, msh: $("msh").value, ptg: $("ptg").value})); } catch (e) {}
+  updateSizing();
+}; });
+$("applyLots").onclick = () => {
+  const c = sizeCalc();
+  if (!c || !c.ok){ $("zMsg").textContent = "Enter your total capital first."; return; }
+  if (!c.added.length){ $("zMsg").textContent = "Add sells from the finder first."; return; }
+  if (c.per < 1){ $("zMsg").textContent = "Margin budget is too small for even one lot per leg."; return; }
+  legs.forEach(L => { if (L.fromFinder) L.lots = c.per; });
+  save(); drawInputs(); tick();
+  $("zMsg").textContent = "Applied " + f(c.per, 0) + " lots to each of " + c.added.length + " added sell legs.";
+};
 $("slb").onchange = $("slb").oninput;
 $("fout").addEventListener("click", e => {
   const s = e.target.dataset.add; if (!s) return;
