@@ -94,6 +94,18 @@ td input{min-width:70px}
     <div>Max profit as % of margin<b id="mMaxPct" class="g">–</b></div>
     <div>Max loss at expiry<b id="mMaxL" class="l">–</b></div>
   </div>
+  <div class="row" style="margin:14px 0 8px">
+    <label>Stop-loss multiple (× premium)<input id="slx" type="number" min="0" step="0.5" value="5"></label>
+    <label>Premium basis
+      <select id="slb"><option value="sold">Sold legs only</option><option value="net">Net (sold − bought)</option></select>
+    </label>
+  </div>
+  <div class="kpi">
+    <div>Premium collected<b id="sPrem">–</b></div>
+    <div>Stop-loss = max loss you accept<b id="sSL" class="l">–</b></div>
+    <div>Stop-loss as % of margin<b id="sPct">–</b></div>
+    <div>Stop-loss used so far<b id="sUsed">–</b></div>
+  </div>
   <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
 </div>
 
@@ -225,6 +237,20 @@ function updateMargin(res, net){
   $("mLong").textContent = "$" + f(longCost, 0);
   $("mPct").textContent = margin > 0 ? f(net / margin * 100, 1) + "%" : "–";
   $("mPct").className = sg(net);
+  let sold = 0, bought = 0;
+  legs.forEach(L => {
+    const v = (Number(L.lots) || 0) * lot * (Number(L.entry) || 0);
+    if (L.side === -1) sold += v; else bought += v;
+  });
+  const prem = $("slb").value === "net" ? sold - bought : sold;
+  const x = Number($("slx").value) || 0;
+  const sl = prem > 0 && x > 0 ? prem * x : 0;
+  $("sPrem").textContent = "$" + f(prem, 0);
+  $("sSL").textContent = sl > 0 ? "$" + f(sl, 0) : "–";
+  $("sPct").textContent = sl > 0 && margin > 0 ? f(sl / margin * 100, 1) + "%" : "–";
+  const used = sl > 0 ? Math.max(0, -net) / sl * 100 : null;
+  $("sUsed").textContent = used === null ? "–" : f(used, 0) + "%";
+  $("sUsed").className = used !== null && used >= 100 ? "l" : "";
   const st = payoffStats(lot);
   if (!st){ ["mMaxP", "mMaxPct", "mMaxL"].forEach(id => $(id).textContent = "–"); return; }
   $("mMaxP").textContent = st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0);
@@ -325,7 +351,8 @@ async function findPrem(){
   } catch (e){ out.textContent = "Error: " + e.message; }
 }
 $("find").onclick = findPrem;
-$("lev").oninput = () => { if (lastRes) updateMargin(lastRes, lastNet); };
+["lev", "slx", "slb"].forEach(id => { $(id).oninput = () => { if (lastRes) updateMargin(lastRes, lastNet); }; });
+$("slb").onchange = $("slb").oninput;
 $("fout").addEventListener("click", e => {
   const s = e.target.dataset.add; if (!s) return;
   const cap = $("fcap"), added = legs.filter(L => L.fromFinder);
