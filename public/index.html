@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delta India position tracker</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#15181d;--mut:#5d6572;--card:#fff;--line:#dde1e7;--gain:#0a7d4f;--loss:#b3261e;--acc:#1f4fd8;--warn:#fdecea}
+@media (prefers-color-scheme:dark){:root{--bg:#101318;--fg:#e8ebf0;--mut:#98a1af;--card:#181c23;--line:#2a303a;--gain:#4cd08f;--loss:#ff7b72;--acc:#7aa2ff;--warn:#3a1e1c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:16px;max-width:980px;margin-inline:auto}
+h1{font-size:20px;margin:0 0 4px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:3px}
+input,select,button{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
+input{width:100%}
+button{cursor:pointer;background:var(--acc);color:#fff;border-color:var(--acc)}
+.wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;min-width:760px;font-variant-numeric:tabular-nums}
+th,td{padding:5px 6px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;color:var(--mut);font-weight:600}
+td:first-child,th:first-child{text-align:left}
+td input{min-width:70px}
+.g{color:var(--gain)}.l{color:var(--loss)}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kpi div{font-size:12px;color:var(--mut)}.kpi b{display:block;font-size:20px;color:var(--fg)}
+#alert{display:none;background:var(--warn);color:var(--loss);border:1px solid var(--loss);border-radius:8px;padding:10px;margin-bottom:12px;font-weight:600}
+#status{color:var(--mut);font-size:13px}
+.note{font-size:12px;color:var(--mut)}
+</style>
+</head>
+<body>
+<h1>Delta India position tracker</h1>
+<div id="status">Starting…</div>
+<div id="alert"></div>
+
+<div class="card">
+  <div class="row">
+    <label>API base (leave for default)<input id="base" value="/api"></label>
+    <label>BTC per lot<input id="lot" type="number" step="0.0001" value="0.001"></label>
+    <label>Loss limit (USD)<input id="limit" type="number" value="500"></label>
+    <label>Refresh (sec)<input id="sec" type="number" min="2" value="5"></label>
+    <button id="start">Start / apply</button>
+  </div>
+  <p class="note">Public prices only, so no API key is needed. If you get "Failed to fetch", the API may block browser requests (CORS): put a proxy URL in the API base. Entry price is the premium per 1 BTC you got or paid. BTC per lot is an assumption, so check the contract specs.</p>
+</div>
+
+<div class="kpi card">
+  <div>Spot<b id="spot">–</b></div>
+  <div>Net P&amp;L at mark<b id="net">–</b></div>
+  <div>Net P&amp;L if closed now<b id="close">–</b></div>
+  <div>Nearest strike<b id="near">–</b></div>
+</div>
+
+<div class="card wrap">
+  <table>
+    <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th></th></tr></thead>
+    <tbody id="body"></tbody>
+  </table>
+  <p><button id="add">Add leg</button></p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const DEFAULT = [
+  {s:"C-BTC-76400-111126", side:-1, lots:5000, entry:0},
+  {s:"P-BTC-73400-111126", side:-1, lots:5000, entry:0},
+  {s:"C-BTC-75400-111126", side:1,  lots:1500, entry:0},
+  {s:"P-BTC-74000-111126", side:1,  lots:1500, entry:0}
+];
+let legs = DEFAULT.map(x => ({...x})), timer, last = {};
+
+try { const saved = JSON.parse(localStorage.getItem("legs")); if (Array.isArray(saved) && saved.length) legs = saved; } catch (e) {}
+function save(){ try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {} }
+
+const num = v => (v === undefined || v === null || v === "") ? null : Number(v);
+const f = (v, d = 2) => v === null || isNaN(v) ? "–" : v.toLocaleString(undefined, {maximumFractionDigits: d});
+const sg = v => v === null || isNaN(v) ? "" : v >= 0 ? "g" : "l";
+
+function drawInputs(){
+  $("body").innerHTML = legs.map((L, i) => `<tr data-i="${i}">
+    <td><input value="${L.s}" data-k="s"></td>
+    <td><select data-k="side"><option value="-1" ${L.side == -1 ? "selected" : ""}>Sell</option><option value="1" ${L.side == 1 ? "selected" : ""}>Buy</option></select></td>
+    <td><input type="number" value="${L.lots}" data-k="lots"></td>
+    <td><input type="number" step="any" value="${L.entry}" data-k="entry"></td>
+    <td class="m">–</td><td class="b">–</td><td class="a">–</td><td class="pm">–</td><td class="pc">–</td>
+    <td><button data-del="${i}">✕</button></td></tr>`).join("");
+}
+$("body").addEventListener("change", e => {
+  const tr = e.target.closest("tr"); if (!tr || !e.target.dataset.k) return;
+  const L = legs[tr.dataset.i], k = e.target.dataset.k;
+  L[k] = k === "s" ? e.target.value.trim() : Number(e.target.value);
+  save(); tick();
+});
+$("body").addEventListener("click", e => {
+  if (e.target.dataset.del !== undefined){ legs.splice(Number(e.target.dataset.del), 1); save(); drawInputs(); tick(); }
+});
+$("add").onclick = () => { legs.push({s:"", side:-1, lots:0, entry:0}); drawInputs(); };
+
+async function getLeg(base, sym){
+  const r = await fetch(`${base}/v2/tickers/${encodeURIComponent(sym)}`);
+  if (!r.ok) throw new Error(sym + ": HTTP " + r.status);
+  const j = await r.json();
+  return j.result;
+}
+
+async function tick(){
+  const base = $("base").value.replace(/\/$/, ""), lot = Number($("lot").value) || 0, limit = Number($("limit").value) || 0;
+  try {
+    const res = await Promise.all(legs.map(L => L.s ? getLeg(base, L.s) : Promise.resolve(null)));
+    let net = 0, close = 0, spot = null, nearest = null;
+    res.forEach((t, i) => {
+      const L = legs[i], tr = $("body").children[i]; if (!tr) return;
+      if (!t){ return; }
+      const q = t.quotes || {};
+      const mark = num(t.mark_price), bid = num(q.best_bid), ask = num(q.best_ask);
+      const qty = L.lots * lot;
+      const pm = mark === null ? null : L.side * (mark - L.entry) * qty;
+      // closing a short means buying at the ask; closing a long means selling at the bid
+      const cp = L.side === -1 ? ask : bid;
+      const pc = cp === null ? null : L.side * (cp - L.entry) * qty;
+      net += pm || 0; close += pc === null ? (pm || 0) : pc;
+      if (num(t.spot_price)) spot = num(t.spot_price);
+      tr.querySelector(".m").textContent = f(mark);
+      tr.querySelector(".b").textContent = f(bid);
+      tr.querySelector(".a").textContent = f(ask);
+      const a = tr.querySelector(".pm"), b = tr.querySelector(".pc");
+      a.textContent = f(pm); a.className = "pm " + sg(pm);
+      b.textContent = f(pc); b.className = "pc " + sg(pc);
+    });
+    if (spot){
+      $("spot").textContent = f(spot, 0);
+      let best = null;
+      legs.filter(L => L.side === -1).forEach(L => {
+        const k = Number(L.s.split("-")[2]);
+        if (k && (best === null || Math.abs(k - spot) < Math.abs(best - spot))) best = k;
+      });
+      $("near").textContent = best ? `${f(best,0)} (${f(Math.abs(best - spot),0)} away)` : "–";
+    }
+    $("net").textContent = f(net); $("net").className = sg(net);
+    $("close").textContent = f(close); $("close").className = sg(close);
+    const worst = Math.min(net, close);
+    const al = $("alert");
+    if (limit > 0 && worst <= -limit){
+      al.style.display = "block";
+      al.textContent = `Loss limit reached: net P&L ${f(worst)} (limit −${f(limit)}). Review or close.`;
+      document.title = "⚠ LOSS LIMIT – tracker";
+    } else { al.style.display = "none"; document.title = "Delta India position tracker"; }
+    $("status").textContent = "Updated " + new Date().toLocaleTimeString();
+  } catch (e){
+    $("status").textContent = "Error: " + e.message + " (Failed to fetch usually means CORS or a wrong symbol.)";
+  }
+}
+
+function start(){ clearInterval(timer); tick(); timer = setInterval(tick, Math.max(2, Number($("sec").value) || 5) * 1000); }
+$("start").onclick = start;
+drawInputs(); start();
+</script>
+</body>
+</html>
