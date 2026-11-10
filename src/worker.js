@@ -8,7 +8,7 @@ export default {
         return new Response("Not allowed", { status: 403 });
       }
       const up = await fetch("https://api.india.delta.exchange/" + path + url.search, {
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", "User-Agent": "delta-tracker/1.0" },
       });
       return new Response(up.body, {
         status: up.status,
