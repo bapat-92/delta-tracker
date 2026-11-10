@@ -68,7 +68,14 @@ td input{min-width:70px}
     <label>Target premium (USD)<input id="ftarget" type="number" value="100"></label>
     <button id="find">Find</button>
   </div>
+  <div id="fcap" class="note l" style="margin-top:8px"></div>
   <div id="fout" class="note" style="margin-top:8px"></div>
+</div>
+
+<div class="card" id="chartCard" style="display:none">
+  <b>Combined premium of added sells</b>
+  <div class="note" id="chartNote"></div>
+  <div id="chart"></div>
 </div>
 
 <script>
@@ -139,6 +146,7 @@ async function tick(){
       a.textContent = f(pm); a.className = "pm " + sg(pm);
       b.textContent = f(pc); b.className = "pc " + sg(pc);
     });
+    updateChart(res);
     if (spot){
       $("spot").textContent = f(spot, 0);
       let best = null;
@@ -165,6 +173,55 @@ async function tick(){
 
 function start(){ clearInterval(timer); tick(); timer = setInterval(tick, Math.max(2, Number($("sec").value) || 5) * 1000); }
 $("start").onclick = start;
+const MAX_ADDED = 4;
+let series = [], seriesKey = "";
+
+function updateChart(res){
+  const idx = legs.map((L, i) => L.fromFinder ? i : -1).filter(i => i >= 0);
+  const card = $("chartCard");
+  if (!idx.length){ card.style.display = "none"; series = []; seriesKey = ""; return; }
+  card.style.display = "block";
+  const key = idx.map(i => legs[i].s).sort().join("|");
+  if (key !== seriesKey){ series = []; seriesKey = key; }   // new set of legs, so start a fresh line
+  let sum = 0, entry = 0;
+  for (const i of idx){
+    const t = res[i], m = t ? num(t.mark_price) : null;
+    if (m === null) return;
+    sum += m; entry += Number(legs[i].entry) || 0;
+  }
+  series.push({t: Date.now(), v: sum, e: entry});
+  if (series.length > 500) series.shift();
+  drawChart(idx.length);
+}
+
+function drawChart(count){
+  const W = 900, H = 260, L = 54, R = 12, T = 12, B = 28;
+  const vals = series.flatMap(p => [p.v, p.e]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1){ lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.1; lo -= pad; hi += pad;
+  const x = i => series.length < 2 ? (L + W - R) / 2 : L + (W - L - R) * i / (series.length - 1);
+  const y = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo));
+  const line = key => series.map((p, i) => `${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join(" ");
+  let g = "";
+  for (let k = 0; k <= 4; k++){
+    const v = lo + (hi - lo) * k / 4, yy = y(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="var(--line)"/>` +
+         `<text x="${L - 6}" y="${yy + 4}" text-anchor="end" font-size="11" fill="var(--mut)">${f(v, 0)}</text>`;
+  }
+  const fmt = ts => new Date(ts).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+  const last = series[series.length - 1];
+  const dot = series.length < 2 ? `<circle cx="${x(0)}" cy="${y(last.v)}" r="4" fill="var(--acc)"/>` : "";
+  $("chart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${g}
+    <polyline points="${line("e")}" fill="none" stroke="var(--mut)" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <polyline points="${line("v")}" fill="none" stroke="var(--acc)" stroke-width="2"/>${dot}
+    <text x="${L}" y="${H - 8}" font-size="11" fill="var(--mut)">${fmt(series[0].t)}</text>
+    <text x="${W - R}" y="${H - 8}" text-anchor="end" font-size="11" fill="var(--mut)">${fmt(last.t)}</text></svg>`;
+  const chg = last.v - last.e;
+  $("chartNote").innerHTML = `${count} leg${count > 1 ? "s" : ""}, premium per 1 BTC. Solid line: current combined mark (${f(last.v)}). Dashed: combined entry (${f(last.e)}). ` +
+    `Sellers gain when the line falls: now <span class="${chg <= 0 ? "g" : "l"}">${chg > 0 ? "+" : ""}${f(chg)}</span> vs entry. The line restarts if you add or remove a leg.`;
+}
+
 async function findPrem(){
   const base = $("base").value.replace(/\/$/, ""), exp = $("fexp").value.trim(), target = Number($("ftarget").value) || 100;
   const out = $("fout"); out.textContent = "Loading…";
@@ -198,7 +255,14 @@ async function findPrem(){
 $("find").onclick = findPrem;
 $("fout").addEventListener("click", e => {
   const s = e.target.dataset.add; if (!s) return;
-  legs.push({s, side: -1, lots: 0, entry: Number(e.target.dataset.px) || 0});
+  const cap = $("fcap"), added = legs.filter(L => L.fromFinder);
+  if (added.some(L => L.s === s)){ cap.textContent = s + " is already added."; return; }
+  if (added.length >= MAX_ADDED){
+    cap.textContent = `Limit reached: ${MAX_ADDED} added sells. Remove one (✕ in the table) to add another.`;
+    return;
+  }
+  cap.textContent = "";
+  legs.push({s, side: -1, lots: 0, entry: Number(e.target.dataset.px) || 0, fromFinder: true});
   save(); drawInputs(); tick();
 });
 drawInputs(); start();
