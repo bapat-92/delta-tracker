@@ -318,11 +318,20 @@ function updateSizing(){
 
 const MAX_ADDED = 4;
 let series = [], seriesKey = "";
+function saveSeries(){
+  try { localStorage.setItem("series", JSON.stringify({key: seriesKey, pts: series})); } catch (e) {}
+}
+function loadSeries(){
+  try {
+    const d = JSON.parse(localStorage.getItem("series"));
+    if (d && Array.isArray(d.pts)){ series = d.pts; seriesKey = d.key || ""; }
+  } catch (e) {}
+}
 
 function updateChart(res){
   const idx = legs.map((L, i) => L.fromFinder ? i : -1).filter(i => i >= 0);
   const card = $("chartCard");
-  if (!idx.length){ card.style.display = "none"; series = []; seriesKey = ""; return; }
+  if (!idx.length){ card.style.display = "none"; series = []; seriesKey = ""; saveSeries(); return; }
   card.style.display = "block";
   const key = idx.map(i => legs[i].s).sort().join("|");
   if (key !== seriesKey){ series = []; seriesKey = key; }   // new set of legs, so start a fresh line
@@ -334,6 +343,7 @@ function updateChart(res){
   }
   series.push({t: Date.now(), v: sum, e: entry});
   if (series.length > 500) series.shift();
+  saveSeries();
   drawChart(idx.length);
 }
 
@@ -362,7 +372,7 @@ function drawChart(count){
     <text x="${W - R}" y="${H - 8}" text-anchor="end" font-size="11" fill="var(--mut)">${fmt(last.t)}</text></svg>`;
   const chg = last.v - last.e;
   $("chartNote").innerHTML = `${count} leg${count > 1 ? "s" : ""}, premium per 1 BTC. Solid line: current combined mark (${f(last.v)}). Dashed: combined entry (${f(last.e)}). ` +
-    `Sellers gain when the line falls: now <span class="${chg <= 0 ? "g" : "l"}">${chg > 0 ? "+" : ""}${f(chg)}</span> vs entry. The line restarts if you add or remove a leg.`;
+    `Sellers gain when the line falls: now <span class="${chg <= 0 ? "g" : "l"}">${chg > 0 ? "+" : ""}${f(chg)}</span> vs entry. The history is saved in this browser and the line restarts only if you add or remove a leg.`;
 }
 
 async function findPrem(){
@@ -437,6 +447,7 @@ $("fout").addEventListener("click", e => {
   legs.push({s, side: -1, lots: 0, entry: Number(e.target.dataset.px) || 0, fromFinder: true});
   save(); drawInputs(); tick();
 });
+loadSeries();
 drawInputs(); start();
 </script>
 </body>
