@@ -61,6 +61,16 @@ td input{min-width:70px}
   <p><button id="add">Add leg</button></p>
 </div>
 
+<div class="card">
+  <b>Find options near a target premium</b>
+  <div class="row" style="margin-top:8px">
+    <label>Expiry (DDMMYY)<input id="fexp" value="121126"></label>
+    <label>Target premium (USD)<input id="ftarget" type="number" value="100"></label>
+    <button id="find">Find</button>
+  </div>
+  <div id="fout" class="note" style="margin-top:8px"></div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const DEFAULT = [
@@ -155,6 +165,42 @@ async function tick(){
 
 function start(){ clearInterval(timer); tick(); timer = setInterval(tick, Math.max(2, Number($("sec").value) || 5) * 1000); }
 $("start").onclick = start;
+async function findPrem(){
+  const base = $("base").value.replace(/\/$/, ""), exp = $("fexp").value.trim(), target = Number($("ftarget").value) || 100;
+  const out = $("fout"); out.textContent = "Loading…";
+  try {
+    const u = new URL(base + "/v2/tickers");
+    u.searchParams.set("contract_types", "call_options,put_options");
+    u.searchParams.set("underlying_asset_symbols", "BTC");
+    const r = await fetch(u);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const rows = ((await r.json()).result || []).filter(t => t.symbol.endsWith("-" + exp));
+    if (!rows.length){ out.textContent = "No BTC options found for expiry " + exp + "."; return; }
+    const spot = num(rows[0].spot_price);
+    const pick = type => rows
+      .filter(t => t.symbol[0] === type && num(t.mark_price) !== null)
+      .sort((a, b) => Math.abs(num(a.mark_price) - target) - Math.abs(num(b.mark_price) - target))
+      .slice(0, 3);
+    const tbl = (title, list) => `<b>${title}</b><div class="wrap"><table><thead><tr>
+      <th>Symbol</th><th>Strike</th><th>From spot</th><th>Mark</th><th>Bid</th><th>Ask</th><th>Delta</th><th>IV</th><th></th></tr></thead><tbody>` +
+      list.map(t => {
+        const q = t.quotes || {}, k = Number(t.strike_price), bid = num(q.best_bid), mark = num(t.mark_price);
+        const iv = num(q.mark_iv);
+        return `<tr><td>${t.symbol}</td><td>${f(k,0)}</td><td>${spot ? f(k - spot, 0) : "–"}</td>
+          <td>${f(mark)}</td><td>${f(bid)}</td><td>${f(num(q.best_ask))}</td>
+          <td>${f(num((t.greeks || {}).delta), 2)}</td><td>${iv === null ? "–" : (iv * 100).toFixed(1) + "%"}</td>
+          <td><button data-add="${t.symbol}" data-px="${bid === null ? mark : bid}">Add as sell</button></td></tr>`;
+      }).join("") + "</tbody></table></div>";
+    out.innerHTML = `Spot ${f(spot, 0)} · closest to ${target} by mark price (check bid/ask size before trading)<br>` +
+      tbl("Calls", pick("C")) + "<br>" + tbl("Puts", pick("P"));
+  } catch (e){ out.textContent = "Error: " + e.message; }
+}
+$("find").onclick = findPrem;
+$("fout").addEventListener("click", e => {
+  const s = e.target.dataset.add; if (!s) return;
+  legs.push({s, side: -1, lots: 0, entry: Number(e.target.dataset.px) || 0});
+  save(); drawInputs(); tick();
+});
 drawInputs(); start();
 </script>
 </body>
