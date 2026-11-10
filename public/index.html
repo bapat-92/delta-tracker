@@ -226,12 +226,17 @@ async function findPrem(){
   const base = $("base").value.replace(/\/$/, ""), exp = $("fexp").value.trim(), target = Number($("ftarget").value) || 100;
   const out = $("fout"); out.textContent = "Loading…";
   try {
-    const u = new URL(base + "/v2/tickers");
-    u.searchParams.set("contract_types", "call_options,put_options");
-    u.searchParams.set("underlying_asset_symbols", "BTC");
-    const r = await fetch(u);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const rows = ((await r.json()).result || []).filter(t => t.symbol.endsWith("-" + exp));
+    const get = async ct => {
+      const u = new URL(base + "/v2/tickers");
+      u.searchParams.set("contract_types", ct);
+      u.searchParams.set("underlying_asset_symbols", "BTC");
+      const r = await fetch(u);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return (await r.json()).result || [];
+    };
+    const [cs, ps] = await Promise.all([get("call_options"), get("put_options")]);
+    const total = `${cs.length} calls and ${ps.length} puts`;
+    const rows = cs.concat(ps).filter(t => t.symbol.endsWith("-" + exp));
     if (!rows.length){ out.textContent = "No BTC options found for expiry " + exp + "."; return; }
     const spot = num(rows[0].spot_price);
     const pick = type => rows
@@ -248,7 +253,15 @@ async function findPrem(){
           <td>${f(num((t.greeks || {}).delta), 2)}</td><td>${iv === null ? "–" : (iv * 100).toFixed(1) + "%"}</td>
           <td><button data-add="${t.symbol}" data-px="${bid === null ? mark : bid}">Add as sell</button></td></tr>`;
       }).join("") + "</tbody></table></div>";
+    const range = type => {
+      const l = rows.filter(t => t.symbol[0] === type);
+      if (!l.length) return (type === "C" ? "Calls" : "Puts") + ": none found";
+      const ks = l.map(t => Number(t.strike_price));
+      const ms = l.map(t => num(t.mark_price)).filter(m => m !== null);
+      return `${type === "C" ? "Calls" : "Puts"}: ${l.length} found, strikes ${f(Math.min(...ks), 0)} to ${f(Math.max(...ks), 0)}, marks ${f(Math.min(...ms))} to ${f(Math.max(...ms))}`;
+    };
     out.innerHTML = `Spot ${f(spot, 0)} · closest to ${target} by mark price (check bid/ask size before trading)<br>` +
+      `<span>API returned ${total} (all expiries).<br>${range("C")}<br>${range("P")}</span><br><br>` +
       tbl("Calls", pick("C")) + "<br>" + tbl("Puts", pick("P"));
   } catch (e){ out.textContent = "Error: " + e.message; }
 }
