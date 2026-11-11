@@ -36,10 +36,20 @@ td input{min-width:70px}
 .spotcard.l{border-color:var(--loss);background:color-mix(in srgb,var(--loss) 10%,var(--card))}
 .spotcard.g .spotnum{color:var(--gain)}
 .spotcard.l .spotnum{color:var(--loss)}
+h1{padding-right:170px}
+#cum{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:8px;z-index:20;background:var(--card);border:2px solid var(--line);border-radius:10px;padding:6px 12px;text-align:right;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+#cum .cl{font-size:10px;letter-spacing:.1em;color:var(--mut);font-weight:700}
+#cum .cv{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+#cum .cn{font-size:11px;color:var(--mut)}
+#cum.g{border-color:var(--gain)}#cum.g .cv{color:var(--gain)}
+#cum.l{border-color:var(--loss)}#cum.l .cv{color:var(--loss)}
 .note{font-size:12px;color:var(--mut)}
 </style>
 </head>
 <body>
+<div id="cum" title="Total P&L of closed and expired positions only. Open positions are not included.">
+  <div class="cl">CLOSED P&amp;L</div><div class="cv" id="cumVal">$0</div><div class="cn" id="cumN">0 trades</div>
+</div>
 <h1>Delta India position tracker</h1>
 <div id="status">Starting…</div>
 <div id="alert"></div>
@@ -74,7 +84,32 @@ td input{min-width:70px}
     <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th></th></tr></thead>
     <tbody id="body"></tbody>
   </table>
-  <p><button id="add">Add leg</button></p>
+  <p><button id="add">Add leg</button> <button id="closeBtn">Close position / record result</button></p>
+</div>
+
+<div class="card" id="closePanel" style="display:none">
+  <b>Record a closed position or an expiry result</b>
+  <div class="row" style="margin:8px 0">
+    <label>Result type<select id="ctype"><option value="closed">Closed manually</option><option value="expired">Expired</option></select></label>
+    <label id="csetWrap" style="display:none">Settlement price (BTC)<input id="cset" type="number" step="any"></label>
+    <label>Date<input id="cdate" type="date"></label>
+  </div>
+  <div class="wrap"><table>
+    <thead><tr><th>Include</th><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit price</th><th>Leg P&amp;L</th></tr></thead>
+    <tbody id="cbody"></tbody>
+  </table></div>
+  <p>Trade P&amp;L: <b id="ctot">–</b></p>
+  <p><button id="csave">Save to journal</button> <button id="ccancel">Cancel</button> <span id="cmsg" class="note"></span></p>
+  <p class="note">Exit prices start at what you'd pay or get closing now (ask for sold legs, bid for bought legs), or at intrinsic value for an expiry using the settlement price. Edit them to your real fills. Fees are not included. Saved legs are removed from the table above.</p>
+</div>
+
+<div class="card" id="journalCard">
+  <b>Journal (closed and expired positions)</b>
+  <div class="wrap"><table>
+    <thead><tr><th>Date</th><th>Type</th><th style="text-align:left">Legs</th><th>P&amp;L</th><th></th></tr></thead>
+    <tbody id="jbody"></tbody>
+  </table></div>
+  <p><button id="jcsv">Export CSV</button> <span class="note">Saved in this browser only, so export now and then to keep a copy.</span></p>
 </div>
 
 <div class="card">
@@ -212,6 +247,7 @@ async function tick(){
       if (!t){ return; }
       const q = t.quotes || {};
       const mark = num(t.mark_price), bid = num(q.best_bid), ask = num(q.best_ask);
+      QUOTES[L.s] = {mark, bid, ask};
       const qty = L.lots * lot;
       const pm = mark === null ? null : L.side * (mark - L.entry) * qty;
       // closing a short means buying at the ask; closing a long means selling at the bid
@@ -252,6 +288,7 @@ async function tick(){
 }
 
 function showSpot(spot){
+  lastSpotVal = spot;
   $("spot").textContent = f(spot, 0);
   let best = null;
   legs.filter(L => L.side === -1).forEach(L => {
@@ -525,6 +562,121 @@ $("fout").addEventListener("click", e => {
   legs.push({s, side: -1, lots: 0, entry: Number(e.target.dataset.px) || 0, fromFinder: true});
   save(); drawInputs(); tick();
 });
+const QUOTES = {};
+let lastSpotVal = null, journal = [], cList = [];
+try { journal = JSON.parse(localStorage.getItem("journal")) || []; } catch (e) {}
+function saveJournal(){ try { localStorage.setItem("journal", JSON.stringify(journal)); } catch (e) {} }
+const esc = v => String(v).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const money = v => (v < 0 ? "-$" : "+$") + f(Math.abs(v));
+const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+function legPnl(L, exit, lot){
+  const q = Number(L.lots) * lot, e = Number(L.entry) || 0;
+  return L.side === -1 ? (e - exit) * q : (exit - e) * q;
+}
+
+function renderJournal(){
+  const total = journal.reduce((a, j) => a + j.pnl, 0);
+  $("cumVal").textContent = journal.length ? money(total) : "$0";
+  $("cumN").textContent = journal.length + (journal.length === 1 ? " trade" : " trades");
+  $("cum").className = journal.length ? (total >= 0 ? "g" : "l") : "";
+  const days = {};
+  journal.forEach(j => (days[j.date] = days[j.date] || []).push(j));
+  const dates = Object.keys(days).sort().reverse();
+  $("jbody").innerHTML = dates.length ? dates.map(d => {
+    const list = days[d], sub = list.reduce((a, j) => a + j.pnl, 0);
+    return `<tr style="background:var(--bg)"><td><b>${esc(d)}</b></td><td></td><td style="text-align:left" class="note">${list.length} trade${list.length > 1 ? "s" : ""}</td><td class="${sub >= 0 ? "g" : "l"}"><b>${money(sub)}</b></td><td></td></tr>` +
+      list.map(j => `<tr><td></td><td>${esc(j.type)}</td><td style="text-align:left;white-space:normal">` +
+        j.legs.map(L => `${L.side === -1 ? "S" : "B"} ${esc(L.s)} ×${f(L.lots, 0)} ${f(L.entry)}→${f(L.exit)}`).join("<br>") +
+        `</td><td class="${j.pnl >= 0 ? "g" : "l"}">${money(j.pnl)}</td><td><button data-jdel="${esc(j.id)}">✕</button></td></tr>`).join("");
+  }).join("") : `<tr><td colspan="5" class="note" style="text-align:center">No closed positions yet.</td></tr>`;
+}
+
+function legDefault(L, type, settle){
+  if (type === "expired" && settle > 0){
+    const p = L.s.split("-"), k = Number(p[2]);
+    return p[0] === "C" ? Math.max(settle - k, 0) : Math.max(k - settle, 0);
+  }
+  const q = QUOTES[L.s];
+  if (!q) return "";
+  const px = L.side === -1 ? q.ask : q.bid;
+  return px !== null && !isNaN(px) ? px : (q.mark !== null && !isNaN(q.mark) ? q.mark : "");
+}
+
+function calcClose(){
+  const lot = Number($("lot").value) || 0;
+  let tot = 0, any = false;
+  cList.forEach((x, n) => {
+    const ex = Number(x.exit), ok = x.exit !== "" && !isNaN(ex);
+    const p = ok ? legPnl(x.L, ex, lot) : null;
+    $("cp" + n).textContent = p === null ? "–" : money(p);
+    $("cp" + n).className = p === null ? "" : p >= 0 ? "g" : "l";
+    if (x.inc && p !== null){ tot += p; any = true; }
+  });
+  $("ctot").textContent = any ? money(tot) : "–";
+  $("ctot").className = any ? (tot >= 0 ? "g" : "l") : "";
+}
+
+function renderClose(useDefaults){
+  const type = $("ctype").value, settle = Number($("cset").value) || 0;
+  $("csetWrap").style.display = type === "expired" ? "" : "none";
+  if (useDefaults) cList.forEach(x => { x.exit = legDefault(x.L, type, settle); });
+  $("cbody").innerHTML = cList.map((x, n) => `<tr>
+    <td><input type="checkbox" data-n="${n}" data-k="inc" ${x.inc ? "checked" : ""} style="width:auto"></td>
+    <td style="text-align:left">${esc(x.L.s)}</td><td>${x.L.side === -1 ? "Sell" : "Buy"}</td>
+    <td>${f(x.L.lots, 0)}</td><td>${f(x.L.entry)}</td>
+    <td><input type="number" step="any" data-n="${n}" data-k="exit" value="${esc(x.exit)}"></td>
+    <td id="cp${n}">–</td></tr>`).join("");
+  calcClose();
+}
+
+$("closeBtn").onclick = () => {
+  cList = legs.filter(L => L.s && Number(L.lots) > 0).map(L => ({L, inc: true, exit: ""}));
+  $("ctype").value = "closed";
+  $("cdate").value = todayStr();
+  $("cset").value = lastSpotVal ? Math.round(lastSpotVal) : "";
+  $("closePanel").style.display = "block";
+  $("cmsg").textContent = cList.length ? "" : "No legs with lots to close. Enter the lots in the table first.";
+  renderClose(true);
+};
+$("ctype").onchange = () => renderClose(true);
+$("cset").oninput = () => renderClose(true);
+["input", "change"].forEach(ev => $("cbody").addEventListener(ev, e => {
+  const n = e.target.dataset.n; if (n === undefined) return;
+  if (e.target.dataset.k === "inc") cList[n].inc = e.target.checked; else cList[n].exit = e.target.value;
+  calcClose();
+}));
+$("ccancel").onclick = () => { $("closePanel").style.display = "none"; };
+$("csave").onclick = () => {
+  const lot = Number($("lot").value) || 0, sel = cList.filter(x => x.inc);
+  if (!sel.length){ $("cmsg").textContent = "Tick at least one leg."; return; }
+  if (sel.some(x => x.exit === "" || isNaN(Number(x.exit)))){ $("cmsg").textContent = "Enter an exit price for every ticked leg."; return; }
+  const lg = sel.map(x => ({s: x.L.s, side: x.L.side === -1 ? -1 : 1, lots: Number(x.L.lots), entry: Number(x.L.entry) || 0, exit: Number(x.exit)}));
+  const pnl = lg.reduce((a, L) => a + legPnl(L, L.exit, lot), 0);
+  journal.push({id: Date.now() + "" + Math.floor(Math.random() * 1000), date: $("cdate").value || todayStr(),
+    type: $("ctype").value === "expired" ? "Expired" : "Closed", lot, pnl, legs: lg});
+  saveJournal();
+  legs = legs.filter(L => !sel.some(x => x.L === L));
+  save(); drawInputs();
+  $("closePanel").style.display = "none";
+  renderJournal(); tick();
+};
+$("jbody").addEventListener("click", e => {
+  const id = e.target.dataset.jdel; if (!id) return;
+  if (!confirm("Delete this journal entry? This changes your cumulative P&L.")) return;
+  journal = journal.filter(j => j.id !== id);
+  saveJournal(); renderJournal();
+});
+$("jcsv").onclick = () => {
+  const rows = [["date", "type", "symbol", "side", "lots", "btc_per_lot", "entry", "exit", "leg_pnl", "trade_pnl"]];
+  journal.slice().sort((a, b) => a.date < b.date ? -1 : 1).forEach(j => j.legs.forEach((L, i) =>
+    rows.push([j.date, j.type, L.s, L.side === -1 ? "sell" : "buy", L.lots, j.lot, L.entry, L.exit,
+      legPnl(L, L.exit, j.lot).toFixed(2), i === 0 ? j.pnl.toFixed(2) : ""])));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([rows.map(r => r.join(",")).join("\n")], {type: "text/csv"}));
+  a.download = "delta-journal.csv"; a.click();
+};
+renderJournal();
+
 try { $("chartOn").checked = localStorage.getItem("chartOn") === "1"; } catch (e) {}
 $("chartOn").onchange = () => {
   try { localStorage.setItem("chartOn", $("chartOn").checked ? "1" : "0"); } catch (e) {}
