@@ -27,6 +27,15 @@ td input{min-width:70px}
 .kpi div{font-size:12px;color:var(--mut)}.kpi b{display:block;font-size:20px;color:var(--fg)}
 #alert{display:none;background:var(--warn);color:var(--loss);border:1px solid var(--loss);border-radius:8px;padding:10px;margin-bottom:12px;font-weight:600}
 #status{color:var(--mut);font-size:13px}
+.spotcard{text-align:center;padding:18px 12px;border-width:2px}
+.spotlbl{font-size:13px;letter-spacing:.12em;color:var(--mut);font-weight:700}
+.spotnum{font-size:clamp(44px,13vw,84px);font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.spotsub{font-size:15px;color:var(--mut);margin-top:4px}
+.spotsub b{font-size:20px}
+.spotcard.g{border-color:var(--gain);background:color-mix(in srgb,var(--gain) 10%,var(--card))}
+.spotcard.l{border-color:var(--loss);background:color-mix(in srgb,var(--loss) 10%,var(--card))}
+.spotcard.g .spotnum{color:var(--gain)}
+.spotcard.l .spotnum{color:var(--loss)}
 .note{font-size:12px;color:var(--mut)}
 </style>
 </head>
@@ -34,6 +43,12 @@ td input{min-width:70px}
 <h1>Delta India position tracker</h1>
 <div id="status">Starting…</div>
 <div id="alert"></div>
+
+<div class="card spotcard" id="spotCard">
+  <div class="spotlbl">BTC SPOT</div>
+  <div class="spotnum" id="spot">–</div>
+  <div class="spotsub">Position P&amp;L at mark: <b id="spotPnl">–</b></div>
+</div>
 
 <div class="card">
   <div class="row">
@@ -47,7 +62,6 @@ td input{min-width:70px}
 </div>
 
 <div class="kpi card">
-  <div>Spot<b id="spot">–</b></div>
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
   <div>Nearest strike<b id="near">–</b></div>
@@ -224,6 +238,11 @@ async function tick(){
       $("near").textContent = best ? `${f(best,0)} (${f(Math.abs(best - spot),0)} away)` : "–";
     }
     $("net").textContent = f(net); $("net").className = sg(net);
+    const hasPos = legs.some(L => Number(L.lots) > 0);
+    const cls = hasPos ? sg(net) : "";
+    $("spotCard").className = "card spotcard " + cls;
+    $("spotPnl").textContent = hasPos ? (net < 0 ? "-$" : "+$") + f(Math.abs(net)) : "enter lots to see P&L";
+    $("spotPnl").className = cls;
     $("close").textContent = f(close); $("close").className = sg(close);
     const worst = Math.min(net, close);
     const al = $("alert");
