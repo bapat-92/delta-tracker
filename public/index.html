@@ -48,6 +48,7 @@ td input{min-width:70px}
   <div class="spotlbl">BTC SPOT</div>
   <div class="spotnum" id="spot">–</div>
   <div class="spotsub">Position P&amp;L at mark: <b id="spotPnl">–</b></div>
+  <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
 </div>
 
 <div class="card">
@@ -55,7 +56,8 @@ td input{min-width:70px}
     <label>API base (leave for default)<input id="base" value="https://api.india.delta.exchange"></label>
     <label>BTC per lot<input id="lot" type="number" step="0.0001" value="0.001"></label>
     <label>Loss limit (USD)<input id="limit" type="number" value="500"></label>
-    <label>Refresh (sec)<input id="sec" type="number" min="2" value="300"></label>
+    <label>Legs refresh (sec)<input id="sec" type="number" min="2" value="300"></label>
+    <label>BTC spot refresh (sec)<input id="ssec" type="number" min="2" value="5"></label>
     <button id="start">Start / apply</button>
   </div>
   <p class="note">Public prices only, so no API key is needed. If you get "Failed to fetch", the API may block browser requests (CORS): put a proxy URL in the API base. Entry price is the premium per 1 BTC you got or paid. BTC per lot is an assumption, so check the contract specs.</p>
@@ -228,15 +230,7 @@ async function tick(){
     updateMargin(res, net);
     updateSL(res, net);
     updateSizing();
-    if (spot){
-      $("spot").textContent = f(spot, 0);
-      let best = null;
-      legs.filter(L => L.side === -1).forEach(L => {
-        const k = Number(L.s.split("-")[2]);
-        if (k && (best === null || Math.abs(k - spot) < Math.abs(best - spot))) best = k;
-      });
-      $("near").textContent = best ? `${f(best,0)} (${f(Math.abs(best - spot),0)} away)` : "–";
-    }
+    if (spot) showSpot(spot);
     $("net").textContent = f(net); $("net").className = sg(net);
     const hasPos = legs.some(L => Number(L.lots) > 0);
     const cls = hasPos ? sg(net) : "";
@@ -257,7 +251,36 @@ async function tick(){
   }
 }
 
-function start(){ clearInterval(timer); tick(); timer = setInterval(tick, Math.max(2, Number($("sec").value) || 5) * 1000); }
+function showSpot(spot){
+  $("spot").textContent = f(spot, 0);
+  let best = null;
+  legs.filter(L => L.side === -1).forEach(L => {
+    const k = Number(L.s.split("-")[2]);
+    if (k && (best === null || Math.abs(k - spot) < Math.abs(best - spot))) best = k;
+  });
+  $("near").textContent = best ? `${f(best,0)} (${f(Math.abs(best - spot),0)} away)` : "–";
+}
+
+// Spot only: one small request, on its own timer, independent of the legs
+let stimer, spotBusy = false;
+async function spotTick(){
+  if (spotBusy) return;
+  spotBusy = true;
+  try {
+    const t = await getLeg($("base").value.replace(/\/$/, ""), "BTCUSD");
+    const v = num(t.spot_price) || num(t.mark_price);
+    if (v){ showSpot(v); $("spotTime").textContent = new Date().toLocaleTimeString(); }
+  } catch (e) {
+    $("spotTime").textContent = "failed (" + e.message + ")";
+  } finally { spotBusy = false; }
+}
+
+function start(){
+  clearInterval(timer); tick();
+  timer = setInterval(tick, Math.max(2, Number($("sec").value) || 300) * 1000);
+  clearInterval(stimer); spotTick();
+  stimer = setInterval(spotTick, Math.max(2, Number($("ssec").value) || 5) * 1000);
+}
 $("start").onclick = start;
 function payoffStats(lot){
   const ls = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)).map(L => {
