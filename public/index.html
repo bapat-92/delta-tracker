@@ -72,6 +72,12 @@ td input{min-width:70px}
   <div id="fout" class="note" style="margin-top:8px"></div>
 </div>
 
+<div class="row" style="margin-bottom:12px">
+  <label style="flex-direction:row;align-items:center;gap:8px;font-size:14px;color:var(--fg)">
+    <input type="checkbox" id="chartOn" style="width:auto"> Show premium chart (history keeps recording while hidden)
+  </label>
+</div>
+
 <div class="card" id="chartCard" style="display:none">
   <b>Combined premium of added sells</b>
   <div class="note" id="chartNote"></div>
@@ -94,19 +100,27 @@ td input{min-width:70px}
     <div>Max profit as % of margin<b id="mMaxPct" class="g">–</b></div>
     <div>Max loss at expiry<b id="mMaxL" class="l">–</b></div>
   </div>
-  <div class="row" style="margin:14px 0 8px">
+  <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
+</div>
+
+<div class="card">
+  <b>Stop-loss in premium value</b>
+  <div class="row" style="margin:8px 0">
     <label>Stop-loss multiple (× premium)<input id="slx" type="number" min="0" step="0.5" value="5"></label>
     <label>Premium basis
       <select id="slb"><option value="sold">Sold legs only</option><option value="net">Net (sold − bought)</option></select>
     </label>
   </div>
   <div class="kpi">
-    <div>Premium collected<b id="sPrem">–</b></div>
-    <div>Stop-loss = max loss you accept<b id="sSL" class="l">–</b></div>
+    <div>Premium collected (entry value)<b id="sPrem">–</b></div>
+    <div>Premium value now (at mark)<b id="sNow">–</b></div>
+    <div>Stop-loss = loss you accept<b id="sSL" class="l">–</b></div>
+    <div>Stop-loss trigger: premium value reaches<b id="sTrig" class="l">–</b></div>
+    <div>Room left before trigger<b id="sRoom">–</b></div>
     <div>Stop-loss as % of margin<b id="sPct">–</b></div>
     <div>Stop-loss used so far<b id="sUsed">–</b></div>
   </div>
-  <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
+  <p class="note">Premium value is lots × BTC per lot × option price, in USD. You collect it when you sell; it rises as the options gain value. The trigger is the premium value at which your loss equals the stop-loss (entry value + stop-loss). With the net basis, bought legs are subtracted from both the entry and the current value. Based on mark prices, so it lags and doesn't place any order.</p>
 </div>
 
 <div class="card">
@@ -198,6 +212,7 @@ async function tick(){
     });
     updateChart(res);
     updateMargin(res, net);
+    updateSL(res, net);
     updateSizing();
     if (spot){
       $("spot").textContent = f(spot, 0);
@@ -238,6 +253,37 @@ function payoffStats(lot){
 }
 
 let lastRes = null, lastNet = 0;
+let lastMargin = 0;
+function updateSL(res, net){
+  const lot = Number($("lot").value) || 0, x = Number($("slx").value) || 0, netBasis = $("slb").value === "net";
+  let eSold = 0, eBought = 0, cSold = 0, cBought = 0;
+  legs.forEach((L, i) => {
+    const q = (Number(L.lots) || 0) * lot, t = res[i], m = t ? num(t.mark_price) : null;
+    const e = q * (Number(L.entry) || 0), c = m === null ? 0 : q * m;
+    if (L.side === -1){ eSold += e; cSold += c; } else { eBought += e; cBought += c; }
+  });
+  const entry = netBasis ? eSold - eBought : eSold;
+  const cur = netBasis ? cSold - cBought : cSold;
+  const sl = entry > 0 && x > 0 ? entry * x : 0;
+  $("sPrem").textContent = "$" + f(entry, 0);
+  $("sNow").textContent = "$" + f(cur, 0);
+  $("sSL").textContent = sl > 0 ? "$" + f(sl, 0) : "–";
+  $("sTrig").textContent = sl > 0 ? "$" + f(entry + sl, 0) : "–";
+  const room = sl > 0 ? entry + sl - cur : null;
+  $("sRoom").textContent = room === null ? "–" : "$" + f(room, 0);
+  $("sRoom").className = room !== null && room <= 0 ? "l" : "";
+  $("sPct").textContent = sl > 0 && lastMargin > 0 ? f(sl / lastMargin * 100, 1) + "%" : "–";
+  const used = sl > 0 ? Math.max(0, -net) / sl * 100 : null;
+  $("sUsed").textContent = used === null ? "–" : f(used, 0) + "%";
+  $("sUsed").className = used !== null && used >= 100 ? "l" : "";
+}
+
+function showChart(){
+  const added = legs.filter(L => L.fromFinder);
+  const on = $("chartOn").checked, has = added.length > 0 && series.length > 0;
+  $("chartCard").style.display = on && has ? "block" : "none";
+  if (on && has) drawChart(added.length);
+}
 function updateMargin(res, net){
   lastRes = res; lastNet = net;
   const lev = Number($("lev").value) || 1, lot = Number($("lot").value) || 0;
@@ -257,20 +303,7 @@ function updateMargin(res, net){
   $("mLong").textContent = "$" + f(longCost, 0);
   $("mPct").textContent = margin > 0 ? f(net / margin * 100, 1) + "%" : "–";
   $("mPct").className = sg(net);
-  let sold = 0, bought = 0;
-  legs.forEach(L => {
-    const v = (Number(L.lots) || 0) * lot * (Number(L.entry) || 0);
-    if (L.side === -1) sold += v; else bought += v;
-  });
-  const prem = $("slb").value === "net" ? sold - bought : sold;
-  const x = Number($("slx").value) || 0;
-  const sl = prem > 0 && x > 0 ? prem * x : 0;
-  $("sPrem").textContent = "$" + f(prem, 0);
-  $("sSL").textContent = sl > 0 ? "$" + f(sl, 0) : "–";
-  $("sPct").textContent = sl > 0 && margin > 0 ? f(sl / margin * 100, 1) + "%" : "–";
-  const used = sl > 0 ? Math.max(0, -net) / sl * 100 : null;
-  $("sUsed").textContent = used === null ? "–" : f(used, 0) + "%";
-  $("sUsed").className = used !== null && used >= 100 ? "l" : "";
+  lastMargin = margin;
   const st = payoffStats(lot);
   if (!st){ ["mMaxP", "mMaxPct", "mMaxL"].forEach(id => $(id).textContent = "–"); return; }
   $("mMaxP").textContent = st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0);
@@ -318,6 +351,9 @@ function updateSizing(){
 
 const MAX_ADDED = 4;
 let series = [], seriesKey = "";
+function storageOk(){
+  try { localStorage.setItem("t", "1"); return localStorage.getItem("t") === "1"; } catch (e) { return false; }
+}
 function saveSeries(){
   try { localStorage.setItem("series", JSON.stringify({key: seriesKey, pts: series})); } catch (e) {}
 }
@@ -332,7 +368,6 @@ function updateChart(res){
   const idx = legs.map((L, i) => L.fromFinder ? i : -1).filter(i => i >= 0);
   const card = $("chartCard");
   if (!idx.length){ card.style.display = "none"; series = []; seriesKey = ""; saveSeries(); return; }
-  card.style.display = "block";
   const key = idx.map(i => legs[i].s).sort().join("|");
   if (key !== seriesKey){ series = []; seriesKey = key; }   // new set of legs, so start a fresh line
   let sum = 0, entry = 0;
@@ -344,7 +379,7 @@ function updateChart(res){
   series.push({t: Date.now(), v: sum, e: entry});
   if (series.length > 500) series.shift();
   saveSeries();
-  drawChart(idx.length);
+  showChart();
 }
 
 function drawChart(count){
@@ -372,7 +407,8 @@ function drawChart(count){
     <text x="${W - R}" y="${H - 8}" text-anchor="end" font-size="11" fill="var(--mut)">${fmt(last.t)}</text></svg>`;
   const chg = last.v - last.e;
   $("chartNote").innerHTML = `${count} leg${count > 1 ? "s" : ""}, premium per 1 BTC. Solid line: current combined mark (${f(last.v)}). Dashed: combined entry (${f(last.e)}). ` +
-    `Sellers gain when the line falls: now <span class="${chg <= 0 ? "g" : "l"}">${chg > 0 ? "+" : ""}${f(chg)}</span> vs entry. The history is saved in this browser and the line restarts only if you add or remove a leg.`;
+    `Sellers gain when the line falls: now <span class="${chg <= 0 ? "g" : "l"}">${chg > 0 ? "+" : ""}${f(chg)}</span> vs entry. The history is saved in this browser and the line restarts only if you add or remove a leg.<br>` +
+    `Saved points: ${series.length} · ${storageOk() ? "browser storage OK" : "BROWSER STORAGE BLOCKED, history can't be kept"} · ${typeof location !== "undefined" ? location.host : ""}`;
 }
 
 async function findPrem(){
@@ -419,7 +455,7 @@ async function findPrem(){
   } catch (e){ out.textContent = "Error: " + e.message; }
 }
 $("find").onclick = findPrem;
-["lev", "slx", "slb"].forEach(id => { $(id).oninput = () => { if (lastRes) updateMargin(lastRes, lastNet); updateSizing(); }; });
+["lev", "slx", "slb"].forEach(id => { $(id).oninput = () => { if (lastRes){ updateMargin(lastRes, lastNet); updateSL(lastRes, lastNet); } updateSizing(); }; });
 try { const cf = JSON.parse(localStorage.getItem("cfg")); if (cf){ $("cap").value = cf.cap || ""; $("msh").value = cf.msh || 25; $("ptg").value = cf.ptg || 2; } } catch (e) {}
 ["cap", "msh", "ptg"].forEach(id => { $(id).oninput = () => {
   try { localStorage.setItem("cfg", JSON.stringify({cap: $("cap").value, msh: $("msh").value, ptg: $("ptg").value})); } catch (e) {}
@@ -447,6 +483,11 @@ $("fout").addEventListener("click", e => {
   legs.push({s, side: -1, lots: 0, entry: Number(e.target.dataset.px) || 0, fromFinder: true});
   save(); drawInputs(); tick();
 });
+try { $("chartOn").checked = localStorage.getItem("chartOn") === "1"; } catch (e) {}
+$("chartOn").onchange = () => {
+  try { localStorage.setItem("chartOn", $("chartOn").checked ? "1" : "0"); } catch (e) {}
+  showChart();
+};
 loadSeries();
 drawInputs(); start();
 </script>
