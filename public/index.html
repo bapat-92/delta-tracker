@@ -61,6 +61,16 @@ h1{padding-right:170px}
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
 </div>
 
+<div class="card" id="syncCard">
+  <b>Cloud sync</b>
+  <div class="row" style="margin:8px 0">
+    <label>Passphrase<input id="pwin" type="password" autocomplete="off" placeholder="the APP_PASSPHRASE secret"></label>
+    <button id="pwgo">Connect</button>
+    <button id="pwoff" style="display:none">Disconnect</button>
+  </div>
+  <div id="syncMsg" class="note">Not connected: your data is only in this browser.</div>
+</div>
+
 <div class="card">
   <div class="row">
     <label>API base (leave for default)<input id="base" value="https://api.india.delta.exchange"></label>
@@ -109,7 +119,7 @@ h1{padding-right:170px}
     <thead><tr><th>Date</th><th>Type</th><th style="text-align:left">Legs</th><th>P&amp;L</th><th></th></tr></thead>
     <tbody id="jbody"></tbody>
   </table></div>
-  <p><button id="jcsv">Export CSV</button> <span class="note">Saved in this browser only, so export now and then to keep a copy.</span></p>
+  <p><button id="jcsv">Export CSV</button> <span class="note">Saved in this browser only, so export now and then to keep a copy.</span> <span id="jwarn" class="l"></span></p>
 </div>
 
 <div class="card">
@@ -195,16 +205,14 @@ h1{padding-right:170px}
 
 <script>
 const $ = id => document.getElementById(id);
-const DEFAULT = [
-  {s:"C-BTC-76400-111126", side:-1, lots:5000, entry:0},
-  {s:"P-BTC-73400-111126", side:-1, lots:5000, entry:0},
-  {s:"C-BTC-75400-111126", side:1,  lots:1500, entry:0},
-  {s:"P-BTC-74000-111126", side:1,  lots:1500, entry:0}
-];
+const DEFAULT = [];
 let legs = DEFAULT.map(x => ({...x})), timer, last = {};
 
-try { const saved = JSON.parse(localStorage.getItem("legs")); if (Array.isArray(saved) && saved.length) legs = saved; } catch (e) {}
-function save(){ try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {} }
+try { const saved = JSON.parse(localStorage.getItem("legs")); if (Array.isArray(saved)) legs = saved; } catch (e) {}
+function save(){
+  try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {}
+  cloudPush("legs", () => legs);
+}
 
 const num = v => (v === undefined || v === null || v === "") ? null : Number(v);
 const f = (v, d = 2) => v === null || isNaN(v) ? "–" : v.toLocaleString(undefined, {maximumFractionDigits: d});
@@ -212,7 +220,7 @@ const sg = v => v === null || isNaN(v) ? "" : v >= 0 ? "g" : "l";
 
 function drawInputs(){
   $("body").innerHTML = legs.map((L, i) => `<tr data-i="${i}">
-    <td><input value="${L.s}" data-k="s"></td>
+    <td><input value="${esc(L.s)}" data-k="s"></td>
     <td><select data-k="side"><option value="-1" ${L.side == -1 ? "selected" : ""}>Sell</option><option value="1" ${L.side == 1 ? "selected" : ""}>Buy</option></select></td>
     <td><input type="number" value="${L.lots}" data-k="lots"></td>
     <td><input type="number" step="any" value="${L.entry}" data-k="entry"></td>
@@ -240,11 +248,27 @@ async function getLeg(base, sym){
 async function tick(){
   const base = $("base").value.replace(/\/$/, ""), lot = Number($("lot").value) || 0, limit = Number($("limit").value) || 0;
   try {
-    const res = await Promise.all(legs.map(L => L.s ? getLeg(base, L.s) : Promise.resolve(null)));
+    const settled = await Promise.allSettled(legs.map(L => L.s ? getLeg(base, L.s) : Promise.resolve(null)));
+    const failed = [];
+    const res = settled.map((x, i) => {
+      if (x.status === "fulfilled") return x.value;
+      failed.push(legs[i].s);
+      return null;
+    });
+    if (legs.length && failed.length === legs.length){
+      const why = settled.find(x => x.status === "rejected");
+      throw new Error(why.reason && why.reason.message ? why.reason.message : "all legs failed to load");
+    }
     let net = 0, close = 0, spot = null, nearest = null;
     res.forEach((t, i) => {
       const L = legs[i], tr = $("body").children[i]; if (!tr) return;
-      if (!t){ return; }
+      if (!t){
+        if (L.s){
+          tr.querySelector(".m").textContent = "n/a";
+          ["b", "a", "pm", "pc"].forEach(c => { tr.querySelector("." + c).textContent = "–"; });
+        }
+        return;
+      }
       const q = t.quotes || {};
       const mark = num(t.mark_price), bid = num(q.best_bid), ask = num(q.best_ask);
       QUOTES[L.s] = {mark, bid, ask};
@@ -281,7 +305,8 @@ async function tick(){
       al.textContent = `Loss limit reached: net P&L ${f(worst)} (limit −${f(limit)}). Review or close.`;
       document.title = "⚠ LOSS LIMIT – tracker";
     } else { al.style.display = "none"; document.title = "Delta India position tracker"; }
-    $("status").textContent = "Updated " + new Date().toLocaleTimeString();
+    $("status").textContent = "Updated " + new Date().toLocaleTimeString() +
+      (failed.length ? ` · ${failed.length} leg(s) unavailable (expired or wrong symbol): ${failed.join(", ")}` : "");
   } catch (e){
     $("status").textContent = "Error: " + e.message + " (Failed to fetch usually means CORS or a wrong symbol.)";
   }
@@ -433,8 +458,23 @@ let series = [], seriesKey = "";
 function storageOk(){
   try { localStorage.setItem("t", "1"); return localStorage.getItem("t") === "1"; } catch (e) { return false; }
 }
+function mergeStored(){
+  try {
+    const d = JSON.parse(localStorage.getItem("series"));
+    if (!d || d.key !== seriesKey || !Array.isArray(d.pts)) return;
+    const seen = new Set(series.map(p => p.t));
+    d.pts.forEach(p => { if (!seen.has(p.t)) series.push(p); });
+    series.sort((a, b) => a.t - b.t);
+    if (series.length > 500) series = series.slice(-500);
+  } catch (e) {}
+}
+let lastSeriesPush = 0;
 function saveSeries(){
   try { localStorage.setItem("series", JSON.stringify({key: seriesKey, pts: series})); } catch (e) {}
+  if (Date.now() - lastSeriesPush > 300000){   // at most one cloud write per 5 minutes
+    lastSeriesPush = Date.now();
+    cloudPush("series", () => ({key: seriesKey, pts: series}), 0);
+  }
 }
 function loadSeries(){
   try {
@@ -455,6 +495,7 @@ function updateChart(res){
     if (m === null) return;
     sum += m; entry += Number(legs[i].entry) || 0;
   }
+  mergeStored();
   series.push({t: Date.now(), v: sum, e: entry});
   if (series.length > 500) series.shift();
   saveSeries();
@@ -538,6 +579,7 @@ $("find").onclick = findPrem;
 try { const cf = JSON.parse(localStorage.getItem("cfg")); if (cf){ $("cap").value = cf.cap || ""; $("msh").value = cf.msh || 25; $("ptg").value = cf.ptg || 2; } } catch (e) {}
 ["cap", "msh", "ptg"].forEach(id => { $(id).oninput = () => {
   try { localStorage.setItem("cfg", JSON.stringify({cap: $("cap").value, msh: $("msh").value, ptg: $("ptg").value})); } catch (e) {}
+  cloudPush("cfg", () => ({cap: $("cap").value, msh: $("msh").value, ptg: $("ptg").value}));
   updateSizing();
 }; });
 $("applyLots").onclick = () => {
@@ -564,8 +606,15 @@ $("fout").addEventListener("click", e => {
 });
 const QUOTES = {};
 let lastSpotVal = null, journal = [], cList = [];
-try { journal = JSON.parse(localStorage.getItem("journal")) || []; } catch (e) {}
-function saveJournal(){ try { localStorage.setItem("journal", JSON.stringify(journal)); } catch (e) {} }
+function readJournal(){
+  try { return JSON.parse(localStorage.getItem("journal")) || []; } catch (e) { return journal; }
+}
+journal = readJournal();
+function saveJournal(){
+  try { localStorage.setItem("journal", JSON.stringify(journal)); } catch (e) {}
+  if (pw) syncJournal().then(() => setSync("Saved to cloud " + new Date().toLocaleTimeString()))
+    .catch(e => setSync("Cloud save failed: " + e.message, true));
+}
 const esc = v => String(v).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = v => (v < 0 ? "-$" : "+$") + f(Math.abs(v));
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -575,6 +624,7 @@ function legPnl(L, exit, lot){
 }
 
 function renderJournal(){
+  $("jwarn").textContent = storageOk() ? "" : "Browser storage is blocked here, so this journal will be lost when you reload.";
   const total = journal.reduce((a, j) => a + j.pnl, 0);
   $("cumVal").textContent = journal.length ? money(total) : "$0";
   $("cumN").textContent = journal.length + (journal.length === 1 ? " trade" : " trades");
@@ -652,6 +702,7 @@ $("csave").onclick = () => {
   if (sel.some(x => x.exit === "" || isNaN(Number(x.exit)))){ $("cmsg").textContent = "Enter an exit price for every ticked leg."; return; }
   const lg = sel.map(x => ({s: x.L.s, side: x.L.side === -1 ? -1 : 1, lots: Number(x.L.lots), entry: Number(x.L.entry) || 0, exit: Number(x.exit)}));
   const pnl = lg.reduce((a, L) => a + legPnl(L, L.exit, lot), 0);
+  journal = readJournal();
   journal.push({id: Date.now() + "" + Math.floor(Math.random() * 1000), date: $("cdate").value || todayStr(),
     type: $("ctype").value === "expired" ? "Expired" : "Closed", lot, pnl, legs: lg});
   saveJournal();
@@ -663,7 +714,8 @@ $("csave").onclick = () => {
 $("jbody").addEventListener("click", e => {
   const id = e.target.dataset.jdel; if (!id) return;
   if (!confirm("Delete this journal entry? This changes your cumulative P&L.")) return;
-  journal = journal.filter(j => j.id !== id);
+  journal = readJournal().filter(j => j.id !== id);
+  addDel(id);
   saveJournal(); renderJournal();
 });
 $("jcsv").onclick = () => {
@@ -676,6 +728,119 @@ $("jcsv").onclick = () => {
   a.download = "delta-journal.csv"; a.click();
 };
 renderJournal();
+if (typeof window.addEventListener === "function"){
+  window.addEventListener("storage", e => { if (e.key === "journal"){ journal = readJournal(); renderJournal(); } });
+}
+try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+
+// ---------- Cloud sync (Cloudflare KV behind a passphrase) ----------
+let pw = "";
+try { pw = localStorage.getItem("pw") || ""; } catch (e) {}
+const SYNC_KEYS = ["legs", "journal", "series", "cfg"], pending = {};
+function setSync(msg, bad){ $("syncMsg").textContent = msg; $("syncMsg").className = bad ? "note l" : "note"; }
+function getDel(){ try { return JSON.parse(localStorage.getItem("jdel")) || []; } catch (e) { return []; } }
+function addDel(id){ const d = getDel(); if (!d.includes(id)) d.push(id); try { localStorage.setItem("jdel", JSON.stringify(d)); } catch (e) {} }
+
+async function api(method, path, body){
+  const r = await fetch("/api/state" + path, {
+    method,
+    headers: Object.assign({Authorization: "Bearer " + pw}, body !== undefined ? {"Content-Type": "application/json"} : {}),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 401) throw new Error("wrong passphrase");
+  if (r.status === 503) throw new Error("server not set up (KV namespace or APP_PASSPHRASE missing)");
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+function cloudPush(key, getVal, delay){
+  if (!pw) return;
+  clearTimeout(pending[key]);
+  pending[key] = setTimeout(async () => {
+    try { await api("PUT", "/" + key, getVal()); setSync("Saved to cloud " + new Date().toLocaleTimeString()); }
+    catch (e) { setSync("Cloud save failed: " + e.message, true); }
+  }, delay === undefined ? 1500 : delay);
+}
+
+async function syncJournal(doc){
+  if (!pw) return;
+  if (doc === undefined) doc = await api("GET", "/journal");
+  const sEntries = doc && Array.isArray(doc.entries) ? doc.entries : [];
+  const del = new Set([...((doc && doc.deleted) || []), ...getDel()]);
+  const merged = new Map();
+  [...sEntries, ...readJournal()].forEach(j => { if (!del.has(j.id)) merged.set(j.id, j); });
+  journal = [...merged.values()];
+  try {
+    localStorage.setItem("journal", JSON.stringify(journal));
+    localStorage.setItem("jdel", JSON.stringify([...del]));
+  } catch (e) {}
+  await api("PUT", "/journal", {entries: journal, deleted: [...del]});
+  renderJournal();
+}
+
+function pullSeries(sv){
+  if (!sv || !Array.isArray(sv.pts)) return;
+  const lastT = a => a.length ? a[a.length - 1].t : 0;
+  if (sv.key === seriesKey){
+    const seen = new Set(series.map(p => p.t));
+    sv.pts.forEach(p => { if (!seen.has(p.t)) series.push(p); });
+    series.sort((a, b) => a.t - b.t);
+    if (series.length > 500) series = series.slice(-500);
+  } else if (lastT(sv.pts) > lastT(series)){
+    series = sv.pts; seriesKey = sv.key || "";
+  }
+  try { localStorage.setItem("series", JSON.stringify({key: seriesKey, pts: series})); } catch (e) {}
+}
+
+async function pushAll(){
+  await api("PUT", "/legs", legs);
+  await api("PUT", "/cfg", {cap: $("cap").value, msh: $("msh").value, ptg: $("ptg").value});
+  await api("PUT", "/series", {key: seriesKey, pts: series});
+  await syncJournal(null);
+}
+
+async function pull(){
+  const st = await api("GET", "");
+  if (!SYNC_KEYS.some(k => st[k] !== null && st[k] !== undefined)){ await pushAll(); return "uploaded this browser's data"; }
+  if (Array.isArray(st.legs)){
+    legs = st.legs;
+    try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {}
+  }
+  if (st.cfg){
+    $("cap").value = st.cfg.cap || ""; $("msh").value = st.cfg.msh || 25; $("ptg").value = st.cfg.ptg || 2;
+    try { localStorage.setItem("cfg", JSON.stringify(st.cfg)); } catch (e) {}
+  }
+  pullSeries(st.series);
+  await syncJournal(st.journal);
+  return "loaded your saved data";
+}
+
+function afterPull(msg){
+  drawInputs(); renderJournal(); tick();
+  setSync("Synced " + new Date().toLocaleTimeString() + " (" + msg + ")");
+}
+
+$("pwgo").onclick = async () => {
+  const v = $("pwin").value; if (!v) return;
+  pw = v;
+  try { await api("GET", "/journal"); }
+  catch (e){ pw = ""; setSync("Could not connect: " + e.message, true); return; }
+  try { localStorage.setItem("pw", pw); } catch (e) {}
+  $("pwin").value = ""; $("pwoff").style.display = "";
+  try { afterPull(await pull()); } catch (e){ setSync("Cloud sync failed: " + e.message, true); }
+};
+$("pwoff").onclick = () => {
+  pw = ""; try { localStorage.removeItem("pw"); } catch (e) {}
+  $("pwoff").style.display = "none";
+  setSync("Disconnected. Your saved data stays on the server.");
+};
+function initSync(){
+  if (!pw) return;
+  $("pwoff").style.display = "";
+  setSync("Connecting…");
+  pull().then(afterPull).catch(e => setSync("Cloud sync failed: " + e.message, true));
+}
+
 
 try { $("chartOn").checked = localStorage.getItem("chartOn") === "1"; } catch (e) {}
 $("chartOn").onchange = () => {
@@ -684,6 +849,7 @@ $("chartOn").onchange = () => {
 };
 loadSeries();
 drawInputs(); start();
+initSync();
 </script>
 </body>
 </html>
