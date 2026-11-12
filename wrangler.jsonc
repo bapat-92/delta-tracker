@@ -5,5 +5,8 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS"
-  }
+  },
+  "kv_namespaces": [
+    { "binding": "STORE", "id": "PASTE_YOUR_KV_NAMESPACE_ID_HERE" }
+  ]
 }
