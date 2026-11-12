@@ -18,7 +18,8 @@ async function sameSecret(a, b) {
 }
 
 async function handleState(request, env, url) {
-  if (!env.STORE || !env.APP_PASSPHRASE) return json({ error: "server not configured" }, 503);
+  const missing = [!env.STORE && "KV binding STORE", !env.APP_PASSPHRASE && "secret APP_PASSPHRASE"].filter(Boolean);
+  if (missing.length) return json({ error: "Worker is missing: " + missing.join(" and ") }, 503);
   const auth = request.headers.get("Authorization") || "";
   const given = auth.startsWith("Bearer ") ? auth.slice(7) : "";
   if (!(await sameSecret(given, env.APP_PASSPHRASE))) {
