@@ -6,6 +6,10 @@
     "directory": "./public",
     "binding": "ASSETS"
   },
+  // ...
+  "vars": {
+    "APP_PASSPHRASE": "418344043831"
+  },
   "kv_namespaces": [
     { "binding": "STORE", "id": "3198476cc60640f1bffe430914c03d99" }
   ]
