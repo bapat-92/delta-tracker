@@ -133,6 +133,33 @@ h1{padding-right:170px}
   <div id="fout" class="note" style="margin-top:8px"></div>
 </div>
 
+<div class="card" id="volCard">
+  <b>BTC move check (Delta 5-minute candles)</b>
+  <div class="row" style="margin:8px 0">
+    <label>Look back (days)<input id="vdays" type="number" min="1" max="30" value="7"></label>
+    <label>Window (hours)<input id="vwin" type="number" min="0.5" step="0.5" value="2"></label>
+    <label>Move bigger than (%)<input id="vthr" type="number" min="0.1" step="0.1" value="1"></label>
+    <button id="vrun">Run</button>
+  </div>
+  <div id="vout" class="note">Press Run to fetch candles from Delta.</div>
+</div>
+
+<div class="card" id="trigCard">
+  <b>Move trigger (alerts only, places no orders)</b>
+  <p class="note" style="margin:4px 0 8px">Each time BTC moves by the step from the last trigger price: a rise suggests selling the call, a fall suggests selling the put, at the strike priced nearest your target premium.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Step (%)<input id="tstep" type="number" min="0.1" step="0.1" value="1"></label>
+    <label>Target premium (USD per 1 BTC)<input id="tprem" type="number" min="1" value="100"></label>
+    <label>Expiry (DDMMYY)<input id="texp" placeholder="e.g. 131126"></label>
+    <button id="tarm">Arm at current spot</button>
+    <button id="tstop" style="display:none">Stop</button>
+  </div>
+  <div id="tstat" class="note">Not armed.</div>
+  <div id="tlast" class="l" style="font-weight:600;margin-top:6px"></div>
+  <div id="tmsg" class="note"></div>
+  <div id="tlog" style="margin-top:8px"></div>
+</div>
+
 <div class="row" style="margin-bottom:12px">
   <label style="flex-direction:row;align-items:center;gap:8px;font-size:14px;color:var(--fg)">
     <input type="checkbox" id="chartOn" style="width:auto"> Show premium chart (history keeps recording while hidden)
@@ -314,6 +341,7 @@ async function tick(){
 
 function showSpot(spot){
   lastSpotVal = spot;
+  checkTrigger(spot);
   $("spot").textContent = f(spot, 0);
   let best = null;
   legs.filter(L => L.side === -1).forEach(L => {
@@ -844,6 +872,213 @@ function initSync(){
   pull().then(afterPull).catch(e => setSync("Cloud sync failed: " + e.message, true));
 }
 
+
+
+// ---------- BTC move statistics ----------
+function volStats(candles, N, thr, up, dn){
+  const STEP = 300, T = candles.length, rolling = [];
+  for (let i = 0; i + N <= T; i++){
+    if (candles[i + N - 1].time - candles[i].time !== (N - 1) * STEP) continue;   // skip windows that span a data gap
+    let hi = -Infinity, lo = Infinity;
+    for (let k = i; k < i + N; k++){ if (candles[k].high > hi) hi = candles[k].high; if (candles[k].low < lo) lo = candles[k].low; }
+    const o = candles[i].open, c = candles[i + N - 1].close;
+    rolling.push({i, t: candles[i].time, net: c / o - 1, range: (hi - lo) / o, upMax: hi / o - 1, dnMax: 1 - lo / o});
+  }
+  const episodes = list => {          // windows that overlap are one episode
+    let n = 0, prev = -Infinity;
+    list.forEach(w => { if (w.i - prev >= N) n++; prev = w.i; });
+    return n;
+  };
+  const rRange = rolling.filter(w => w.range > thr), rNet = rolling.filter(w => Math.abs(w.net) > thr);
+  const best = (key, abs) => rolling.reduce((b, w) => { const v = abs ? Math.abs(w[key]) : w[key]; return !b || v > b.v ? {v, t: w.t, raw: w[key]} : b; }, null);
+  // fixed blocks aligned to UTC (for a 2h window: 00-02, 02-04, ...)
+  const blocks = {};
+  candles.forEach(c => { const b = Math.floor(c.time / (N * STEP)); (blocks[b] = blocks[b] || []).push(c); });
+  const days = {};
+  let bTotal = 0, bRange = 0, bNet = 0;
+  Object.keys(blocks).sort((a, b) => a - b).forEach(b => {
+    const cs = blocks[b];
+    if (cs.length !== N) return;
+    const o = cs[0].open, c = cs[N - 1].close;
+    const hi = Math.max(...cs.map(x => x.high)), lo = Math.min(...cs.map(x => x.low));
+    const rg = (hi - lo) / o, nt = Math.abs(c / o - 1);
+    const d = new Date(cs[0].time * 1000).toISOString().slice(0, 10);
+    const row = days[d] = days[d] || {blocks: 0, over: 0, max: 0};
+    row.blocks++; bTotal++;
+    if (rg > thr){ row.over++; bRange++; }
+    if (nt > thr) bNet++;
+    if (rg > row.max) row.max = rg;
+  });
+  const out = {candles: T, rolling: rolling.length, blocks: {total: bTotal, range: bRange, net: bNet},
+    roll: {range: rRange.length, net: rNet.length}, epi: {range: episodes(rRange), net: episodes(rNet)},
+    maxRange: best("range", false), maxNet: best("net", true), days};
+  if (up !== null && up !== undefined){ const l = rolling.filter(w => w.upMax >= up); out.up = {roll: l.length, epi: episodes(l), dist: up}; }
+  if (dn !== null && dn !== undefined){ const l = rolling.filter(w => w.dnMax >= dn); out.dn = {roll: l.length, epi: episodes(l), dist: dn}; }
+  return out;
+}
+
+async function fetchCandles(base, symbol, days){
+  const end = Math.floor(Date.now() / 1000), start = end - days * 86400, step = 1800 * 300;   // 1800 candles per request (limit is 2000)
+  const seen = new Map();
+  for (let a = start; a < end; a += step){
+    const u = new URL(base + "/v2/history/candles");
+    u.searchParams.set("resolution", "5m"); u.searchParams.set("symbol", symbol);
+    u.searchParams.set("start", a); u.searchParams.set("end", Math.min(a + step, end));
+    const r = await fetch(u);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    ((await r.json()).result || []).forEach(c => {
+      const t = Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time);
+      seen.set(t, {time: t, open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)});
+    });
+  }
+  return [...seen.values()].sort((a, b) => a.time - b.time);
+}
+
+function strikeDists(){
+  const spot = lastSpotVal; if (!spot) return {up: null, dn: null};
+  let up = null, dn = null;
+  legs.filter(L => L.side === -1).forEach(L => {
+    const p = String(L.s).split("-"), k = Number(p[2]); if (!k) return;
+    if (p[0] === "C" && k > spot){ const d = k / spot - 1; if (up === null || d < up) up = d; }
+    if (p[0] === "P" && k < spot){ const d = 1 - k / spot; if (dn === null || d < dn) dn = d; }
+  });
+  return {up, dn};
+}
+
+function renderVol(r, hrs, thrPct, days){
+  const pc = v => f(v * 100, 2) + "%", when = t => new Date(t * 1000).toLocaleString();
+  const tile = (lbl, val, sub) => `<div>${lbl}<b>${val}</b><span class="note">${sub || ""}</span></div>`;
+  let h = `<div class="kpi" style="margin-bottom:10px">` +
+    tile(`${hrs}h blocks with a range over ${thrPct}%`, `${r.blocks.range} of ${r.blocks.total}`, "fixed UTC blocks, high to low") +
+    tile(`${hrs}h blocks with a net move over ${thrPct}%`, `${r.blocks.net} of ${r.blocks.total}`, "start to end of block") +
+    tile("Separate episodes (range)", r.epi.range, "overlapping windows merged") +
+    tile("Separate episodes (net move)", r.epi.net, "overlapping windows merged") +
+    tile("Biggest range in any window", r.maxRange ? pc(r.maxRange.v) : "–", r.maxRange ? when(r.maxRange.t) : "") +
+    tile("Biggest net move", r.maxNet ? (r.maxNet.raw >= 0 ? "+" : "-") + pc(r.maxNet.v) : "–", r.maxNet ? when(r.maxNet.t) : "") +
+    `</div>`;
+  if (r.up || r.dn){
+    h += `<div class="kpi" style="margin-bottom:10px">`;
+    if (r.up) h += tile(`Reached your nearest short call (+${pc(r.up.dist)}) in ${hrs}h`, `${r.up.epi} episodes`, `${r.up.roll} rolling windows`);
+    if (r.dn) h += tile(`Reached your nearest short put (-${pc(r.dn.dist)}) in ${hrs}h`, `${r.dn.epi} episodes`, `${r.dn.roll} rolling windows`);
+    h += `</div>`;
+  }
+  const ds = Object.keys(r.days).sort().reverse();
+  h += `<div class="wrap"><table><thead><tr><th>Day (UTC)</th><th>${hrs}h blocks</th><th>Over ${thrPct}%</th><th>Biggest ${hrs}h range</th></tr></thead><tbody>` +
+    ds.map(d => `<tr><td>${d}</td><td>${r.days[d].blocks}</td><td class="${r.days[d].over ? "l" : ""}">${r.days[d].over}</td><td>${pc(r.days[d].max)}</td></tr>`).join("") + `</tbody></table></div>` +
+    `<p class="note">${r.candles} candles over ${days} days. "Range" is the high-to-low swing inside the window and "net" is start to end, as a share of the window's opening price. A rolling window starts every 5 minutes, so overlapping windows from one event are merged into episodes. The strike lines apply today's distance to your sold legs to every past window. Past moves don't predict future ones.</p>`;
+  $("vout").className = ""; $("vout").innerHTML = h;
+}
+
+$("vrun").onclick = async () => {
+  const days = Math.min(30, Math.max(1, Number($("vdays").value) || 7));
+  const hrs = Math.max(0.5, Number($("vwin").value) || 2), thrPct = Number($("vthr").value) || 1;
+  $("vout").className = "note"; $("vout").textContent = "Fetching candles…";
+  try {
+    const candles = await fetchCandles($("base").value.replace(/\/$/, ""), "BTCUSD", days);
+    if (candles.length < 20){ $("vout").textContent = "Delta returned too few candles (" + candles.length + ")."; return; }
+    const sd = strikeDists();
+    renderVol(volStats(candles, Math.round(hrs * 12), thrPct / 100, sd.up, sd.dn), hrs, thrPct, days);
+  } catch (e){ $("vout").className = "note l"; $("vout").textContent = "Could not load candles: " + e.message; }
+};
+
+
+// ---------- Move trigger ----------
+let trig = {armed: false, ref: null, step: 1, prem: 100, exp: "", needAnchor: false, log: []};
+try { const d = JSON.parse(localStorage.getItem("trig")); if (d) trig = Object.assign(trig, d); } catch (e) {}
+let trigBusy = false;
+function saveTrig(){ try { localStorage.setItem("trig", JSON.stringify(trig)); } catch (e) {} }
+
+async function findPick(type, spot){
+  const ct = type === "C" ? "call_options" : "put_options";
+  const u = new URL($("base").value.replace(/\/$/, "") + "/v2/tickers");
+  u.searchParams.set("contract_types", ct);
+  u.searchParams.set("underlying_asset_symbols", "BTC");
+  const r = await fetch(u);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const rows = ((await r.json()).result || []).filter(t => {
+    if (!t.symbol.endsWith("-" + trig.exp) || num(t.mark_price) === null) return false;
+    const k = Number(t.strike_price);
+    return type === "C" ? k > spot : k < spot;          // out of the money only
+  });
+  if (!rows.length) return null;
+  rows.sort((a, b) => Math.abs(num(a.mark_price) - trig.prem) - Math.abs(num(b.mark_price) - trig.prem));
+  const t = rows[0], q = t.quotes || {};
+  return {symbol: t.symbol, strike: Number(t.strike_price), mark: num(t.mark_price), bid: num(q.best_bid), ask: num(q.best_ask)};
+}
+
+function updateTrigStatus(spot){
+  if (!trig.armed){ $("tstat").textContent = "Not armed."; return; }
+  const st = trig.step / 100;
+  $("tstat").textContent = `Armed. Reference ${f(trig.ref, 0)}, spot ${f(spot, 0)}. Next: ${f(trig.ref * (1 + st), 0)} or higher sells a call, ${f(trig.ref * (1 - st), 0)} or lower sells a put. Expiry ${trig.exp}, target premium $${f(trig.prem, 0)}.`;
+}
+
+async function checkTrigger(spot){
+  if (!trig.armed) return;
+  if (trig.needAnchor || !trig.ref){ trig.ref = spot; trig.needAnchor = false; saveTrig(); updateTrigStatus(spot); return; }
+  const st = trig.step / 100, move = spot / trig.ref - 1;
+  if (trigBusy || Math.abs(move) < st){ updateTrigStatus(spot); return; }
+  trigBusy = true;
+  const dir = move > 0 ? "up" : "down", steps = Math.floor(Math.abs(move) / st + 1e-9), from = trig.ref;
+  trig.ref = spot; saveTrig();                       // each trigger resets the reference
+  const entry = {t: Date.now(), dir, steps, move, from, spot, id: Date.now() + "" + Math.floor(Math.random() * 1000)};
+  try { entry.pick = await findPick(dir === "up" ? "C" : "P", spot); if (!entry.pick) entry.err = "no out-of-the-money option found for this expiry"; }
+  catch (e) { entry.err = e.message; }
+  trig.log.unshift(entry); trig.log = trig.log.slice(0, 50); saveTrig();
+  renderTrig(); announceTrig(entry);
+  trigBusy = false;
+}
+
+function announceTrig(e){
+  const msg = `BTC ${e.dir === "up" ? "up" : "down"} ${f(Math.abs(e.move) * 100, 2)}% to ${f(e.spot, 0)} (${e.steps} step${e.steps > 1 ? "s" : ""}). ` +
+    (e.pick ? `Sell ${e.pick.symbol} (mark ${f(e.pick.mark)}, bid ${f(e.pick.bid)}).` : `No suggestion: ${e.err}.`);
+  $("tlast").textContent = new Date(e.t).toLocaleTimeString() + " · " + msg;
+  document.title = "⚠ " + msg;
+  try { if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("Move trigger", {body: msg}); } catch (err) {}
+}
+
+function renderTrig(){
+  if (!trig.log.length){ $("tlog").innerHTML = ""; return; }
+  $("tlog").innerHTML = `<div class="wrap"><table><thead><tr><th>Time</th><th>Move</th><th>Spot</th><th style="text-align:left">Suggested sell</th><th>Mark</th><th>Bid</th><th>Ask</th><th></th></tr></thead><tbody>` +
+    trig.log.map(e => `<tr><td>${esc(new Date(e.t).toLocaleString())}</td>
+      <td class="${e.dir === "up" ? "g" : "l"}">${e.dir === "up" ? "▲" : "▼"} ${f(Math.abs(e.move) * 100, 2)}% (${e.steps})</td>
+      <td>${f(e.from, 0)} → ${f(e.spot, 0)}</td>` +
+      (e.pick ? `<td style="text-align:left">${esc(e.pick.symbol)}</td><td>${f(e.pick.mark)}</td><td>${f(e.pick.bid)}</td><td>${f(e.pick.ask)}</td>
+        <td><button data-tadd="${esc(e.pick.symbol)}" data-px="${e.pick.bid === null ? e.pick.mark : e.pick.bid}">Add as sell</button></td>`
+        : `<td colspan="4" style="text-align:left" class="l">${esc(e.err || "none")}</td><td></td>`) + `</tr>`).join("") + `</tbody></table></div>`;
+}
+
+function addAsSell(s, px){
+  const added = legs.filter(L => L.fromFinder);
+  if (added.some(L => L.s === s)) return s + " is already added.";
+  if (added.length >= MAX_ADDED) return `Limit reached: ${MAX_ADDED} added sells. Remove one first.`;
+  legs.push({s, side: -1, lots: 0, entry: Number(px) || 0, fromFinder: true});
+  save(); drawInputs(); tick();
+  return "Added " + s + ". Enter your lots in the table.";
+}
+$("tlog").addEventListener("click", e => {
+  const s = e.target.dataset.tadd; if (!s) return;
+  $("tmsg").textContent = addAsSell(s, e.target.dataset.px);
+});
+
+function trigButtons(){ $("tarm").style.display = trig.armed ? "none" : ""; $("tstop").style.display = trig.armed ? "" : "none"; }
+$("tarm").onclick = () => {
+  if (!lastSpotVal){ $("tstat").textContent = "Waiting for the spot price, try again in a few seconds."; return; }
+  const exp = $("texp").value.trim() || $("fexp").value.trim();
+  if (!/^\d{6}$/.test(exp)){ $("tstat").textContent = "Enter the expiry as DDMMYY, for example 131126."; return; }
+  trig.step = Number($("tstep").value) || 1; trig.prem = Number($("tprem").value) || 100; trig.exp = exp;
+  trig.ref = lastSpotVal; trig.armed = true; trig.needAnchor = false; saveTrig();
+  try { if (typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
+  trigButtons(); updateTrigStatus(lastSpotVal);
+};
+$("tstop").onclick = () => { trig.armed = false; saveTrig(); trigButtons(); $("tstat").textContent = "Stopped."; };
+["tstep", "tprem", "texp"].forEach(id => { $(id).onchange = () => {
+  trig.step = Number($("tstep").value) || 1; trig.prem = Number($("tprem").value) || 100;
+  const e = $("texp").value.trim(); if (/^\d{6}$/.test(e)) trig.exp = e;
+  saveTrig();
+}; });
+$("tstep").value = trig.step; $("tprem").value = trig.prem; $("texp").value = trig.exp || "";
+if (trig.armed) trig.needAnchor = true;          // after a reload, restart from the next spot price instead of an old reference
+trigButtons(); renderTrig();
 
 try { $("chartOn").checked = localStorage.getItem("chartOn") === "1"; } catch (e) {}
 $("chartOn").onchange = () => {
