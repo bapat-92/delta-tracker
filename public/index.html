@@ -139,8 +139,10 @@ h1{padding-right:170px}
     <label>Look back (days)<input id="vdays" type="number" min="1" max="30" value="7"></label>
     <label>Window (hours)<input id="vwin" type="number" min="0.5" step="0.5" value="2"></label>
     <label>Move bigger than (%)<input id="vthr" type="number" min="0.1" step="0.1" value="1"></label>
+    <label>Expiry for strike candidates (DDMMYY)<input id="vexp" placeholder="uses the trigger or finder expiry"></label>
     <button id="vrun">Run</button>
   </div>
+  <div id="vmsg" class="note"></div>
   <div id="vout" class="note">Press Run to fetch candles from Delta.</div>
 </div>
 
@@ -911,7 +913,7 @@ function volStats(candles, N, thr, up, dn){
   });
   const out = {candles: T, rolling: rolling.length, blocks: {total: bTotal, range: bRange, net: bNet},
     roll: {range: rRange.length, net: rNet.length}, epi: {range: episodes(rRange), net: episodes(rNet)},
-    maxRange: best("range", false), maxNet: best("net", true), days};
+    maxRange: best("range", false), maxNet: best("net", true), days, rollingAll: rolling, N};
   if (up !== null && up !== undefined){ const l = rolling.filter(w => w.upMax >= up); out.up = {roll: l.length, epi: episodes(l), dist: up}; }
   if (dn !== null && dn !== undefined){ const l = rolling.filter(w => w.dnMax >= dn); out.dn = {roll: l.length, epi: episodes(l), dist: dn}; }
   return out;
@@ -932,6 +934,47 @@ async function fetchCandles(base, symbol, days){
     });
   }
   return [...seen.values()].sort((a, b) => a.time - b.time);
+}
+
+async function fetchChain(exp){
+  const base = $("base").value.replace(/\/$/, "");
+  const get = async ct => {
+    const u = new URL(base + "/v2/tickers");
+    u.searchParams.set("contract_types", ct); u.searchParams.set("underlying_asset_symbols", "BTC");
+    const r = await fetch(u);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return (await r.json()).result || [];
+  };
+  const [cs, ps] = await Promise.all([get("call_options"), get("put_options")]);
+  const norm = t => { const q = t.quotes || {};
+    return {symbol: t.symbol, strike: Number(t.strike_price) || Number(t.symbol.split("-")[2]),
+      mark: num(t.mark_price), bid: num(q.best_bid), ask: num(q.best_ask), spot: num(t.spot_price)}; };
+  const keep = a => a.filter(t => t.symbol.endsWith("-" + exp) && num(t.mark_price) !== null).map(norm);
+  return {calls: keep(cs), puts: keep(ps)};
+}
+
+function reach(rolling, N, key, dist){
+  const l = rolling.filter(w => w[key] >= dist);
+  let epi = 0, prev = -Infinity;
+  l.forEach(w => { if (w.i - prev >= N) epi++; prev = w.i; });
+  return {pct: rolling.length ? l.length / rolling.length : 0, epi};
+}
+
+function strikeCandidates(res, chain, spot, prem){
+  const calls = chain.calls.filter(o => o.strike > spot).sort((a, b) => a.strike - b.strike);
+  const puts = chain.puts.filter(o => o.strike < spot).sort((a, b) => b.strike - a.strike);
+  const cell = (o, side) => {
+    if (!o) return null;
+    const dist = side === "C" ? o.strike / spot - 1 : 1 - o.strike / spot;
+    return Object.assign({}, o, {dist}, reach(res.rollingAll, res.N, side === "C" ? "upMax" : "dnMax", dist));
+  };
+  const near = l => l.length ? l.slice().sort((a, b) => Math.abs(a.mark - prem) - Math.abs(b.mark - prem))[0] : null;
+  const rows = [0.5, 1, 1.5, 2, 3, 4].map(m => {
+    const lvl = m / 100 - 1e-9;      // first strike at or beyond the move
+    return {label: m + "% move", call: cell(calls.find(o => o.strike / spot - 1 >= lvl), "C"), put: cell(puts.find(o => 1 - o.strike / spot >= lvl), "P")};
+  });
+  rows.unshift({label: "Premium near $" + f(prem, 0), call: cell(near(calls), "C"), put: cell(near(puts), "P")});
+  return rows;
 }
 
 function strikeDists(){
@@ -962,6 +1005,14 @@ function renderVol(r, hrs, thrPct, days){
     if (r.dn) h += tile(`Reached your nearest short put (-${pc(r.dn.dist)}) in ${hrs}h`, `${r.dn.epi} episodes`, `${r.dn.roll} rolling windows`);
     h += `</div>`;
   }
+  if (r.cands){
+    const side = o => o ? `<td>${f(o.strike, 0)}</td><td>${f(o.dist * 100, 2)}%</td><td>${f(o.bid)} / ${f(o.mark)}</td><td>${f(o.pct * 100, 1)}% (${o.epi})</td><td><button data-vadd="${esc(o.symbol)}" data-px="${o.bid === null ? o.mark : o.bid}">Add</button></td>`
+      : `<td colspan="5" class="note">none</td>`;
+    h += `<b>Strike candidates to sell</b> <span class="note">expiry ${esc(r.candMeta.exp)}, spot ${f(r.candMeta.spot, 0)}</span><div class="wrap"><table><thead><tr><th rowspan="2" style="text-align:left">Row</th><th colspan="5" style="text-align:center">Call</th><th colspan="5" style="text-align:center">Put</th></tr><tr>` +
+      `<th>Strike</th><th>Away</th><th>Bid / mark</th><th>Reached in ${hrs}h</th><th></th><th>Strike</th><th>Away</th><th>Bid / mark</th><th>Reached in ${hrs}h</th><th></th></tr></thead><tbody>` +
+      r.cands.map(row => `<tr><td style="text-align:left">${esc(row.label)}</td>${side(row.call)}${side(row.put)}</tr>`).join("") +
+      `</tbody></table></div><p class="note">Each move row picks the first strike at or beyond that distance from spot. "Reached" is the share of past ${hrs}-hour windows in which price touched the strike, with the number of separate episodes in brackets. Bid / mark are today's prices per 1 BTC.</p>`;
+  } else if (r.candErr) h += `<p class="note l">Strike candidates: ${esc(r.candErr)}.</p>`;
   const ds = Object.keys(r.days).sort().reverse();
   h += `<div class="wrap"><table><thead><tr><th>Day (UTC)</th><th>${hrs}h blocks</th><th>Over ${thrPct}%</th><th>Biggest ${hrs}h range</th></tr></thead><tbody>` +
     ds.map(d => `<tr><td>${d}</td><td>${r.days[d].blocks}</td><td class="${r.days[d].over ? "l" : ""}">${r.days[d].over}</td><td>${pc(r.days[d].max)}</td></tr>`).join("") + `</tbody></table></div>` +
@@ -969,6 +1020,10 @@ function renderVol(r, hrs, thrPct, days){
   $("vout").className = ""; $("vout").innerHTML = h;
 }
 
+$("vout").addEventListener("click", e => {
+  const sym = e.target.dataset.vadd; if (!sym) return;
+  $("vmsg").textContent = addAsSell(sym, e.target.dataset.px);
+});
 $("vrun").onclick = async () => {
   const days = Math.min(30, Math.max(1, Number($("vdays").value) || 7));
   const hrs = Math.max(0.5, Number($("vwin").value) || 2), thrPct = Number($("vthr").value) || 1;
@@ -977,7 +1032,19 @@ $("vrun").onclick = async () => {
     const candles = await fetchCandles($("base").value.replace(/\/$/, ""), "BTCUSD", days);
     if (candles.length < 20){ $("vout").textContent = "Delta returned too few candles (" + candles.length + ")."; return; }
     const sd = strikeDists();
-    renderVol(volStats(candles, Math.round(hrs * 12), thrPct / 100, sd.up, sd.dn), hrs, thrPct, days);
+    const res = volStats(candles, Math.round(hrs * 12), thrPct / 100, sd.up, sd.dn);
+    const exp = $("vexp").value.trim() || $("texp").value.trim() || $("fexp").value.trim();
+    if (/^\d{6}$/.test(exp)){
+      try {
+        const chain = await fetchChain(exp);
+        const spot = lastSpotVal || (chain.calls[0] && chain.calls[0].spot) || (chain.puts[0] && chain.puts[0].spot) || candles[candles.length - 1].close;
+        if (chain.calls.length || chain.puts.length){
+          res.cands = strikeCandidates(res, chain, spot, Number($("tprem").value) || 100);
+          res.candMeta = {exp, spot};
+        } else res.candErr = "no options found for expiry " + exp;
+      } catch (e){ res.candErr = "could not load the option chain: " + e.message; }
+    } else res.candErr = "enter an expiry (DDMMYY) to see candidates";
+    renderVol(res, hrs, thrPct, days);
   } catch (e){ $("vout").className = "note l"; $("vout").textContent = "Could not load candles: " + e.message; }
 };
 
