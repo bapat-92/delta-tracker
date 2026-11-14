@@ -37,6 +37,11 @@ td input{min-width:70px}
 .spotcard.g .spotnum{color:var(--gain)}
 .spotcard.l .spotnum{color:var(--loss)}
 h1{padding-right:170px}
+.hidden-sec{display:none !important}
+#secList{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:6px;margin-top:8px}
+#secList label{flex-direction:row;align-items:center;gap:6px;font-size:14px;color:var(--fg)}
+#secList input{width:auto}
+#secPanel summary{cursor:pointer}
 #cum{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:8px;z-index:20;background:var(--card);border:2px solid var(--line);border-radius:10px;padding:6px 12px;text-align:right;box-shadow:0 2px 8px rgba(0,0,0,.15)}
 #cum .cl{font-size:10px;letter-spacing:.1em;color:var(--mut);font-weight:700}
 #cum .cv{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
@@ -53,6 +58,12 @@ h1{padding-right:170px}
 <h1>Delta India position tracker</h1>
 <div id="status">Starting…</div>
 <div id="alert"></div>
+
+<details class="card" id="secPanel">
+  <summary><b>Sections</b> <span class="note">tick the ones you want to see</span></summary>
+  <div id="secList"></div>
+  <p><button id="secAll">Show all</button> <button id="secNone">Hide all</button></p>
+</details>
 
 <div class="card spotcard" id="spotCard">
   <div class="spotlbl">BTC SPOT</div>
@@ -71,7 +82,7 @@ h1{padding-right:170px}
   <div id="syncMsg" class="note">Not connected: your data is only in this browser.</div>
 </div>
 
-<div class="card">
+<div class="card" id="settingsCard">
   <div class="row">
     <label>API base (leave for default)<input id="base" value="https://api.india.delta.exchange"></label>
     <label>BTC per lot<input id="lot" type="number" step="0.0001" value="0.001"></label>
@@ -83,13 +94,13 @@ h1{padding-right:170px}
   <p class="note">Public prices only, so no API key is needed. If you get "Failed to fetch", the API may block browser requests (CORS): put a proxy URL in the API base. Entry price is the premium per 1 BTC you got or paid. BTC per lot is an assumption, so check the contract specs.</p>
 </div>
 
-<div class="kpi card">
+<div class="kpi card" id="summaryCard">
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
   <div>Nearest strike<b id="near">–</b></div>
 </div>
 
-<div class="card wrap">
+<div class="card wrap" id="legsCard">
   <table>
     <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th></th></tr></thead>
     <tbody id="body"></tbody>
@@ -122,7 +133,7 @@ h1{padding-right:170px}
   <p><button id="jcsv">Export CSV</button> <span class="note">Saved in this browser only, so export now and then to keep a copy.</span> <span id="jwarn" class="l"></span></p>
 </div>
 
-<div class="card">
+<div class="card" id="finderCard">
   <b>Find options near a target premium</b>
   <div class="row" style="margin-top:8px">
     <label>Expiry<select id="fexp"></select></label>
@@ -165,13 +176,14 @@ h1{padding-right:170px}
 
 <div class="card" id="batCard">
   <b>Inverted Batman: best strike combinations</b>
-  <p class="note" style="margin:4px 0 8px">Sell more of the outer call and put, buy fewer of the inner ones (your 5,000 sold / 1,500 bought structure). It tries many strike combinations from the live chain and ranks them by the BTC price range at expiry where profit stays at or above your minimum share of margin.</p>
+  <p class="note" style="margin:4px 0 8px">Sell more of the outer call and put, buy fewer of the inner ones (your 5,000 sold / 1,500 bought structure). It tries many strike combinations from the live chain and ranks them by the BTC price range at expiry where profit stays at or above your minimum share of margin. A second group below shows three more options where the call and put are the same distance from spot.</p>
   <div class="row" style="margin:8px 0">
     <label>Expiry<select id="iexp"></select></label>
     <label>Sold lots per leg<input id="isold" type="number" min="1" value="5000"></label>
     <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
     <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
-    <button id="ifind">Find 3 combinations</button>
+    <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
+    <button id="ifind">Find combinations</button>
   </div>
   <div id="imsg" class="note">Uses the leverage and BTC-per-lot boxes above. Buys are priced at the ask and sells at the bid.</div>
   <div id="iout"></div>
@@ -205,7 +217,7 @@ h1{padding-right:170px}
   <div id="chart"></div>
 </div>
 
-<div class="card">
+<div class="card" id="marginCard">
   <b>Margin estimate (rough)</b>
   <div class="row" style="margin:8px 0">
     <label>Leverage (x)<input id="lev" type="number" min="1" value="100"></label>
@@ -224,7 +236,7 @@ h1{padding-right:170px}
   <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
 </div>
 
-<div class="card">
+<div class="card" id="slCard">
   <b>Stop-loss in premium value</b>
   <div class="row" style="margin:8px 0">
     <label>Stop-loss multiple (× premium)<input id="slx" type="number" min="0" step="0.5" value="5"></label>
@@ -244,7 +256,7 @@ h1{padding-right:170px}
   <p class="note">Premium value is lots × BTC per lot × option price, in USD. You collect it when you sell; it rises as the options gain value. The trigger is the premium value at which your loss equals the stop-loss (entry value + stop-loss). With the net basis, bought legs are subtracted from both the entry and the current value. Based on mark prices, so it lags and doesn't place any order.</p>
 </div>
 
-<div class="card">
+<div class="card" id="sizeCard">
   <b>Position sizing</b>
   <div class="row" style="margin:8px 0">
     <label>Total capital (USD)<input id="cap" type="number" min="0" placeholder="e.g. 10000"></label>
@@ -1185,6 +1197,14 @@ $("brun").onclick = async () => {
 
 // ---------- Inverted Batman search ----------
 let lastBat = [];
+function strikeStep(chain){
+  const ks = [...new Set(chain.calls.map(o => o.strike))].sort((a, b) => a - b);
+  let step = Infinity;
+  for (let i = 1; i < ks.length; i++) step = Math.min(step, ks[i] - ks[i - 1]);
+  return isFinite(step) && step > 0 ? step : 200;
+}
+const key4 = c => [c.callLong.strike, c.callShort.strike, c.putLong.strike, c.putShort.strike].join("|");
+
 function batmanSearch(chain, spot, p){
   const q = p.lot, gs = Math.max(5, Math.round(spot * 0.0002 / 5) * 5), grid = [];
   for (let S = spot * 0.85; S <= spot * 1.15; S += gs) grid.push(S);
@@ -1207,8 +1227,13 @@ function batmanSearch(chain, spot, p){
   lcs.forEach(lg => scs.forEach(sh => { if (sh.strike > lg.strike) cps.push(pair(sh, lg, true)); }));
   lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike) pps.push(pair(sh, lg, false)); }));
   const margin = p.sold * 2 * q * spot / p.lev, thr = margin * p.minPct / 100;
-  const best = new Map();
+  const excl = p.exclude || new Set(), best = new Map();
   cps.forEach(c => pps.forEach(pp => {
+    if (p.equi){      // sold call and sold put equally far from spot, and the bought legs too
+      const dSc = c.sh.strike - spot, dSp = spot - pp.sh.strike, dLc = c.lg.strike - spot, dLp = spot - pp.lg.strike;
+      if (Math.abs(dSc - dSp) > p.equi.tol || Math.abs(dLc - dLp) > p.equi.tol) return;
+    }
+    if (excl.has([c.lg.strike, c.sh.strike, pp.lg.strike, pp.sh.strike].join("|"))) return;
     if (c.arr[iS] + pp.arr[iS] < thr) return;                        // must still be in profit if BTC stays here
     let l = iS, r = iS;
     while (l > 0 && c.arr[l - 1] + pp.arr[l - 1] >= thr) l--;
@@ -1226,7 +1251,8 @@ function batmanSearch(chain, spot, p){
     let mi = 0; tot.forEach((v, i) => { if (v < tot[mi]) mi = i; });
     return {callShort: t.c.sh, callLong: t.c.lg, putShort: t.pp.sh, putLong: t.pp.lg, credit: t.credit,
       margin, thr, lo: grid[t.l], hi: grid[t.r], width: t.width, be: [grid[be1], grid[be2]],
-      maxLoss: tot[mi], maxLossAt: grid[mi], grid, tot, atEdgeLo: t.l === 0, atEdgeHi: t.r === grid.length - 1, sold: p.sold, bought: p.bought, spot};
+      maxLoss: tot[mi], maxLossAt: grid[mi], grid, tot, atEdgeLo: t.l === 0, atEdgeHi: t.r === grid.length - 1, sold: p.sold, bought: p.bought, spot,
+      dSc: t.c.sh.strike - spot, dSp: spot - t.pp.sh.strike, dLc: t.c.lg.strike - spot, dLp: spot - t.pp.lg.strike};
   });
 }
 
@@ -1243,28 +1269,35 @@ function batChart(c){
     <polyline points="${pts}" fill="none" stroke="var(--acc)" stroke-width="2"/></svg>`;
 }
 
-function renderBat(list, spot, exp){
-  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
-  if (!list.length){
-    $("iout").innerHTML = `<p class="note l">No combination keeps profit at or above your minimum while BTC stays near ${f(spot, 0)}. Try a lower minimum, fewer bought lots, or a different expiry.</p>`;
-    return;
-  }
-  $("iout").innerHTML = `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:8px">` + list.map((c, n) => {
-    const pct = v => f(v / spot * 100, 2) + "%";
-    return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
-      <b style="font-size:16px">#${n + 1} · range ${f(c.width, 0)} (${pct(c.width)})</b>
-      <div class="note" style="margin:4px 0">Profit stays above ${usd(c.thr)} from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdgeLo || c.atEdgeHi ? " (at least; hits the edge of the tested range)" : ""}</div>
+const usdB = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+function batCards(list, spot, labels, equi){
+  const pct = v => f(v / spot * 100, 2) + "%";
+  return `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:8px">` + list.map((c, n) => `
+    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
+      <b style="font-size:16px">${labels[n]} · range ${f(c.width, 0)} (${pct(c.width)})</b>
+      <div class="note" style="margin:4px 0">Profit stays above ${usdB(c.thr)} from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdgeLo || c.atEdgeHi ? " (at least; hits the edge of the tested range)" : ""}</div>
+      ${equi ? `<div class="note" style="margin:0 0 4px">Sold: call +${f(c.dSc, 0)} / put −${f(c.dSp, 0)} from spot. Bought: call +${f(c.dLc, 0)} / put −${f(c.dLp, 0)}.</div>` : ""}
       <table style="min-width:0"><tbody>
         <tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.callShort.bid)}</td></tr>
         <tr><td style="text-align:left">Buy call</td><td>${f(c.callLong.strike, 0)}</td><td>×${f(c.bought, 0)}</td><td>${f(c.callLong.ask)}</td></tr>
         <tr><td style="text-align:left">Sell put</td><td>${f(c.putShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.putShort.bid)}</td></tr>
         <tr><td style="text-align:left">Buy put</td><td>${f(c.putLong.strike, 0)}</td><td>×${f(c.bought, 0)}</td><td>${f(c.putLong.ask)}</td></tr>
       </tbody></table>
-      <div class="note" style="margin:6px 0">Net credit <b class="g">${usd(c.credit)}</b> · est. margin ${usd(c.margin)} · break-even ${f(c.be[0], 0)} to ${f(c.be[1], 0)}</div>
-      <div class="note l" style="margin-bottom:6px">Worst P&amp;L within ±15%: ${usd(c.maxLoss)} at ${f(c.maxLossAt, 0)}. Losses are not capped above the sold call.</div>
+      <div class="note" style="margin:6px 0">Net credit <b class="g">${usdB(c.credit)}</b> · est. margin ${usdB(c.margin)} · break-even ${f(c.be[0], 0)} to ${f(c.be[1], 0)}</div>
+      <div class="note l" style="margin-bottom:6px">Worst P&amp;L within ±15%: ${usdB(c.maxLoss)} at ${f(c.maxLossAt, 0)}. Losses are not capped above the sold call.</div>
       ${batChart(c)}
-      <p style="margin:8px 0 0"><button data-iload="${n}">Load into table</button></p></div>`;
-  }).join("") + `</div><p class="note">Expiry ${esc(exp)}, spot ${f(spot, 0)}. Chart: P&amp;L at expiry from -15% to +15% of spot; the shaded band is the profit-above-minimum range and the dashed line is your minimum. Margin is a rough estimate (sold lots × BTC per lot × spot ÷ leverage) and ignores any offset from the bought legs, so check Delta's order preview. P&amp;L is at expiry using today's bid and ask prices, without fees. The search tries bought strikes within 3% of spot and sold strikes within 8%.</p>`;
+      <p style="margin:8px 0 0"><button data-iload="${labels[n]}">Load into table</button></p></div>`).join("") + `</div>`;
+}
+
+function renderBat(main, equi, spot, exp, tol){
+  let h = "";
+  if (main.length) h += batCards(main, spot, main.map((c, i) => "#" + (i + 1)), false);
+  else h += `<p class="note l">No combination keeps profit at or above your minimum while BTC stays near ${f(spot, 0)}. Try a lower minimum, fewer bought lots, or a different expiry.</p>`;
+  h += `<p style="margin:14px 0 0"><b>Equidistant options</b> <span class="note">sold call and sold put the same distance from spot (within ±$${f(tol, 0)}), and the bought legs too</span></p>`;
+  if (equi.length) h += batCards(equi, spot, equi.map((c, i) => "E" + (i + 1)), true);
+  else h += `<p class="note l">No equidistant combination meets your minimum. Try a larger tolerance or a lower minimum profit.</p>`;
+  h += `<p class="note">Expiry ${esc(exp)}, spot ${f(spot, 0)}. Chart: P&amp;L at expiry from -15% to +15% of spot; the shaded band is the profit-above-minimum range and the dashed line is your minimum. Margin is a rough estimate (sold lots × BTC per lot × spot ÷ leverage) and ignores any offset from the bought legs, so check Delta's order preview. P&amp;L is at expiry using today's bid and ask prices, without fees. The search tries bought strikes within 3% of spot and sold strikes within 8%. The equidistant options never repeat a combination from the first group.</p>`;
+  $("iout").innerHTML = h;
 }
 
 $("ifind").onclick = async () => {
@@ -1279,22 +1312,25 @@ $("ifind").onclick = async () => {
     const chain = await fetchChain(exp);
     if (!chain.calls.length || !chain.puts.length){ $("imsg").className = "note l"; $("imsg").textContent = "No options found for expiry " + exp + " (it may have expired)."; return; }
     const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot;
-    const list = batmanSearch(chain, spot, {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct});
-    lastBat = list.map(c => ({c, exp}));
-    $("imsg").textContent = list.length ? "Top " + list.length + " by range covered." : "";
-    renderBat(list, spot, exp);
+    const params = {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct};
+    const main = batmanSearch(chain, spot, params);
+    const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
+    const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
+    lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
+    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.`;
+    renderBat(main, equi, spot, exp, tol);
   } catch (e){ $("imsg").className = "note l"; $("imsg").textContent = "Could not load the chain: " + e.message; }
 };
 $("iout").addEventListener("click", e => {
-  const n = e.target.dataset.iload; if (n === undefined || !lastBat[n]) return;
-  const {c, exp} = lastBat[n];
+  const lab = e.target.dataset.iload; if (lab === undefined) return;
+  const hit = lastBat.find(x => x.label === lab); if (!hit) return;
+  const {c} = hit;
   const add = (o, side, lots, px) => legs.push({s: o.symbol, side, lots, entry: px});
   add(c.callShort, -1, c.sold, c.callShort.bid); add(c.callLong, 1, c.bought, c.callLong.ask);
   add(c.putShort, -1, c.sold, c.putShort.bid); add(c.putLong, 1, c.bought, c.putLong.ask);
   save(); drawInputs(); tick();
-  $("imsg").className = "note"; $("imsg").textContent = "Loaded the four legs of combination #" + (+n + 1) + " into the table (sells at the bid, buys at the ask).";
+  $("imsg").className = "note"; $("imsg").textContent = "Loaded the four legs of combination " + lab + " into the table (sells at the bid, buys at the ask).";
 });
-
 
 // ---------- Expiry dropdowns (the 5 nearest expiries listed on Delta) ----------
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -1431,6 +1467,34 @@ $("tstop").onclick = () => { trig.armed = false; saveTrig(); trigButtons(); $("t
 $("tstep").value = trig.step; $("tprem").value = trig.prem; $("texp").value = trig.exp || "";
 if (trig.armed) trig.needAnchor = true;          // after a reload, restart from the next spot price instead of an old reference
 trigButtons(); renderTrig();
+
+
+// ---------- Show / hide sections ----------
+const SECTIONS = [
+  ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["summaryCard", "P&L summary"],
+  ["legsCard", "Legs table"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
+  ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
+];
+let secPref = {};
+try { secPref = JSON.parse(localStorage.getItem("sections")) || {}; } catch (e) {}
+function saveSections(){ try { localStorage.setItem("sections", JSON.stringify(secPref)); } catch (e) {} }
+function applySections(){
+  SECTIONS.forEach(([id]) => { const el = $(id); if (el && el.classList) el.classList.toggle("hidden-sec", secPref[id] === false); });
+  const cp = $("closePanel");                                                   // the close panel belongs to the legs table
+  if (cp && cp.classList) cp.classList.toggle("hidden-sec", secPref.legsCard === false);
+}
+function renderSecList(){
+  $("secList").innerHTML = SECTIONS.map(([id, name]) =>
+    `<label><input type="checkbox" data-sec="${id}" ${secPref[id] === false ? "" : "checked"}> ${esc(name)}</label>`).join("");
+}
+$("secList").addEventListener("change", e => {
+  const id = e.target.dataset.sec; if (!id) return;
+  secPref[id] = e.target.checked; saveSections(); applySections();
+});
+$("secAll").onclick = () => { SECTIONS.forEach(([id]) => { secPref[id] = true; }); saveSections(); renderSecList(); applySections(); };
+$("secNone").onclick = () => { SECTIONS.forEach(([id]) => { secPref[id] = false; }); saveSections(); renderSecList(); applySections(); };
+renderSecList(); applySections();
 
 try { $("chartOn").checked = localStorage.getItem("chartOn") === "1"; } catch (e) {}
 $("chartOn").onchange = () => {
