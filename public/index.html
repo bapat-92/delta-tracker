@@ -125,10 +125,12 @@ h1{padding-right:170px}
 <div class="card">
   <b>Find options near a target premium</b>
   <div class="row" style="margin-top:8px">
-    <label>Expiry (DDMMYY)<input id="fexp" value="121126"></label>
+    <label>Expiry<select id="fexp"></select></label>
     <label>Target premium (USD)<input id="ftarget" type="number" value="100"></label>
     <button id="find">Find</button>
+    <button id="exprefresh">Refresh expiries</button>
   </div>
+  <div id="expmsg" class="note" style="margin-top:8px">Loading the expiries listed on Delta…</div>
   <div id="fcap" class="note l" style="margin-top:8px"></div>
   <div id="fout" class="note" style="margin-top:8px"></div>
 </div>
@@ -139,11 +141,40 @@ h1{padding-right:170px}
     <label>Look back (days)<input id="vdays" type="number" min="1" max="30" value="7"></label>
     <label>Window (hours)<input id="vwin" type="number" min="0.5" step="0.5" value="2"></label>
     <label>Move bigger than (%)<input id="vthr" type="number" min="0.1" step="0.1" value="1"></label>
-    <label>Expiry for strike candidates (DDMMYY)<input id="vexp" placeholder="uses the trigger or finder expiry"></label>
+    <label>Expiry for strike candidates<select id="vexp"></select></label>
     <button id="vrun">Run</button>
   </div>
   <div id="vmsg" class="note"></div>
   <div id="vout" class="note">Press Run to fetch candles from Delta.</div>
+</div>
+
+<div class="card" id="backCard">
+  <b>Day-by-day strike backtest</b>
+  <p class="note" style="margin:4px 0 8px">For each past day: take BTC at your entry time, pick the call and put strikes at each move distance, look up what those daily options traded for at that time, and see what selling them to expiry would have made or lost.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Days back<input id="bdays" type="number" min="1" max="14" value="7"></label>
+    <label>Entry time (UTC)<input id="bent" value="03:30"></label>
+    <label>Expiry time (UTC)<input id="bexp" value="12:00"></label>
+    <label>Strike step (USD)<input id="bstep" type="number" min="1" value="200"></label>
+    <label>Moves (%)<input id="bmoves" value="1,1.5,2,3"></label>
+    <button id="brun">Run backtest</button>
+  </div>
+  <div id="bprog" class="note"></div>
+  <div id="bout"></div>
+</div>
+
+<div class="card" id="batCard">
+  <b>Inverted Batman: best strike combinations</b>
+  <p class="note" style="margin:4px 0 8px">Sell more of the outer call and put, buy fewer of the inner ones (your 5,000 sold / 1,500 bought structure). It tries many strike combinations from the live chain and ranks them by the BTC price range at expiry where profit stays at or above your minimum share of margin.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Expiry<select id="iexp"></select></label>
+    <label>Sold lots per leg<input id="isold" type="number" min="1" value="5000"></label>
+    <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
+    <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
+    <button id="ifind">Find 3 combinations</button>
+  </div>
+  <div id="imsg" class="note">Uses the leverage and BTC-per-lot boxes above. Buys are priced at the ask and sells at the bid.</div>
+  <div id="iout"></div>
 </div>
 
 <div class="card" id="trigCard">
@@ -152,7 +183,7 @@ h1{padding-right:170px}
   <div class="row" style="margin:8px 0">
     <label>Step (%)<input id="tstep" type="number" min="0.1" step="0.1" value="1"></label>
     <label>Target premium (USD per 1 BTC)<input id="tprem" type="number" min="1" value="100"></label>
-    <label>Expiry (DDMMYY)<input id="texp" placeholder="e.g. 131126"></label>
+    <label>Expiry<select id="texp"></select></label>
     <button id="tarm">Arm at current spot</button>
     <button id="tstop" style="display:none">Stop</button>
   </div>
@@ -1049,6 +1080,260 @@ $("vrun").onclick = async () => {
 };
 
 
+// ---------- Day-by-day strike backtest ----------
+const hmSec = v => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(v).trim()); return m ? (+m[1]) * 3600 + (+m[2]) * 60 : null; };
+const ddmmyy = ms => { const d = new Date(ms); const p = n => String(n).padStart(2, "0"); return p(d.getUTCDate()) + p(d.getUTCMonth() + 1) + String(d.getUTCFullYear()).slice(2); };
+let lastBack = null;
+
+async function optionPrice(base, sym, t0){
+  try {
+    const u = new URL(base + "/v2/history/candles");
+    u.searchParams.set("resolution", "5m"); u.searchParams.set("symbol", sym);
+    u.searchParams.set("start", t0 - 600); u.searchParams.set("end", t0 + 900);
+    const r = await fetch(u);
+    if (!r.ok) return null;
+    const arr = ((await r.json()).result || []).map(c => ({time: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), open: Number(c.open)})).sort((a, b) => a.time - b.time);
+    const c = arr.find(x => x.time >= t0);             // first traded candle at or after the entry time
+    return c && c.open > 0 ? c.open : null;
+  } catch (e) { return null; }
+}
+async function runPool(items, n, fn){
+  let i = 0;
+  await Promise.all(Array.from({length: n}, async () => { while (i < items.length){ const k = i++; await fn(items[k], k); } }));
+}
+
+function backPlan(candles, nowSec, days, entrySec, expSec, step, moves){
+  const byT = new Map(candles.map(c => [c.time, c]));
+  const today = Math.floor(nowSec / 86400) * 86400, plan = [];
+  for (let d = days; d >= 0; d--){
+    const day0 = today - d * 86400, t0 = day0 + entrySec, tx = day0 + expSec;
+    if (tx <= t0 || tx > nowSec - 300) continue;
+    const c0 = byT.get(t0), cx = byT.get(tx - 300);
+    if (!c0 || !cx) continue;
+    let hi = -Infinity, lo = Infinity;
+    for (let t = t0; t <= tx - 300; t += 300){ const c = byT.get(t); if (c){ if (c.high > hi) hi = c.high; if (c.low < lo) lo = c.low; } }
+    const spot = c0.open, settle = cx.close;
+    moves.forEach(m => {
+      const lvC = spot * (1 + m / 100), lvP = spot * (1 - m / 100);
+      const kC = Math.ceil(lvC / step - 1e-9) * step, kP = Math.floor(lvP / step + 1e-9) * step;
+      const exp = ddmmyy(day0 * 1000);
+      plan.push({day: new Date(day0 * 1000).toISOString().slice(0, 10), t0, m, spot, settle, side: "C", strike: kC, dist: kC / spot - 1, touched: hi >= kC, intr: Math.max(settle - kC, 0), sym: `C-BTC-${kC}-${exp}`, prem: null});
+      plan.push({day: new Date(day0 * 1000).toISOString().slice(0, 10), t0, m, spot, settle, side: "P", strike: kP, dist: 1 - kP / spot, touched: lo <= kP, intr: Math.max(kP - settle, 0), sym: `P-BTC-${kP}-${exp}`, prem: null});
+    });
+  }
+  return plan;
+}
+
+function backSummary(plan, moves){
+  const stat = list => {
+    const priced = list.filter(x => x.pnl !== null && x.pnl !== undefined);
+    const total = priced.reduce((a, x) => a + x.pnl, 0);
+    return {n: list.length, touched: list.filter(x => x.touched).length, priced: priced.length,
+      avg: priced.length ? priced.reduce((a, x) => a + x.prem, 0) / priced.length : null,
+      total, win: priced.length ? priced.filter(x => x.pnl > 0).length / priced.length : null,
+      worst: priced.length ? Math.min(...priced.map(x => x.pnl)) : null};
+  };
+  return moves.map(m => {
+    const c = plan.filter(x => x.m === m && x.side === "C"), p = plan.filter(x => x.m === m && x.side === "P");
+    const both = c.map(x => { const y = p.find(z => z.day === x.day); return y && x.pnl !== null && y.pnl !== null ? {pnl: x.pnl + y.pnl, prem: x.prem + y.prem, touched: x.touched || y.touched} : null; }).filter(Boolean);
+    return {m, call: stat(c), put: stat(p), both: stat(both)};
+  });
+}
+
+function renderBack(){
+  if (!lastBack){ $("bout").innerHTML = ""; return; }
+  const {plan, moves, sel} = lastBack, sum = backSummary(plan, moves);
+  const usd = v => v === null ? "–" : (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  const row = (m, lbl, x) => `<tr><td style="text-align:left">${m}%</td><td style="text-align:left">${lbl}</td><td>${x.n}</td><td>${x.touched}</td><td>${x.priced}</td><td>${usd(x.avg)}</td><td class="${x.total >= 0 ? "g" : "l"}">${x.priced ? usd(x.total) : "–"}</td><td>${x.win === null ? "–" : f(x.win * 100, 0) + "%"}</td><td class="${x.worst !== null && x.worst < 0 ? "l" : ""}">${usd(x.worst)}</td></tr>`;
+  let h = `<div class="wrap"><table><thead><tr><th style="text-align:left">Move</th><th style="text-align:left">Sold</th><th>Days</th><th>Strike touched</th><th>Days with a price</th><th>Avg premium</th><th>Total P&amp;L (per 1 BTC)</th><th>Win rate</th><th>Worst day</th></tr></thead><tbody>` +
+    sum.map(r => row(r.m, "Call", r.call) + row(r.m, "Put", r.put) + row(r.m, "Call + put", r.both)).join("") + `</tbody></table></div>`;
+  h += `<p style="margin-top:10px"><label style="display:inline-flex;flex-direction:row;gap:8px;align-items:center;font-size:14px;color:var(--fg)">Daily detail for move <select id="bsel">${moves.map(m => `<option value="${m}" ${m === sel ? "selected" : ""}>${m}%</option>`).join("")}</select></label></p>`;
+  const days = [...new Set(plan.map(x => x.day))].sort().reverse();
+  const cell = x => !x ? `<td colspan="4">–</td>` : `<td>${f(x.strike, 0)} (${f(x.dist * 100, 2)}%)</td><td>${x.prem === null ? "no price" : f(x.prem)}</td><td class="${x.touched ? "l" : ""}">${x.touched ? "yes" : "no"}</td><td class="${x.pnl === null || x.pnl === undefined ? "" : x.pnl >= 0 ? "g" : "l"}">${x.pnl === null || x.pnl === undefined ? "–" : usd(x.pnl)}</td>`;
+  h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Day (UTC)</th><th>BTC at entry</th><th>BTC at expiry</th><th colspan="4" style="text-align:center">Sold call</th><th colspan="4" style="text-align:center">Sold put</th></tr><tr><th></th><th></th><th></th><th>Strike</th><th>Premium</th><th>Touched</th><th>P&amp;L</th><th>Strike</th><th>Premium</th><th>Touched</th><th>P&amp;L</th></tr></thead><tbody>` +
+    days.map(d => { const c = plan.find(x => x.day === d && x.m === sel && x.side === "C"), p = plan.find(x => x.day === d && x.m === sel && x.side === "P");
+      return `<tr><td style="text-align:left">${esc(d)}</td><td>${f(c.spot, 0)}</td><td>${f(c.settle, 0)}</td>${cell(c)}${cell(p)}</tr>`; }).join("") + `</tbody></table></div>` +
+    `<p class="note">Premium is the first traded 5-minute candle's opening price for that option at your entry time, per 1 BTC. Expiry P&amp;L is premium minus intrinsic value at the BTC price at your expiry time (the last 5-minute close before it), so it's approximate: Delta's real settlement price, bid-ask spread, fees and any early exit are not included. "Touched" means BTC reached the strike at any point between entry and expiry. Options that didn't trade around your entry time show "no price" and are left out of the totals. Past results don't predict future ones.</p>`;
+  $("bout").innerHTML = h;
+}
+$("bout").addEventListener("change", e => { if (e.target.id === "bsel" && lastBack){ lastBack.sel = Number(e.target.value); renderBack(); } });
+
+$("brun").onclick = async () => {
+  const days = Math.min(14, Math.max(1, Number($("bdays").value) || 7)), step = Number($("bstep").value) || 200;
+  const entrySec = hmSec($("bent").value), expSec = hmSec($("bexp").value);
+  const moves = String($("bmoves").value).split(",").map(x => Number(x.trim())).filter(x => x > 0).slice(0, 6);
+  if (entrySec === null || expSec === null || expSec <= entrySec){ $("bprog").className = "note l"; $("bprog").textContent = "Enter times as HH:MM (UTC), with the expiry time after the entry time."; return; }
+  if (!moves.length){ $("bprog").className = "note l"; $("bprog").textContent = "Enter at least one move, for example 1,2."; return; }
+  const base = $("base").value.replace(/\/$/, "");
+  $("bprog").className = "note"; $("bprog").textContent = "Fetching BTC candles…"; $("bout").innerHTML = "";
+  try {
+    const candles = await fetchCandles(base, "BTCUSD", days + 2);
+    const plan = backPlan(candles, Math.floor(Date.now() / 1000), days, entrySec, expSec, step, moves);
+    if (!plan.length){ $("bprog").textContent = "No completed days found for those times."; return; }
+    let done = 0;
+    await runPool(plan, 3, async x => {
+      x.prem = await optionPrice(base, x.sym, x.t0);
+      x.pnl = x.prem === null ? null : x.prem - x.intr;
+      done++; if (done % 4 === 0 || done === plan.length) $("bprog").textContent = `Looking up option prices ${done}/${plan.length}…`;
+    });
+    const priced = plan.filter(x => x.prem !== null).length;
+    $("bprog").textContent = `Done: ${priced} of ${plan.length} options had a price at your entry time.`;
+    lastBack = {plan, moves, sel: moves[0]}; renderBack();
+  } catch (e){ $("bprog").className = "note l"; $("bprog").textContent = "Backtest failed: " + e.message; }
+};
+
+
+// ---------- Inverted Batman search ----------
+let lastBat = [];
+function batmanSearch(chain, spot, p){
+  const q = p.lot, gs = Math.max(5, Math.round(spot * 0.0002 / 5) * 5), grid = [];
+  for (let S = spot * 0.85; S <= spot * 1.15; S += gs) grid.push(S);
+  let iS = 0; grid.forEach((S, i) => { if (Math.abs(S - spot) < Math.abs(grid[iS] - spot)) iS = i; });
+  const lcs = chain.calls.filter(o => o.strike >= spot && o.strike <= spot * 1.03 && o.ask > 0);
+  const scs = chain.calls.filter(o => o.strike > spot && o.strike <= spot * 1.08 && o.bid > 0);
+  const lps = chain.puts.filter(o => o.strike <= spot && o.strike >= spot * 0.97 && o.ask > 0);
+  const sps = chain.puts.filter(o => o.strike < spot && o.strike >= spot * 0.92 && o.bid > 0);
+  const pair = (sh, lg, isCall) => {
+    const credit = (sh.bid * p.sold - lg.ask * p.bought) * q;
+    const arr = new Float64Array(grid.length);
+    grid.forEach((S, i) => {
+      const a = isCall ? Math.max(S - sh.strike, 0) : Math.max(sh.strike - S, 0);
+      const b = isCall ? Math.max(S - lg.strike, 0) : Math.max(lg.strike - S, 0);
+      arr[i] = credit - a * p.sold * q + b * p.bought * q;
+    });
+    return {sh, lg, credit, arr};
+  };
+  const cps = [], pps = [];
+  lcs.forEach(lg => scs.forEach(sh => { if (sh.strike > lg.strike) cps.push(pair(sh, lg, true)); }));
+  lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike) pps.push(pair(sh, lg, false)); }));
+  const margin = p.sold * 2 * q * spot / p.lev, thr = margin * p.minPct / 100;
+  const best = new Map();
+  cps.forEach(c => pps.forEach(pp => {
+    if (c.arr[iS] + pp.arr[iS] < thr) return;                        // must still be in profit if BTC stays here
+    let l = iS, r = iS;
+    while (l > 0 && c.arr[l - 1] + pp.arr[l - 1] >= thr) l--;
+    while (r < grid.length - 1 && c.arr[r + 1] + pp.arr[r + 1] >= thr) r++;
+    const width = grid[r] - grid[l], key = c.sh.strike + "|" + pp.sh.strike;
+    const cur = best.get(key), credit = c.credit + pp.credit;
+    if (!cur || width > cur.width || (width === cur.width && credit > cur.credit)) best.set(key, {c, pp, l, r, width, credit});
+  }));
+  const top = [...best.values()].sort((a, b) => b.width - a.width || b.credit - a.credit).slice(0, 3);
+  return top.map(t => {
+    const tot = grid.map((S, i) => t.c.arr[i] + t.pp.arr[i]);
+    let be1 = iS, be2 = iS;
+    while (be1 > 0 && tot[be1 - 1] >= 0) be1--;
+    while (be2 < grid.length - 1 && tot[be2 + 1] >= 0) be2++;
+    let mi = 0; tot.forEach((v, i) => { if (v < tot[mi]) mi = i; });
+    return {callShort: t.c.sh, callLong: t.c.lg, putShort: t.pp.sh, putLong: t.pp.lg, credit: t.credit,
+      margin, thr, lo: grid[t.l], hi: grid[t.r], width: t.width, be: [grid[be1], grid[be2]],
+      maxLoss: tot[mi], maxLossAt: grid[mi], grid, tot, atEdgeLo: t.l === 0, atEdgeHi: t.r === grid.length - 1, sold: p.sold, bought: p.bought, spot};
+  });
+}
+
+function batChart(c){
+  const W = 320, H = 120, L = 6, R = 6, T = 6, B = 6, g = c.grid, t = c.tot;
+  const lo = Math.min(...t, 0), hi = Math.max(...t, c.thr), yy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo || 1));
+  const xx = i => L + (W - L - R) * i / (g.length - 1);
+  const pts = t.map((v, i) => `${xx(i).toFixed(1)},${yy(v).toFixed(1)}`).join(" ");
+  const il = g.indexOf(c.lo), ir = g.indexOf(c.hi);
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:340px;height:auto;display:block">
+    <rect x="${xx(il).toFixed(1)}" y="${T}" width="${(xx(ir) - xx(il)).toFixed(1)}" height="${H - T - B}" fill="var(--gain)" opacity="0.15"/>
+    <line x1="${L}" x2="${W - R}" y1="${yy(0).toFixed(1)}" y2="${yy(0).toFixed(1)}" stroke="var(--line)"/>
+    <line x1="${L}" x2="${W - R}" y1="${yy(c.thr).toFixed(1)}" y2="${yy(c.thr).toFixed(1)}" stroke="var(--mut)" stroke-dasharray="4 3"/>
+    <polyline points="${pts}" fill="none" stroke="var(--acc)" stroke-width="2"/></svg>`;
+}
+
+function renderBat(list, spot, exp){
+  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  if (!list.length){
+    $("iout").innerHTML = `<p class="note l">No combination keeps profit at or above your minimum while BTC stays near ${f(spot, 0)}. Try a lower minimum, fewer bought lots, or a different expiry.</p>`;
+    return;
+  }
+  $("iout").innerHTML = `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:8px">` + list.map((c, n) => {
+    const pct = v => f(v / spot * 100, 2) + "%";
+    return `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
+      <b style="font-size:16px">#${n + 1} · range ${f(c.width, 0)} (${pct(c.width)})</b>
+      <div class="note" style="margin:4px 0">Profit stays above ${usd(c.thr)} from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdgeLo || c.atEdgeHi ? " (at least; hits the edge of the tested range)" : ""}</div>
+      <table style="min-width:0"><tbody>
+        <tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.callShort.bid)}</td></tr>
+        <tr><td style="text-align:left">Buy call</td><td>${f(c.callLong.strike, 0)}</td><td>×${f(c.bought, 0)}</td><td>${f(c.callLong.ask)}</td></tr>
+        <tr><td style="text-align:left">Sell put</td><td>${f(c.putShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.putShort.bid)}</td></tr>
+        <tr><td style="text-align:left">Buy put</td><td>${f(c.putLong.strike, 0)}</td><td>×${f(c.bought, 0)}</td><td>${f(c.putLong.ask)}</td></tr>
+      </tbody></table>
+      <div class="note" style="margin:6px 0">Net credit <b class="g">${usd(c.credit)}</b> · est. margin ${usd(c.margin)} · break-even ${f(c.be[0], 0)} to ${f(c.be[1], 0)}</div>
+      <div class="note l" style="margin-bottom:6px">Worst P&amp;L within ±15%: ${usd(c.maxLoss)} at ${f(c.maxLossAt, 0)}. Losses are not capped above the sold call.</div>
+      ${batChart(c)}
+      <p style="margin:8px 0 0"><button data-iload="${n}">Load into table</button></p></div>`;
+  }).join("") + `</div><p class="note">Expiry ${esc(exp)}, spot ${f(spot, 0)}. Chart: P&amp;L at expiry from -15% to +15% of spot; the shaded band is the profit-above-minimum range and the dashed line is your minimum. Margin is a rough estimate (sold lots × BTC per lot × spot ÷ leverage) and ignores any offset from the bought legs, so check Delta's order preview. P&amp;L is at expiry using today's bid and ask prices, without fees. The search tries bought strikes within 3% of spot and sold strikes within 8%.</p>`;
+}
+
+$("ifind").onclick = async () => {
+  const exp = $("iexp").value.trim() || $("texp").value.trim() || $("fexp").value.trim();
+  const sold = Number($("isold").value) || 0, bought = Number($("ibought").value) || 0, minPct = Number($("ipct").value);
+  const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1;
+  if (!/^\d{6}$/.test(exp)){ $("imsg").className = "note l"; $("imsg").textContent = "Enter the expiry as DDMMYY, for example 131126."; return; }
+  if (sold < 1 || bought < 1 || !lot){ $("imsg").className = "note l"; $("imsg").textContent = "Enter the sold and bought lots."; return; }
+  if (bought >= sold){ $("imsg").className = "note l"; $("imsg").textContent = "Sold lots should be higher than bought lots for this structure."; return; }
+  $("imsg").className = "note"; $("imsg").textContent = "Loading the option chain…"; $("iout").innerHTML = "";
+  try {
+    const chain = await fetchChain(exp);
+    if (!chain.calls.length || !chain.puts.length){ $("imsg").className = "note l"; $("imsg").textContent = "No options found for expiry " + exp + " (it may have expired)."; return; }
+    const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot;
+    const list = batmanSearch(chain, spot, {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct});
+    lastBat = list.map(c => ({c, exp}));
+    $("imsg").textContent = list.length ? "Top " + list.length + " by range covered." : "";
+    renderBat(list, spot, exp);
+  } catch (e){ $("imsg").className = "note l"; $("imsg").textContent = "Could not load the chain: " + e.message; }
+};
+$("iout").addEventListener("click", e => {
+  const n = e.target.dataset.iload; if (n === undefined || !lastBat[n]) return;
+  const {c, exp} = lastBat[n];
+  const add = (o, side, lots, px) => legs.push({s: o.symbol, side, lots, entry: px});
+  add(c.callShort, -1, c.sold, c.callShort.bid); add(c.callLong, 1, c.bought, c.callLong.ask);
+  add(c.putShort, -1, c.sold, c.putShort.bid); add(c.putLong, 1, c.bought, c.putLong.ask);
+  save(); drawInputs(); tick();
+  $("imsg").className = "note"; $("imsg").textContent = "Loaded the four legs of combination #" + (+n + 1) + " into the table (sells at the bid, buys at the ask).";
+});
+
+
+// ---------- Expiry dropdowns (the 5 nearest expiries listed on Delta) ----------
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const EXP_IDS = ["fexp", "vexp", "texp", "iexp"];
+async function loadExpiries(){
+  $("expmsg").className = "note";
+  try {
+    const u = new URL($("base").value.replace(/\/$/, "") + "/v2/tickers");
+    u.searchParams.set("contract_types", "call_options"); u.searchParams.set("underlying_asset_symbols", "BTC");
+    const r = await fetch(u);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const counts = {};
+    ((await r.json()).result || []).forEach(t => {
+      const e = String(t.symbol).split("-")[3];
+      if (/^\d{6}$/.test(e)) counts[e] = (counts[e] || 0) + 1;
+    });
+    const key = e => e.slice(4) + e.slice(2, 4) + e.slice(0, 2);          // sort as YYMMDD
+    const list = Object.keys(counts).sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0).slice(0, 5);
+    if (!list.length) throw new Error("no BTC option expiries found");
+    const label = e => `${e.slice(0, 2)} ${MONTHS[+e.slice(2, 4) - 1]} 20${e.slice(4)} (${e}) · ${counts[e]} strikes`;
+    EXP_IDS.forEach(id => {
+      const sel = $(id), cur = sel.value;
+      sel.innerHTML = list.map(e => `<option value="${e}">${label(e)}</option>`).join("");
+      sel.value = list.includes(cur) ? cur : (id === "texp" && list.includes(trig.exp) ? trig.exp : list[0]);
+    });
+    let note = "";
+    if (trig.exp && !list.includes(trig.exp) && trig.armed){
+      trig.exp = $("texp").value; saveTrig();
+      note = " The armed trigger's expiry is no longer listed, so it now uses " + trig.exp + ".";
+    } else if (!trig.exp){ trig.exp = $("texp").value; saveTrig(); }
+    $("expmsg").textContent = `Expiries listed on Delta now: ${list.join(", ")}.` + note;
+  } catch (e){
+    $("expmsg").className = "note l";
+    $("expmsg").textContent = "Could not load expiries: " + e.message + ". Press Refresh expiries to retry.";
+  }
+}
+$("exprefresh").onclick = loadExpiries;
+
+
 // ---------- Move trigger ----------
 let trig = {armed: false, ref: null, step: 1, prem: 100, exp: "", needAnchor: false, log: []};
 try { const d = JSON.parse(localStorage.getItem("trig")); if (d) trig = Object.assign(trig, d); } catch (e) {}
@@ -1155,6 +1440,7 @@ $("chartOn").onchange = () => {
 loadSeries();
 drawInputs(); start();
 initSync();
+loadExpiries();
 </script>
 </body>
 </html>
