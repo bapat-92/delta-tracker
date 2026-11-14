@@ -127,6 +127,7 @@ h1{padding-right:170px}
 <div class="card" id="posCard">
   <b>Current position payoff at expiry</b>
   <div id="posNote" class="note" style="margin:4px 0">Add legs with lots to see the payoff.</div>
+  <div id="posTip" style="min-height:44px;margin:4px 0">Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.</div>
   <div id="posChart"></div>
   <div id="posStats" class="note"></div>
 </div>
@@ -811,7 +812,6 @@ $("jcsv").onclick = () => {
   a.download = "delta-journal.csv"; a.click();
 };
 renderJournal();
-drawPosition();
 if (typeof window.addEventListener === "function"){
   window.addEventListener("storage", e => { if (e.key === "journal"){ journal = readJournal(); renderJournal(); } });
 }
@@ -1403,10 +1403,45 @@ function positionProfile(){
   return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, atSpot: pnl(spot)};
 }
 
+let posGeom = null, posCur = null;
+const POS_HINT = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
+function hideCursor(keepTip){
+  posCur = null;
+  ["posCur", "posCurDot", "posCurTxt"].forEach(id => { const el = $(id); if (el && el.setAttribute) el.setAttribute("visibility", "hidden"); });
+  if (!keepTip || !posGeom) $("posTip").textContent = POS_HINT;
+}
+function showCursor(S){
+  const g = posGeom; if (!g) return;
+  S = Math.min(g.pr.hi, Math.max(g.pr.lo, S)); posCur = S;
+  const pr = g.pr, v = pr.pnl(S), px = g.x(S), py = g.y(v), right = px > g.W * 0.72;
+  const line = $("posCur"), dot = $("posCurDot"), txt = $("posCurTxt");
+  if (line && line.setAttribute){
+    line.setAttribute("x1", px.toFixed(1)); line.setAttribute("x2", px.toFixed(1)); line.setAttribute("visibility", "visible");
+    dot.setAttribute("cx", px.toFixed(1)); dot.setAttribute("cy", py.toFixed(1)); dot.setAttribute("fill", v >= 0 ? "var(--gain)" : "var(--loss)"); dot.setAttribute("visibility", "visible");
+    txt.textContent = money(v); txt.setAttribute("x", (px + (right ? -9 : 9)).toFixed(1)); txt.setAttribute("y", Math.max(g.T + 12, py - 9).toFixed(1));
+    txt.setAttribute("text-anchor", right ? "end" : "start"); txt.setAttribute("fill", v >= 0 ? "var(--gain)" : "var(--loss)"); txt.setAttribute("visibility", "visible");
+  }
+  const d = S - pr.spot;
+  const legTxt = pr.ls.map(l => {
+    const lv = l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q;
+    return `${l.side < 0 ? "Sell" : "Buy"} ${l.c ? "C" : "P"}${f(l.k, 0)}: <span class="${lv >= 0 ? "g" : "l"}">${money(lv)}</span>`;
+  }).join(" · ");
+  $("posTip").innerHTML = `At BTC <b>${f(S, 0)}</b> (${d >= 0 ? "+" : "-"}${f(Math.abs(d) / pr.spot * 100, 2)}% from spot ${f(pr.spot, 0)}) the P&amp;L at expiry is <b class="${v >= 0 ? "g" : "l"}" style="font-size:18px">${money(v)}</b>` +
+    `<div class="note" style="margin-top:2px">${legTxt}</div>`;
+}
+$("posChart").addEventListener("pointermove", e => {
+  const svg = $("posChart").querySelector("svg"); if (!svg || !posGeom) return;
+  const r = svg.getBoundingClientRect(); if (!r.width) return;
+  const g = posGeom, xv = (e.clientX - r.left) / r.width * g.W;
+  showCursor(g.pr.lo + (xv - g.L) / (g.W - g.L - g.R) * (g.pr.hi - g.pr.lo));
+});
+$("posChart").addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideCursor(); });
+
 function drawPosition(){
   const pr = positionProfile();
   if (!pr){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
+    posGeom = null; posCur = null; $("posTip").textContent = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
     return;
   }
   const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
@@ -1443,9 +1478,14 @@ function drawPosition(){
   const nowDot = lastNet !== null && lastNet !== undefined && lastRes
     ? `<circle cx="${x(pr.spot).toFixed(1)}" cy="${y(lastNet).toFixed(1)}" r="5" fill="var(--acc)"/><text x="${(x(pr.spot) + 8).toFixed(1)}" y="${(y(lastNet) - 6).toFixed(1)}" font-size="11" fill="var(--acc)">now ${money(lastNet)}</text>` : "";
   const beMarks = pr.be.map(b => `<circle cx="${x(b).toFixed(1)}" cy="${y(0).toFixed(1)}" r="4" fill="var(--card)" stroke="var(--fg)" stroke-width="1.5"/>`).join("");
-  $("posChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${g}
+  $("posChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;touch-action:pan-y;cursor:crosshair">${g}
     <line x1="${L}" x2="${W - R}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mut)"/>
-    ${segs.map(poly).join("")}${strikes}${spotLine}${beMarks}${nowDot}</svg>`;
+    ${segs.map(poly).join("")}${strikes}${spotLine}${beMarks}${nowDot}
+    <line id="posCur" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--fg)" stroke-width="1" visibility="hidden"/>
+    <circle id="posCurDot" cx="0" cy="0" r="5" fill="var(--fg)" stroke="var(--card)" stroke-width="2" visibility="hidden"/>
+    <text id="posCurTxt" x="0" y="0" font-size="12" font-weight="700" fill="var(--fg)" visibility="hidden"></text></svg>`;
+  posGeom = {pr, W, H, L, R, T, B, x, y};
+  if (posCur !== null) showCursor(posCur); else hideCursor(true);
   const st = payoffStats(Number($("lot").value) || 0);
   const mx = st ? (st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0)) : "–", mn = st ? (st.min === -Infinity ? "Unlimited" : (st.min < 0 ? "-$" : "$") + f(Math.abs(st.min), 0)) : "–";
   $("posNote").textContent = pr.exps.length > 1
@@ -1592,6 +1632,7 @@ loadSeries();
 drawInputs(); start();
 initSync();
 loadExpiries();
+drawPosition();
 </script>
 </body>
 </html>
