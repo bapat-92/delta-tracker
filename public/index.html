@@ -124,6 +124,13 @@ h1{padding-right:170px}
   <p class="note">Exit prices start at what you'd pay or get closing now (ask for sold legs, bid for bought legs), or at intrinsic value for an expiry using the settlement price. Edit them to your real fills. Fees are not included. Saved legs are removed from the table above.</p>
 </div>
 
+<div class="card" id="posCard">
+  <b>Current position payoff at expiry</b>
+  <div id="posNote" class="note" style="margin:4px 0">Add legs with lots to see the payoff.</div>
+  <div id="posChart"></div>
+  <div id="posStats" class="note"></div>
+</div>
+
 <div class="card" id="journalCard">
   <b>Journal (closed and expired positions)</b>
   <div class="wrap"><table>
@@ -284,6 +291,7 @@ try { const saved = JSON.parse(localStorage.getItem("legs")); if (Array.isArray(
 function save(){
   try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {}
   cloudPush("legs", () => legs);
+  if (typeof drawPosition === "function" && typeof lastNet !== "undefined") drawPosition();
 }
 
 const num = v => (v === undefined || v === null || v === "") ? null : Number(v);
@@ -361,6 +369,7 @@ async function tick(){
     updateChart(res);
     updateMargin(res, net);
     updateSL(res, net);
+    drawPosition();
     updateSizing();
     if (spot) showSpot(spot);
     $("net").textContent = f(net); $("net").className = sg(net);
@@ -387,6 +396,7 @@ async function tick(){
 function showSpot(spot){
   lastSpotVal = spot;
   checkTrigger(spot);
+  drawPosition();
   $("spot").textContent = f(spot, 0);
   let best = null;
   legs.filter(L => L.side === -1).forEach(L => {
@@ -801,6 +811,7 @@ $("jcsv").onclick = () => {
   a.download = "delta-journal.csv"; a.click();
 };
 renderJournal();
+drawPosition();
 if (typeof window.addEventListener === "function"){
   window.addEventListener("storage", e => { if (e.key === "journal"){ journal = readJournal(); renderJournal(); } });
 }
@@ -1370,6 +1381,82 @@ async function loadExpiries(){
 $("exprefresh").onclick = loadExpiries;
 
 
+// ---------- Current position payoff chart ----------
+function positionProfile(){
+  const lot = Number($("lot").value) || 0;
+  const ls = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)).map(L => {
+    const p = L.s.split("-");
+    return {c: p[0] === "C", k: Number(p[2]), side: L.side === -1 ? -1 : 1, q: Number(L.lots) * lot, e: Number(L.entry) || 0, exp: p[3], s: L.s};
+  }).filter(l => l.k > 0 && l.q > 0);
+  if (!ls.length) return null;
+  const ks = ls.map(l => l.k), spot = lastSpotVal || (Math.min(...ks) + Math.max(...ks)) / 2;
+  const lo = Math.min(spot * 0.85, Math.min(...ks) * 0.97), hi = Math.max(spot * 1.15, Math.max(...ks) * 1.03);
+  const pnl = S => ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const n = 400, S = [], P = [];
+  for (let i = 0; i <= n; i++){ const x = lo + (hi - lo) * i / n; S.push(x); P.push(pnl(x)); }
+  const be = [];
+  for (let i = 1; i < S.length; i++){
+    if ((P[i - 1] < 0) !== (P[i] < 0) && P[i] !== P[i - 1]) be.push(S[i - 1] + (0 - P[i - 1]) * (S[i] - S[i - 1]) / (P[i] - P[i - 1]));
+  }
+  const credit = ls.reduce((a, l) => a + (l.side === -1 ? 1 : -1) * l.e * l.q, 0);
+  const exps = [...new Set(ls.map(l => l.exp))];
+  return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, atSpot: pnl(spot)};
+}
+
+function drawPosition(){
+  const pr = positionProfile();
+  if (!pr){
+    $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
+    return;
+  }
+  const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
+  const minP = Math.min(...pr.P, 0), maxP = Math.max(...pr.P, 0), pad = (maxP - minP || 1) * 0.08;
+  const vmin = minP - pad, vmax = maxP + pad;
+  const x = S => L + (W - L - R) * (S - pr.lo) / (pr.hi - pr.lo);
+  const y = v => T + (H - T - B) * (1 - (v - vmin) / (vmax - vmin));
+  // draw the curve in green where it is above zero and red where it is below
+  const segs = []; let cur = null;
+  for (let i = 0; i < pr.S.length; i++){
+    const pos = pr.P[i] >= 0;
+    if (!cur || cur.pos !== pos){
+      cur = {pos, pts: []};
+      if (i > 0 && (pr.P[i - 1] >= 0) !== pos){          // start the new run at the zero crossing
+        const z = pr.S[i - 1] + (0 - pr.P[i - 1]) * (pr.S[i] - pr.S[i - 1]) / (pr.P[i] - pr.P[i - 1]);
+        segs[segs.length - 1].pts.push([z, 0]); cur.pts.push([z, 0]);
+      }
+      segs.push(cur);
+    }
+    cur.pts.push([pr.S[i], pr.P[i]]);
+  }
+  const poly = sg => `<polyline points="${sg.pts.map(p => x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join(" ")}" fill="none" stroke="${sg.pos ? "var(--gain)" : "var(--loss)"}" stroke-width="2.5"/>`;
+  let g = "";
+  for (let k = 0; k <= 4; k++){
+    const v = vmin + (vmax - vmin) * k / 4, yy = y(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)"/><text x="${L - 6}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--mut)">${f(v, 0)}</text>`;
+  }
+  for (let k = 0; k <= 5; k++){
+    const S = pr.lo + (pr.hi - pr.lo) * k / 5;
+    g += `<text x="${x(S).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="11" fill="var(--mut)">${f(S, 0)}</text>`;
+  }
+  const strikes = [...new Set(pr.ls.map(l => l.k))].map(k => `<line x1="${x(k).toFixed(1)}" x2="${x(k).toFixed(1)}" y1="${H - B}" y2="${H - B + 5}" stroke="var(--mut)"/>`).join("");
+  const spotLine = `<line x1="${x(pr.spot).toFixed(1)}" x2="${x(pr.spot).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--acc)" stroke-dasharray="5 4"/><text x="${(x(pr.spot) + 4).toFixed(1)}" y="${T + 11}" font-size="11" fill="var(--acc)">spot ${f(pr.spot, 0)}</text>`;
+  const nowDot = lastNet !== null && lastNet !== undefined && lastRes
+    ? `<circle cx="${x(pr.spot).toFixed(1)}" cy="${y(lastNet).toFixed(1)}" r="5" fill="var(--acc)"/><text x="${(x(pr.spot) + 8).toFixed(1)}" y="${(y(lastNet) - 6).toFixed(1)}" font-size="11" fill="var(--acc)">now ${money(lastNet)}</text>` : "";
+  const beMarks = pr.be.map(b => `<circle cx="${x(b).toFixed(1)}" cy="${y(0).toFixed(1)}" r="4" fill="var(--card)" stroke="var(--fg)" stroke-width="1.5"/>`).join("");
+  $("posChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">${g}
+    <line x1="${L}" x2="${W - R}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mut)"/>
+    ${segs.map(poly).join("")}${strikes}${spotLine}${beMarks}${nowDot}</svg>`;
+  const st = payoffStats(Number($("lot").value) || 0);
+  const mx = st ? (st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0)) : "–", mn = st ? (st.min === -Infinity ? "Unlimited" : (st.min < 0 ? "-$" : "$") + f(Math.abs(st.min), 0)) : "–";
+  $("posNote").textContent = pr.exps.length > 1
+    ? "Your legs have different expiries (" + pr.exps.join(", ") + "). The chart treats them all as expiring together, so read it with care."
+    : "P&L at expiry " + pr.exps[0] + " from your lots and entry prices, per leg price × lots × BTC per lot.";
+  $("posStats").innerHTML = `Net premium: <b class="${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b> · Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
+    `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(b => f(b, 0)).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
+    `Green is profit and red is loss. The dashed line is spot, and the dot on it is your P&amp;L now at mark prices. Fees and the bid-ask spread are not included, and losses can continue beyond the edges of the chart.`;
+}
+
+
 // ---------- Move trigger ----------
 let trig = {armed: false, ref: null, step: 1, prem: 100, exp: "", needAnchor: false, log: []};
 try { const d = JSON.parse(localStorage.getItem("trig")); if (d) trig = Object.assign(trig, d); } catch (e) {}
@@ -1472,7 +1559,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
