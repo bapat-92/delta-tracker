@@ -132,6 +132,41 @@ h1{padding-right:170px}
   <div id="posStats" class="note"></div>
 </div>
 
+<div class="card" id="wifCard">
+  <b>What-if adjustments</b>
+  <p class="note" style="margin:4px 0 8px">Test changes to your current legs before trading. Nothing here changes your legs table, your journal or any order.</p>
+  <div class="row" style="margin:8px 0;align-items:center">
+    <span class="note">Quick tests:</span>
+    <button data-wp="closecalls">Close the call side</button>
+    <button data-wp="closeputs">Close the put side</button>
+    <button data-wp="closeall">Close everything</button>
+    <button data-wp="buy3">Buy back &#8531; of each short</button>
+    <button data-wp="buy23">Buy back &#8532; of each short</button>
+    <button data-wp="clear">Clear</button>
+  </div>
+  <div class="row" style="margin:8px 0">
+    <label>Reduce or close a current leg<select id="wcLeg"></select></label>
+    <label>Lots<input id="wcLots" type="number" min="1"></label>
+    <label>Price<input id="wcPx" type="number" step="any"></label>
+    <button id="wcAdd">Add to what-if</button>
+  </div>
+  <div class="row" style="margin:8px 0">
+    <label>New option: expiry<select id="wexp"></select></label>
+    <label>Type<select id="wtype"><option value="C">Call</option><option value="P" selected>Put</option></select></label>
+    <label>Side<select id="wside"><option value="1" selected>Buy</option><option value="-1">Sell</option></select></label>
+    <button id="wload">Load strikes</button>
+    <label>Strike<select id="wstrike"></select></label>
+    <label>Lots<input id="wlots" type="number" min="1" value="1000"></label>
+    <label>Price<input id="wpx" type="number" step="any"></label>
+    <button id="wadd">Add to what-if</button>
+  </div>
+  <div id="wmsg" class="note"></div>
+  <div id="wlist"></div>
+  <div id="wres" class="wrap"></div>
+  <div id="wtip" style="min-height:44px;margin:8px 0 4px">Move the cursor (or drag a finger) over the chart to compare the two results at a BTC price.</div>
+  <div id="wchart"></div>
+</div>
+
 <div class="card" id="journalCard">
   <b>Journal (closed and expired positions)</b>
   <div class="wrap"><table>
@@ -1345,7 +1380,7 @@ $("iout").addEventListener("click", e => {
 
 // ---------- Expiry dropdowns (the 5 nearest expiries listed on Delta) ----------
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const EXP_IDS = ["fexp", "vexp", "texp", "iexp"];
+const EXP_IDS = ["fexp", "vexp", "texp", "iexp", "wexp"];
 async function loadExpiries(){
   $("expmsg").className = "note";
   try {
@@ -1367,6 +1402,8 @@ async function loadExpiries(){
       sel.innerHTML = list.map(e => `<option value="${e}">${label(e)}</option>`).join("");
       sel.value = list.includes(cur) ? cur : (id === "texp" && list.includes(trig.exp) ? trig.exp : list[0]);
     });
+    const own = legs.find(L => /^[CP]-/.test(L.s) && Number(L.lots) > 0);
+    if (own){ const pe = own.s.split("-")[3]; if (list.includes(pe)) $("wexp").value = pe; }    // what-if defaults to your position's expiry
     let note = "";
     if (trig.exp && !list.includes(trig.exp) && trig.armed){
       trig.exp = $("texp").value; saveTrig();
@@ -1442,6 +1479,7 @@ function drawPosition(){
   if (!pr){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
     posGeom = null; posCur = null; $("posTip").textContent = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
+    renderWhatIf();
     return;
   }
   const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
@@ -1494,7 +1532,238 @@ function drawPosition(){
   $("posStats").innerHTML = `Net premium: <b class="${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b> · Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
     `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(b => f(b, 0)).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
     `Green is profit and red is loss. The dashed line is spot, and the dot on it is your P&amp;L now at mark prices. Fees and the bid-ask spread are not included, and losses can continue beyond the edges of the chart.`;
+  renderWhatIf();
 }
+
+
+// ---------- What-if adjustments ----------
+let wif = {acts: []}, wifChain = null, wifGeom = null, wifCur = null, wifSig = "";
+const WIF_HINT = "Move the cursor (or drag a finger) over the chart to compare the two results at a BTC price.";
+
+function wifLegs(lot){
+  return legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)).map(L => {
+    const p = L.s.split("-");
+    return {s: L.s, c: p[0] === "C", k: Number(p[2]), side: L.side === -1 ? -1 : 1, lots: Number(L.lots), e: Number(L.entry) || 0};
+  }).filter(l => l.k > 0);
+}
+function defPx(l){      // price to close a leg now: buy back shorts at the ask, sell longs at the bid
+  const q = QUOTES[l.s]; if (!q) return null;
+  const px = l.side === -1 ? q.ask : q.bid;
+  if (px !== null && !isNaN(px) && px > 0) return px;
+  return q.mark !== null && !isNaN(q.mark) && q.mark > 0 ? q.mark : null;
+}
+function applyActs(base, acts, lot){
+  const L = base.map(x => Object.assign({}, x));
+  let realised = 0, cash = 0;
+  acts.forEach(a => {
+    if (a.kind === "close"){
+      const l = L.find(x => x.s === a.sym && x.side === a.side && x.lots > 0); if (!l) return;
+      const n = Math.min(a.lots, l.lots);
+      realised += l.side * (a.px - l.e) * n * lot;
+      cash += (l.side === -1 ? -1 : 1) * a.px * n * lot;       // buying back a short costs cash, selling a long brings it in
+      l.lots -= n;
+    } else {
+      const p = a.sym.split("-");
+      L.push({s: a.sym, c: p[0] === "C", k: Number(p[2]), side: a.side, lots: a.lots, e: a.px});
+      cash += (a.side === 1 ? -1 : 1) * a.px * a.lots * lot;
+    }
+  });
+  return {legs: L.filter(x => x.lots > 0), realised, cash};
+}
+function wifPnl(Ls, realised, S, lot){
+  return realised + Ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.lots * lot, 0);
+}
+function wifStats(Ls, realised, lot){
+  const vals = [0, ...Ls.map(l => l.k)].map(S => wifPnl(Ls, realised, S, lot));
+  const slope = Ls.reduce((a, l) => a + (l.c ? l.side * l.lots * lot : 0), 0);   // P&L slope above the highest strike
+  const mn = Math.min(...vals);
+  return {max: slope > 0 ? Infinity : Math.max(...vals), min: slope < 0 ? -Infinity : mn, minAt0: slope >= 0 && vals.length > 1 && vals[0] === mn && vals[0] < Math.min(...vals.slice(1))};
+}
+function wifCompute(base, acts, lot, spot, lev){
+  const alt = applyActs(base, acts, lot);
+  const ks = base.concat(alt.legs).map(l => l.k);
+  const lo = Math.min(spot * 0.85, Math.min(...ks) * 0.97), hi = Math.max(spot * 1.15, Math.max(...ks) * 1.03);
+  const n = 400, S = [], A = [], B = [];
+  for (let i = 0; i <= n; i++){
+    const x = lo + (hi - lo) * i / n; S.push(x);
+    A.push(wifPnl(base, 0, x, lot)); B.push(wifPnl(alt.legs, alt.realised, x, lot));
+  }
+  const be = arr => { const o = []; for (let i = 1; i < S.length; i++){ if ((arr[i - 1] < 0) !== (arr[i] < 0) && arr[i] !== arr[i - 1]) o.push(S[i - 1] + (0 - arr[i - 1]) * (S[i] - S[i - 1]) / (arr[i] - arr[i - 1])); } return o; };
+  const margin = Ls => Ls.filter(l => l.side === -1).reduce((a, l) => a + l.lots * lot * spot / lev, 0);
+  return {alt, lo, hi, S, A, B, beA: be(A), beB: be(B), stA: wifStats(base, 0, lot), stB: wifStats(alt.legs, alt.realised, lot),
+    marA: margin(base), marB: margin(alt.legs), worstA: Math.min(...A), worstB: Math.min(...B), atA: wifPnl(base, 0, spot, lot), atB: wifPnl(alt.legs, alt.realised, spot, lot), spot, base};
+}
+
+function wifPreset(name){
+  const lot = Number($("lot").value) || 0, acts = [], skipped = [];
+  if (name !== "clear") wifLegs(lot).forEach(l => {
+    let n = 0;
+    if (name === "closeall") n = l.lots;
+    else if (name === "closecalls") n = l.c ? l.lots : 0;
+    else if (name === "closeputs") n = l.c ? 0 : l.lots;
+    else if (name === "buy3") n = l.side === -1 ? Math.floor(l.lots / 3) : 0;
+    else if (name === "buy23") n = l.side === -1 ? Math.floor(l.lots * 2 / 3) : 0;
+    if (n <= 0) return;
+    const px = defPx(l);
+    if (px === null){ skipped.push(l.s); return; }
+    acts.push({kind: "close", sym: l.s, side: l.side, lots: n, px});
+  });
+  wif.acts = acts;
+  $("wmsg").textContent = skipped.length ? "No live price yet for " + skipped.join(", ") + ", so those legs were left out." : "";
+  renderWhatIf();
+}
+
+function fillStrikes(){
+  if (!wifChain) return;
+  const list = (($("wtype").value === "C") ? wifChain.calls : wifChain.puts).slice().sort((a, b) => a.strike - b.strike);
+  const spot = lastSpotVal || (list.length ? list[Math.floor(list.length / 2)].strike : 0);
+  $("wstrike").innerHTML = list.map(o => `<option value="${esc(o.symbol)}">${f(o.strike, 0)} · bid ${f(o.bid)} / ask ${f(o.ask)}</option>`).join("");
+  if (list.length){ const near = list.reduce((b, o) => Math.abs(o.strike - spot) < Math.abs(b.strike - spot) ? o : b, list[0]); $("wstrike").value = near.symbol; }
+  setWifPx();
+}
+function setWifPx(){
+  if (!wifChain) return;
+  const sym = $("wstrike").value, o = wifChain.calls.concat(wifChain.puts).find(x => x.symbol === sym); if (!o) return;
+  const px = $("wside").value === "1" ? o.ask : o.bid;
+  $("wpx").value = px !== null && !isNaN(px) && px > 0 ? px : (o.mark || "");
+}
+async function loadWifChain(){
+  const exp = $("wexp").value; if (!/^\d{6}$/.test(exp)){ $("wmsg").textContent = "No expiry selected yet."; return; }
+  $("wmsg").textContent = "Loading strikes…";
+  try {
+    wifChain = await fetchChain(exp);
+    $("wmsg").textContent = wifChain.calls.length || wifChain.puts.length ? "Loaded " + wifChain.calls.length + " calls and " + wifChain.puts.length + " puts for " + exp + ". Buys use the ask, sells use the bid." : "No options found for " + exp + ".";
+    fillStrikes();
+  } catch (e){ $("wmsg").textContent = "Could not load strikes: " + e.message; }
+}
+
+function renderWifInputs(base){
+  const sig = base.map(l => l.s + "|" + l.side + "|" + l.lots).join(",");
+  if (sig === wifSig) return;
+  wifSig = sig;
+  const cur = $("wcLeg").value;
+  $("wcLeg").innerHTML = base.map(l => `<option value="${esc(l.s)}|${l.side}">${l.side < 0 ? "Sell" : "Buy"} ${esc(l.s)} ×${f(l.lots, 0)}</option>`).join("");
+  if (cur && base.some(l => l.s + "|" + l.side === cur)) $("wcLeg").value = cur;
+  setWcDefaults();
+}
+function setWcDefaults(){
+  const v = $("wcLeg").value; if (!v) return;
+  const [sym, side] = v.split("|"), l = wifLegs().find(x => x.s === sym && String(x.side) === side); if (!l) return;
+  $("wcLots").value = l.lots; const px = defPx(l); $("wcPx").value = px === null ? "" : px;
+}
+
+function renderWhatIf(){
+  const lot = Number($("lot").value) || 0, base = wifLegs(lot);
+  renderWifInputs(base);
+  $("wlist").innerHTML = wif.acts.length ? `<div class="wrap"><table><thead><tr><th style="text-align:left">Tested change</th><th>Lots</th><th>Price</th><th></th></tr></thead><tbody>` +
+    wif.acts.map((a, i) => `<tr><td style="text-align:left">${a.kind === "close" ? (a.side < 0 ? "Buy back" : "Sell out") + " " + esc(a.sym) : (a.side > 0 ? "Buy " : "Sell ") + esc(a.sym)}</td><td>${f(a.lots, 0)}</td><td>${f(a.px)}</td><td><button data-wdel="${i}">✕</button></td></tr>`).join("") + `</tbody></table></div>` : "";
+  if (!base.length){
+    $("wres").innerHTML = `<p class="note">Add legs with lots to test adjustments.</p>`; $("wchart").innerHTML = ""; wifGeom = null; return;
+  }
+  const spot = lastSpotVal || (Math.min(...base.map(l => l.k)) + Math.max(...base.map(l => l.k))) / 2, lev = Number($("lev").value) || 1;
+  const r = wifCompute(base, wif.acts, lot, spot, lev);
+  const usd = v => v === Infinity ? "Unlimited" : v === -Infinity ? "Unlimited loss" : (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  const sgn = v => (v < 0 ? "-$" : "+$") + f(Math.abs(v), 0);
+  const bes = a => a.length ? a.map(x => f(x, 0)).join(" and ") : "none in range";
+  const diff = (a, b) => { const d = b - a; return isFinite(d) ? `<span class="${d >= 0 ? "g" : "l"}">${sgn(d)}</span>` : ""; };
+  const row = (lbl, a, b, extra) => `<tr><td style="text-align:left">${lbl}</td><td>${a}</td><td>${b}</td><td>${extra || ""}</td></tr>`;
+  const maxL = (st) => st.min === -Infinity ? "Unlimited" : usd(st.min) + (st.minAt0 ? " (only if BTC fell to 0)" : "");
+  $("wres").innerHTML = `<table><thead><tr><th style="text-align:left"></th><th>Current</th><th>With your tested changes</th><th>Difference</th></tr></thead><tbody>` +
+    row("Realised from the closes", "–", sgn(r.alt.realised)) +
+    row("Net cash for these trades", "–", sgn(r.alt.cash)) +
+    row(`Total P&amp;L at expiry if BTC stays at ${f(spot, 0)}`, sgn(r.atA), sgn(r.atB), diff(r.atA, r.atB)) +
+    row("Max profit at expiry", usd(r.stA.max), usd(r.stB.max)) +
+    row("Max loss at expiry", maxL(r.stA), maxL(r.stB), diff(r.stA.min, r.stB.min)) +
+    row("Worst P&amp;L within the chart range", sgn(r.worstA), sgn(r.worstB), diff(r.worstA, r.worstB)) +
+    row("Break-evens", bes(r.beA), bes(r.beB)) +
+    row("Margin estimate (rough)", "$" + f(r.marA, 0), "$" + f(r.marB, 0)) + `</tbody></table>` +
+    `<p class="note">Totals include what you've already got on (your entry prices) plus the tested changes at the prices shown. Fees and bid-ask on future moves aren't included, and the margin figure is the same rough estimate as above.</p>`;
+  drawWhatIf(r);
+}
+
+function drawWhatIf(r){
+  const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
+  const all = r.A.concat(r.B), minP = Math.min(...all, 0), maxP = Math.max(...all, 0), pad = (maxP - minP || 1) * 0.08, vmin = minP - pad, vmax = maxP + pad;
+  const x = S => L + (W - L - R) * (S - r.lo) / (r.hi - r.lo), y = v => T + (H - T - B) * (1 - (v - vmin) / (vmax - vmin));
+  const line = (arr, extra) => `<polyline points="${arr.map((v, i) => x(r.S[i]).toFixed(1) + "," + y(v).toFixed(1)).join(" ")}" fill="none" ${extra}/>`;
+  const segs = []; let cur = null;
+  for (let i = 0; i < r.S.length; i++){
+    const pos = r.B[i] >= 0;
+    if (!cur || cur.pos !== pos){
+      cur = {pos, pts: []};
+      if (i > 0 && (r.B[i - 1] >= 0) !== pos){ const z = r.S[i - 1] + (0 - r.B[i - 1]) * (r.S[i] - r.S[i - 1]) / (r.B[i] - r.B[i - 1]); segs[segs.length - 1].pts.push([z, 0]); cur.pts.push([z, 0]); }
+      segs.push(cur);
+    }
+    cur.pts.push([r.S[i], r.B[i]]);
+  }
+  let g = "";
+  for (let k = 0; k <= 4; k++){ const v = vmin + (vmax - vmin) * k / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)"/><text x="${L - 6}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--mut)">${f(v, 0)}</text>`; }
+  for (let k = 0; k <= 5; k++){ const S = r.lo + (r.hi - r.lo) * k / 5; g += `<text x="${x(S).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="11" fill="var(--mut)">${f(S, 0)}</text>`; }
+  $("wchart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;touch-action:pan-y;cursor:crosshair">${g}
+    <line x1="${L}" x2="${W - R}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mut)"/>
+    ${line(r.A, 'stroke="var(--mut)" stroke-width="2" stroke-dasharray="6 4"')}
+    ${segs.map(sg => `<polyline points="${sg.pts.map(p => x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join(" ")}" fill="none" stroke="${sg.pos ? "var(--gain)" : "var(--loss)"}" stroke-width="2.5"/>`).join("")}
+    <line x1="${x(r.spot).toFixed(1)}" x2="${x(r.spot).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--acc)" stroke-dasharray="5 4"/>
+    <text x="${(x(r.spot) + 4).toFixed(1)}" y="${T + 11}" font-size="11" fill="var(--acc)">spot ${f(r.spot, 0)}</text>
+    <text x="${L + 6}" y="${T + 11}" font-size="11" fill="var(--mut)">grey dashed: current · green/red: with changes</text>
+    <line id="wifCurLine" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--fg)" stroke-width="1" visibility="hidden"/>
+    <circle id="wifDotA" cx="0" cy="0" r="4" fill="var(--mut)" stroke="var(--card)" stroke-width="2" visibility="hidden"/>
+    <circle id="wifDotB" cx="0" cy="0" r="5" fill="var(--fg)" stroke="var(--card)" stroke-width="2" visibility="hidden"/></svg>`;
+  wifGeom = {r, W, H, L, R, T, B, x, y};
+  if (wifCur !== null) showWifCursor(wifCur); else hideWifCursor(true);
+}
+
+function hideWifCursor(keepTip){
+  wifCur = null;
+  ["wifCurLine", "wifDotA", "wifDotB"].forEach(id => { const el = $(id); if (el && el.setAttribute) el.setAttribute("visibility", "hidden"); });
+  if (!keepTip || !wifGeom) $("wtip").textContent = WIF_HINT;
+}
+function showWifCursor(S){
+  const g = wifGeom; if (!g) return;
+  const r = g.r; S = Math.min(r.hi, Math.max(r.lo, S)); wifCur = S;
+  const lot = Number($("lot").value) || 0, a = wifPnl(r.base, 0, S, lot), b = wifPnl(r.alt.legs, r.alt.realised, S, lot), px = g.x(S);
+  const ln = $("wifCurLine"), da = $("wifDotA"), db = $("wifDotB");
+  if (ln && ln.setAttribute){
+    ln.setAttribute("x1", px.toFixed(1)); ln.setAttribute("x2", px.toFixed(1)); ln.setAttribute("visibility", "visible");
+    da.setAttribute("cx", px.toFixed(1)); da.setAttribute("cy", g.y(a).toFixed(1)); da.setAttribute("visibility", "visible");
+    db.setAttribute("cx", px.toFixed(1)); db.setAttribute("cy", g.y(b).toFixed(1)); db.setAttribute("fill", b >= 0 ? "var(--gain)" : "var(--loss)"); db.setAttribute("visibility", "visible");
+  }
+  const d = S - r.spot, dd = b - a;
+  $("wtip").innerHTML = `At BTC <b>${f(S, 0)}</b> (${d >= 0 ? "+" : "-"}${f(Math.abs(d) / r.spot * 100, 2)}% from spot ${f(r.spot, 0)}): current <b class="${a >= 0 ? "g" : "l"}">${money(a)}</b> → with changes <b class="${b >= 0 ? "g" : "l"}" style="font-size:18px">${money(b)}</b> ` +
+    `<span class="${dd >= 0 ? "g" : "l"}">(${dd >= 0 ? "+" : "-"}$${f(Math.abs(dd), 0)} ${dd >= 0 ? "better" : "worse"})</span>`;
+}
+
+$("wchart").addEventListener("pointermove", e => {
+  const svg = $("wchart").querySelector("svg"); if (!svg || !wifGeom) return;
+  const rc = svg.getBoundingClientRect(); if (!rc.width) return;
+  const g = wifGeom, xv = (e.clientX - rc.left) / rc.width * g.W;
+  showWifCursor(g.r.lo + (xv - g.L) / (g.W - g.L - g.R) * (g.r.hi - g.r.lo));
+});
+$("wchart").addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideWifCursor(); });
+
+$("wifCard").addEventListener("click", e => {
+  const wp = e.target.dataset.wp; if (wp){ wifPreset(wp); return; }
+  const del = e.target.dataset.wdel; if (del !== undefined){ wif.acts.splice(Number(del), 1); renderWhatIf(); }
+});
+$("wcLeg").addEventListener("change", setWcDefaults);
+$("wcAdd").onclick = () => {
+  const v = $("wcLeg").value; if (!v){ $("wmsg").textContent = "No current legs to change."; return; }
+  const [sym, side] = v.split("|"), l = wifLegs().find(x => x.s === sym && String(x.side) === side);
+  const lots = Math.min(Number($("wcLots").value) || 0, l ? l.lots : 0), px = Number($("wcPx").value);
+  if (!l || lots < 1 || !(px > 0)){ $("wmsg").textContent = "Pick a leg, then enter lots and a price above 0."; return; }
+  wif.acts.push({kind: "close", sym, side: l.side, lots, px}); $("wmsg").textContent = ""; renderWhatIf();
+};
+$("wload").onclick = loadWifChain;
+$("wexp").addEventListener("change", () => { wifChain = null; $("wstrike").innerHTML = ""; $("wpx").value = ""; });
+$("wtype").addEventListener("change", fillStrikes);
+$("wside").addEventListener("change", setWifPx);
+$("wstrike").addEventListener("change", setWifPx);
+$("wadd").onclick = () => {
+  const sym = $("wstrike").value, side = Number($("wside").value), lots = Number($("wlots").value) || 0, px = Number($("wpx").value);
+  if (!sym){ $("wmsg").textContent = "Press Load strikes, then pick a strike."; return; }
+  if (lots < 1 || !(px > 0)){ $("wmsg").textContent = "Enter lots and a price above 0."; return; }
+  wif.acts.push({kind: "add", sym, side, lots, px}); $("wmsg").textContent = ""; renderWhatIf();
+};
 
 
 // ---------- Move trigger ----------
@@ -1599,7 +1868,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
