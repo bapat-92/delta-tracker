@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Delta India position tracker</title>
 <style>
-:root{--bg:#f6f7f9;--fg:#15181d;--mut:#5d6572;--card:#fff;--line:#dde1e7;--gain:#0a7d4f;--loss:#b3261e;--acc:#1f4fd8;--warn:#fdecea}
-@media (prefers-color-scheme:dark){:root{--bg:#101318;--fg:#e8ebf0;--mut:#98a1af;--card:#181c23;--line:#2a303a;--gain:#4cd08f;--loss:#ff7b72;--acc:#7aa2ff;--warn:#3a1e1c}}
+:root{--be:#7a2fd0;--bg:#f6f7f9;--fg:#15181d;--mut:#5d6572;--card:#fff;--line:#dde1e7;--gain:#0a7d4f;--loss:#b3261e;--acc:#1f4fd8;--warn:#fdecea}
+@media (prefers-color-scheme:dark){:root{--be:#e0a3ff;--bg:#101318;--fg:#e8ebf0;--mut:#98a1af;--card:#181c23;--line:#2a303a;--gain:#4cd08f;--loss:#ff7b72;--acc:#7aa2ff;--warn:#3a1e1c}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:16px;max-width:980px;margin-inline:auto}
 h1{font-size:20px;margin:0 0 4px}
@@ -49,6 +49,7 @@ h1{padding-right:170px}
 #cum.g{border-color:var(--gain)}#cum.g .cv{color:var(--gain)}
 #cum.l{border-color:var(--loss)}#cum.l .cv{color:var(--loss)}
 .note{font-size:12px;color:var(--mut)}
+.be{color:var(--be);font-weight:800;font-size:1.3em;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -751,6 +752,7 @@ function saveJournal(){
   if (pw) syncJournal().then(() => setSync("Saved to cloud " + new Date().toLocaleTimeString()))
     .catch(e => setSync("Cloud save failed: " + e.message, true));
 }
+const beN = v => `<span class="be">${f(v, 0)}</span>`;
 const esc = v => String(v).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = v => (v < 0 ? "-$" : "+$") + f(Math.abs(v));
 const todayStr = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -1346,7 +1348,7 @@ function batCards(list, spot, labels, equi){
         <tr><td style="text-align:left">Sell put</td><td>${f(c.putShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.putShort.bid)}</td></tr>
         <tr><td style="text-align:left">Buy put</td><td>${f(c.putLong.strike, 0)}</td><td>×${f(c.bought, 0)}</td><td>${f(c.putLong.ask)}</td></tr>
       </tbody></table>
-      <div class="note" style="margin:6px 0">Net credit <b class="g">${usdB(c.credit)}</b> · est. margin ${usdB(c.margin)} · break-even ${f(c.be[0], 0)} to ${f(c.be[1], 0)}</div>
+      <div class="note" style="margin:6px 0">Net credit <b class="g">${usdB(c.credit)}</b> · est. margin ${usdB(c.margin)} · break-even ${beN(c.be[0])} to ${beN(c.be[1])}</div>
       <div class="note l" style="margin-bottom:6px">Worst P&amp;L within ±15%: ${usdB(c.maxLoss)} at ${f(c.maxLossAt, 0)}. Losses are not capped above the sold call.</div>
       ${batChart(c)}
       <p style="margin:8px 0 0"><button data-iload="${labels[n]}">Load into table</button></p></div>`).join("") + `</div>`;
@@ -1547,7 +1549,7 @@ function drawPosition(){
     ? "Your legs have different expiries (" + pr.exps.join(", ") + "). The chart treats them all as expiring together, so read it with care."
     : "P&L at expiry " + pr.exps[0] + " from your lots and entry prices, per leg price × lots × BTC per lot.";
   $("posStats").innerHTML = `Net premium: <b class="${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b> · Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
-    `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(b => f(b, 0)).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
+    `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(beN).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
     `Green is profit and red is loss. The dashed line is spot, and the dot on it is your P&amp;L now at mark prices. Fees and the bid-ask spread are not included, and losses can continue beyond the edges of the chart.`;
   renderWhatIf();
 }
@@ -1681,7 +1683,7 @@ function renderWhatIf(){
   const r = wifCompute(base, wif.acts, lot, spot, lev);
   const usd = v => v === Infinity ? "Unlimited" : v === -Infinity ? "Unlimited loss" : (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
   const sgn = v => (v < 0 ? "-$" : "+$") + f(Math.abs(v), 0);
-  const bes = a => a.length ? a.map(x => f(x, 0)).join(" and ") : "none in range";
+  const bes = a => a.length ? a.map(beN).join(" and ") : "none in range";
   const diff = (a, b) => { const d = b - a; return isFinite(d) ? `<span class="${d >= 0 ? "g" : "l"}">${sgn(d)}</span>` : ""; };
   const row = (lbl, a, b, extra) => `<tr><td style="text-align:left">${lbl}</td><td>${a}</td><td>${b}</td><td>${extra || ""}</td></tr>`;
   const maxL = (st) => st.min === -Infinity ? "Unlimited" : usd(st.min) + (st.minAt0 ? " (only if BTC fell to 0)" : "");
@@ -1967,7 +1969,7 @@ function planCards(list, dir, Ss){
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
       <b style="font-size:16px">#${n + 1} · ${c.width > 0 ? "range " + f(c.width, 0) + " (" + f(c.width / Ss * 100, 1) + "%)" : "no profit zone"}</b>
       <div class="note" style="margin:2px 0 4px">Calls: ${c.calls === "rollboth" ? "roll both legs" : c.calls === "rollsold" ? "roll the sold leg" : c.calls === "close" ? "close" : "keep"} · Puts: ${c.puts === "rollboth" ? "roll both legs" : c.puts === "rollsold" ? "roll the sold leg" : c.puts === "close" ? "close" : "keep"}${c.extra ? `<br><b>+ extra calls: ${esc(c.extra)}</b>` : ""}</div>
-      ${c.width > 0 ? `<div class="note" style="margin-bottom:4px">Profit from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>` : ""}
+      ${c.width > 0 ? `<div class="note" style="margin-bottom:4px">Break-evens (profit zone): ${beN(c.lo)} to ${beN(c.hi)}${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>` : ""}
       <div style="font-size:13px;margin-bottom:6px">${planActLines(c.acts)}</div>
       <div class="note">Cash for these trades ${usd(c.cash)} · realised ${usd(c.realised)}<br>Total P&amp;L at expiry if BTC stays at the new level: <b class="${c.atSpot >= 0 ? "g" : "l"}">${usd(c.atSpot)}</b><br>
         Chance of profit: implied <b>${pct1(c.pI)}</b> · history <b>${pct1(c.pH)}</b><br>Expected P&amp;L (model): implied ${usd(c.eI)} · history ${c.eH === null ? "–" : usd(c.eH)}<br>If BTC then moves −5%: ${usd(c.atDn5)} · +5%: ${usd(c.atUp5)}<br>Cushion: ${c.width > 0 ? f((Ss - c.lo) / Ss * 100, 1) + "% below" + (c.atEdge && c.hi >= Ss * 1.29 ? ", no upper limit in range" : ", " + f((c.hi - Ss) / Ss * 100, 1) + "% above") : "–"}<br>Worst P&amp;L within ±30%: ${usd(c.worst)}${c.unlimited ? " · losses uncapped above the sold calls" : ""}</div>
@@ -1977,7 +1979,7 @@ function planCards(list, dir, Ss){
 function renderPlan(info){
   const {S0, step, exp, T, status, ev, down, up, base, sigma0, histN, base0} = info;
   const e = ev, row = (lbl, a, b) => `<tr><td style="text-align:left">${lbl}</td><td>${pct1(a)}</td><td>${pct1(b)}</td></tr>`;
-  let h = `<p style="margin-top:8px"><b>${esc(status.text)}</b></p>`;
+  let h = `<p style="margin-top:8px"><b>${status.text}</b></p>`;
   h += `<p class="note">Spot ${f(S0, 0)} · expiry ${esc(exp)} in ${f(T, 2)} days · implied volatility near spot ${f(sigma0 * 100, 0)}% · ${histN ? f(histN, 0) + " historical windows" : "no candle history"}</p>`;
   h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Chance, from now to expiry</th><th>Implied (options market)</th><th>History (past candles)</th></tr></thead><tbody>` +
     row(`BTC touches ${f(e.L, 0)} (−${f(step * 100, 1)}%)`, e.imp.touchDn, e.hist && e.hist.touchDn) +
@@ -2001,7 +2003,7 @@ function planStatus(base, S0, lot, lev, minPct){
   let iS = 0; S.forEach((x, i) => { if (Math.abs(x - S0) < Math.abs(S[iS] - S0)) iS = i; });
   if (P[iS] >= thr){
     let a = iS, b = iS; while (a > 0 && P[a - 1] >= thr) a--; while (b < P.length - 1 && P[b + 1] >= thr) b++;
-    return {kind: "inside", lo: S[a], hi: S[b], text: `BTC is inside your profit range (${f(S[a], 0)} to ${f(S[b], 0)}): ${f(S0 - S[a], 0)} above the lower edge and ${f(S[b] - S0, 0)} below the upper edge.`};
+    return {kind: "inside", lo: S[a], hi: S[b], text: `BTC is inside your profit range (break-evens ${beN(S[a])} to ${beN(S[b])}): ${f(S0 - S[a], 0)} above the lower break-even and ${f(S[b] - S0, 0)} below the upper one.`};
   }
   let below = null, above = null;
   for (let i = 0; i < S.length; i++){ if (P[i] >= thr){ if (S[i] < S0) below = S[i]; else if (above === null) above = S[i]; } }
