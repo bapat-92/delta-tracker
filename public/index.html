@@ -180,6 +180,23 @@ h1{padding-right:170px}
   <div id="plout"></div>
 </div>
 
+<div class="card" id="guardCard">
+  <b>Call-side guard (alert only)</b>
+  <p class="note" style="margin:4px 0 8px">Watches the calls you sold. Fires when BTC reaches your trigger price, when a sold call is worth a set multiple of what you collected, or when BTC gets close to a sold strike. It shows what buying the calls back costs right now (at the ask). It never places orders.</p>
+  <div class="row" style="margin:8px 0">
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="gon" type="checkbox" style="width:auto"> Watch my sold calls</label>
+    <label>Trigger BTC price<input id="gprice" type="number" min="0" step="10" placeholder="e.g. 66800"></label>
+    <label>Sold call worth × collected<input id="gmult" type="number" min="0" step="0.5" value="2"></label>
+    <label>Within % below sold strike<input id="gbuf" type="number" min="0" step="0.1" value="0.5"></label>
+    <label>Quote refresh (sec)<input id="gsec" type="number" min="5" value="15"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="gsound" type="checkbox" style="width:auto" checked> Beep</label>
+    <button id="gtest">Test buy-back in what-if</button>
+  </div>
+  <div id="gstat" class="note">Off.</div>
+  <div id="gtab" class="wrap"></div>
+  <div id="gmsg" class="note"></div>
+</div>
+
 <div class="card" id="journalCard">
   <b>Journal (closed and expired positions)</b>
   <div class="wrap"><table>
@@ -340,7 +357,7 @@ try { const saved = JSON.parse(localStorage.getItem("legs")); if (Array.isArray(
 function save(){
   try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {}
   cloudPush("legs", () => legs);
-  if (typeof drawPosition === "function" && typeof lastNet !== "undefined") drawPosition();
+  if (typeof drawPosition === "function" && typeof lastNet !== "undefined") drawPosition();  if (typeof guardEval === "function") guardEval();
 }
 
 const num = v => (v === undefined || v === null || v === "") ? null : Number(v);
@@ -446,6 +463,7 @@ function showSpot(spot){
   lastSpotVal = spot;
   checkTrigger(spot);
   drawPosition();
+  if (typeof guardEval === "function") guardEval();
   $("spot").textContent = f(spot, 0);
   let best = null;
   legs.filter(L => L.side === -1).forEach(L => {
@@ -2027,6 +2045,110 @@ $("plout").addEventListener("click", e => {
 });
 
 
+// ---------- Call-side guard ----------
+let guard = {on: false, price: "", mult: 2, buf: 0.5, sec: 15, sound: true};
+try { Object.assign(guard, JSON.parse(localStorage.getItem("guard")) || {}); } catch (e) {}
+let guardTimer = null, guardRows = [], guardFired = false, guardLastNote = 0, guardBusy = false;
+function saveGuard(){ try { localStorage.setItem("guard", JSON.stringify(guard)); } catch (e) {} }
+function soldCalls(){ return wifLegs().filter(l => l.c && l.side === -1); }
+// rows for each sold call; quotes = {sym: {mark, bid, ask}}
+function guardCheck(calls, quotes, spot, cfg, lot){
+  const rows = [], reasons = [];
+  const trig = Number(cfg.price) > 0 ? Number(cfg.price) : null;
+  if (trig !== null && spot >= trig) reasons.push(`BTC ${f(spot, 0)} reached your trigger ${f(trig, 0)}`);
+  calls.forEach(c => {
+    const q = quotes[c.s] || {}, mark = q.mark, ask = q.ask > 0 ? q.ask : mark;
+    const buyback = ask > 0 ? ask * c.lots * lot : null;
+    const legPnl = ask > 0 ? (c.e - ask) * c.lots * lot : null;
+    const ratio = c.e > 0 && mark > 0 ? mark / c.e : null;
+    const awayPct = spot > 0 ? (c.k - spot) / spot * 100 : null;
+    const why = [];
+    if (Number(cfg.mult) > 0 && ratio !== null && ratio >= Number(cfg.mult)) why.push(`${c.s} worth ${ratio.toFixed(2)}× collected`);
+    if (awayPct !== null && Number(cfg.buf) > 0 && awayPct <= Number(cfg.buf)) why.push(awayPct < 0 ? `BTC is ${Math.abs(awayPct).toFixed(2)}% above ${c.s.split("-")[2]}` : `BTC within ${awayPct.toFixed(2)}% of ${c.s.split("-")[2]}`);
+    why.forEach(w => reasons.push(w));
+    rows.push({s: c.s, k: c.k, lots: c.lots, entry: c.e, mark, bid: q.bid, ask, buyback, legPnl, ratio, awayPct, hit: why.length > 0});
+  });
+  return {rows, reasons, triggered: reasons.length > 0};
+}
+// BTC level where a sold call is worth mult x collected (implied vol held flat)
+function guardLevel(c, q, spot, mult, Tyears){
+  if (!(c.e > 0) || !(q && q.mark > 0) || !(Tyears > 0)) return null;
+  const v = impVol(spot, c.k, Tyears, q.mark, "C"); if (v === null) return null;
+  const target = c.e * mult; let lo = spot, hi = spot * 1.5;
+  if (bsPx(hi, c.k, Tyears, v, "C") < target) return null;
+  if (bsPx(lo, c.k, Tyears, v, "C") >= target) return lo;
+  for (let i = 0; i < 60; i++){ const m = (lo + hi) / 2; if (bsPx(m, c.k, Tyears, v, "C") < target) lo = m; else hi = m; }
+  return (lo + hi) / 2;
+}
+function guardBeep(){
+  try { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; const ctx = new A(), o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.15; o.start(); setTimeout(() => { o.stop(); ctx.close(); }, 600); } catch (e) {}
+}
+async function guardFetch(){
+  if (guardBusy) return; guardBusy = true;
+  try {
+    const base = $("base").value.replace(/\/$/, ""), calls = soldCalls();
+    const res = await Promise.allSettled(calls.map(c => getLeg(base, c.s)));
+    res.forEach((r, i) => {
+      if (r.status !== "fulfilled" || !r.value) return;
+      const t = r.value, q = t.quotes || {};
+      QUOTES[calls[i].s] = {mark: num(t.mark_price), bid: num(q.best_bid), ask: num(q.best_ask)};
+    });
+  } catch (e) {} finally { guardBusy = false; }
+  guardEval();
+}
+function guardEval(){
+  const stat = $("gstat"); if (!stat) return;
+  if (!guard.on){ stat.textContent = "Off."; stat.style.color = ""; $("gtab").innerHTML = ""; guardFired = false; return; }
+  const calls = soldCalls();
+  if (!calls.length){ stat.textContent = "Watching, but you have no sold calls in the legs table."; $("gtab").innerHTML = ""; return; }
+  const spot = typeof lastSpotVal === "number" ? lastSpotVal : null;
+  if (!spot){ stat.textContent = "Waiting for the BTC price…"; return; }
+  const lot = Number($("lot").value) || 0.001;
+  const quotes = {}; calls.forEach(c => { quotes[c.s] = QUOTES[c.s] || {}; });
+  const r = guardCheck(calls, quotes, spot, guard, lot); guardRows = r.rows;
+  const exp = calls[0].s.split("-")[3], T = (expiryMs(exp, $("bexp") ? $("bexp").value : "") - Date.now()) / (365 * 86400000);
+  const totalBack = r.rows.reduce((a, x) => a + (x.buyback || 0), 0), totalPnl = r.rows.reduce((a, x) => a + (x.legPnl || 0), 0);
+  $("gtab").innerHTML = `<table><thead><tr><th style="text-align:left">Sold call</th><th>Lots</th><th>Collected</th><th>Mark</th><th>Ask</th><th>× collected</th><th>BTC for ×${esc(guard.mult)}</th><th>% to strike</th><th>Buy-back cost</th><th>Leg P&amp;L if bought back</th></tr></thead><tbody>` +
+    r.rows.map(x => { const lv = guardLevel(calls.find(c => c.s === x.s), quotes[x.s], spot, Number(guard.mult), T);
+      return `<tr${x.hit ? ' style="background:var(--warn,#fdecea)"' : ""}><td style="text-align:left">${esc(x.s)}</td><td>${f(x.lots, 0)}</td><td>${f(x.entry)}</td><td>${f(x.mark)}</td><td>${f(x.ask)}</td><td>${x.ratio === null ? "–" : x.ratio.toFixed(2) + "×"}</td><td>${lv ? f(lv, 0) : "–"}</td><td>${x.awayPct === null ? "–" : x.awayPct.toFixed(2) + "%"}</td><td>${x.buyback === null ? "–" : "$" + f(x.buyback)}</td><td class="${sg(x.legPnl)}">${x.legPnl === null ? "–" : money(x.legPnl)}</td></tr>`; }).join("") +
+    `<tr><td style="text-align:left"><b>Total</b></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><b>$${f(totalBack)}</b></td><td class="${sg(totalPnl)}"><b>${money(totalPnl)}</b></td></tr></tbody></table>`;
+  if (r.triggered){
+    stat.innerHTML = `<b style="color:var(--loss,#b3261e)">TRIGGERED: ${esc(r.reasons.join("; "))}. Buying back all sold calls now costs $${f(totalBack)} (${money(totalPnl)} on those legs).</b>`;
+    document.title = "⚠ CALL GUARD – tracker";
+    const now = Date.now();
+    if (!guardFired || now - guardLastNote > 600000){
+      guardFired = true; guardLastNote = now;
+      if (guard.sound) guardBeep();
+      try { if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("Call-side guard", {body: r.reasons.join("; ") + ` · buy-back $${f(totalBack)}`}); } catch (e) {}
+    }
+  } else {
+    stat.style.color = ""; stat.textContent = `Watching ${calls.length} sold call(s). BTC ${f(spot, 0)}. Buy-back now $${f(totalBack)}. Not triggered.`;
+    if (guardFired){ guardFired = false; document.title = "Delta India position tracker"; }
+  }
+}
+function guardStart(){
+  clearInterval(guardTimer); guardTimer = null;
+  if (guard.on){
+    try { if (typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission(); } catch (e) {}
+    guardFetch(); guardTimer = setInterval(guardFetch, Math.max(5, Number(guard.sec) || 15) * 1000);
+  } else guardEval();
+}
+function readGuard(){
+  guard.on = $("gon").checked; guard.price = $("gprice").value; guard.mult = $("gmult").value; guard.buf = $("gbuf").value;
+  guard.sec = $("gsec").value; guard.sound = $("gsound").checked; saveGuard(); guardFired = false; guardStart();
+}
+$("gon").checked = !!guard.on; $("gprice").value = guard.price; $("gmult").value = guard.mult; $("gbuf").value = guard.buf; $("gsec").value = guard.sec; $("gsound").checked = !!guard.sound;
+["gon", "gprice", "gmult", "gbuf", "gsec", "gsound"].forEach(id => $(id).addEventListener("change", readGuard));
+$("gtest").onclick = () => {
+  const calls = soldCalls(); if (!calls.length){ $("gmsg").textContent = "No sold calls to buy back."; return; }
+  let n = 0;
+  calls.forEach(c => { const q = QUOTES[c.s] || {}, px = q.ask > 0 ? q.ask : q.mark; if (!(px > 0)) return;
+    wif.acts = wif.acts.filter(a => !(a.kind === "close" && a.sym === c.s)); wif.acts.push({kind: "close", sym: c.s, side: -1, lots: c.lots, px}); n++; });
+  $("gmsg").textContent = n ? `Loaded ${n} buy-back(s) at the ask into the What-if card.` : "No quotes yet. Turn the watch on and wait a few seconds.";
+  renderWhatIf();
+};
+
 // ---------- Move trigger ----------
 let trig = {armed: false, ref: null, step: 1, prem: 100, exp: "", needAnchor: false, log: []};
 try { const d = JSON.parse(localStorage.getItem("trig")); if (d) trig = Object.assign(trig, d); } catch (e) {}
@@ -2129,7 +2251,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["planCard", "Adjustment planner"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
@@ -2163,6 +2285,7 @@ drawInputs(); start();
 initSync();
 loadExpiries();
 drawPosition();
+guardStart();
 </script>
 </body>
 </html>
