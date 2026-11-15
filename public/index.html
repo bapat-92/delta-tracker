@@ -134,31 +134,11 @@ h1{padding-right:170px}
 
 <div class="card" id="wifCard">
   <b>What-if adjustments</b>
-  <p class="note" style="margin:4px 0 8px">Test changes to your current legs before trading. Nothing here changes your legs table, your journal or any order.</p>
-  <div class="row" style="margin:8px 0;align-items:center">
-    <span class="note">Quick tests:</span>
-    <button data-wp="closecalls">Close the call side</button>
-    <button data-wp="closeputs">Close the put side</button>
-    <button data-wp="closeall">Close everything</button>
-    <button data-wp="buy3">Buy back &#8531; of each short</button>
-    <button data-wp="buy23">Buy back &#8532; of each short</button>
-    <button data-wp="clear">Clear</button>
-  </div>
-  <div class="row" style="margin:8px 0">
-    <label>Reduce or close a current leg<select id="wcLeg"></select></label>
-    <label>Lots<input id="wcLots" type="number" min="1"></label>
-    <label>Price<input id="wcPx" type="number" step="any"></label>
-    <button id="wcAdd">Add to what-if</button>
-  </div>
-  <div class="row" style="margin:8px 0">
-    <label>New option: expiry<select id="wexp"></select></label>
-    <label>Type<select id="wtype"><option value="C">Call</option><option value="P" selected>Put</option></select></label>
-    <label>Side<select id="wside"><option value="1" selected>Buy</option><option value="-1">Sell</option></select></label>
-    <button id="wload">Load strikes</button>
-    <label>Strike<select id="wstrike"></select></label>
-    <label>Lots<input id="wlots" type="number" min="1" value="1000"></label>
-    <label>Price<input id="wpx" type="number" step="any"></label>
-    <button id="wadd">Add to what-if</button>
+  <div class="row" style="margin:8px 0"><button data-wp="clear">Clear</button><span class="note">Results sent from the planner or the call guard appear here with the payoff chart.</span></div>
+  <div hidden>
+    <button data-wp="closecalls"></button><button data-wp="closeputs"></button><button data-wp="closeall"></button><button data-wp="buy3"></button><button data-wp="buy23"></button>
+    <select id="wcLeg"></select><input id="wcLots" type="number"><input id="wcPx" type="number"><button id="wcAdd"></button>
+    <select id="wexp"></select><select id="wtype"><option value="C">Call</option><option value="P" selected>Put</option></select><select id="wside"><option value="1" selected>Buy</option><option value="-1">Sell</option></select><button id="wload"></button><select id="wstrike"></select><input id="wlots" type="number" value="1000"><input id="wpx" type="number"><button id="wadd"></button>
   </div>
   <div id="wmsg" class="note"></div>
   <div id="wlist"></div>
