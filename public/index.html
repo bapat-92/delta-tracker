@@ -156,6 +156,12 @@ h1{padding-right:170px}
     <label>Profit counts from (% of margin)<input id="ppct" type="number" min="0" step="0.5" value="0"></label>
     <button id="plrun">Run planner</button>
   </div>
+  <div class="row" style="margin:8px 0">
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="pxon" type="checkbox" style="width:auto"> Also try selling extra calls</label>
+    <label>Sell calls this % above BTC<input id="pxpct" type="number" min="0.2" step="0.1" value="2"></label>
+    <label>Lots (blank = your sold-call lots)<input id="pxlots" type="number" min="1" placeholder="auto"></label>
+    <label>Protect with a long call this % further out (0 = none)<input id="pxprot" type="number" min="0" step="0.1" value="0"></label>
+  </div>
   <div id="plmsg" class="note">Uses your current legs, the live chain for their expiry and the expiry time in the strike backtest card (UTC).</div>
   <div id="plout"></div>
 </div>
@@ -1869,6 +1875,18 @@ function sideActs(g, action, groupLegs, model, m){
   return {acts, ok: true};
 }
 
+// Extra legs laid over a plan (generic: each extra is {c: isCall, side, pct above/below BTC, lots}). Returns null if a leg can't be placed.
+function extraActs(acts, model, m){
+  const out = [], labels = [], used = new Set(acts.filter(a => a.kind === "close").map(a => a.sym));
+  for (const x of m.extras){
+    const t = x.c ? "C" : "P", K = model.nearest(t, m.Ss * (1 + (x.c ? 1 : -1) * x.pct));
+    if (!K || used.has(K.symbol) || x.lots < 1) return null;
+    used.add(K.symbol);
+    out.push({kind: "add", sym: K.symbol, side: x.side, lots: x.lots, px: model.trade(t, K.strike, m.Ss, x.side)});
+    labels.push((x.side < 0 ? "sell " : "buy ") + (x.c ? "C" : "P") + K.strike + " ×" + f(x.lots, 0));
+  }
+  return {acts: out, label: labels.join(", ")};
+}
 function genPlans(base, model, m){
   const grp = {C: base.filter(l => l.c), P: base.filter(l => !l.c)};
   const choices = g => grp[g].length ? ["keep", "rollboth", "rollsold", "close"] : ["keep"];
@@ -1876,7 +1894,11 @@ function genPlans(base, model, m){
   choices("C").forEach(ac => choices("P").forEach(ap => {
     const c = sideActs("C", ac, grp.C, model, m), p = sideActs("P", ap, grp.P, model, m);
     if (!c.ok || !p.ok) return;
-    out.push({calls: ac, puts: ap, acts: (c.acts || []).concat(p.acts || [])});
+    const acts = (c.acts || []).concat(p.acts || []);
+    out.push({calls: ac, puts: ap, acts});
+    (m.extras || []).length && (() => {
+      const ex = extraActs(acts, model, m); if (ex) out.push({calls: ac, puts: ap, acts: acts.concat(ex.acts), extra: ex.label});
+    })();
   }));
   return out;
 }
@@ -1906,7 +1928,7 @@ function evalPlan(base, acts, m){
   }
   const slope = Ls.reduce((a, l) => a + (l.c ? l.side * l.lots * m.lot : 0), 0);
   return {acts, legs: Ls, realised: r.realised, cash: r.cash, margin, thr, lo, hi, width, atSpot: wifPnl(Ls, r.realised, m.Ss, m.lot),
-    pI, eI, pH, eH, worst: Math.min(...pn), unlimited: slope < 0, atEdge: lo !== null && (lo <= g.S[0] || hi >= g.S[g.S.length - 1])};
+    atUp5: wifPnl(Ls, r.realised, m.Ss * 1.05, m.lot), atDn5: wifPnl(Ls, r.realised, m.Ss * 0.95, m.lot), pI, eI, pH, eH, worst: Math.min(...pn), unlimited: slope < 0, atEdge: lo !== null && (lo <= g.S[0] || hi >= g.S[g.S.length - 1])};
 }
 
 function planScenario(base, model, dir, m0){
@@ -1914,7 +1936,8 @@ function planScenario(base, model, dir, m0){
   const m = Object.assign({}, m0, {Ss, dir, sigma, grid: planGrid(Ss, m0.T, sigma)});
   const plans = genPlans(base, model, m).map(pl => Object.assign(pl, evalPlan(base, pl.acts, m)));
   const baseline = plans.find(p => p.calls === "keep" && p.puts === "keep") || evalPlan(base, [], m);
-  const cands = plans.filter(p => p.acts.length);
+  let cands = plans.filter(p => p.acts.length);
+  if ((m0.extras || []).length) cands = cands.filter(p => p.extra);      // option ticked: rank only the plans that add the extra legs
   cands.sort((a, b) => b.width - a.width || b.atSpot - a.atSpot || b.eI - a.eI);
   return {Ss, sigma, baseline, top: cands.slice(0, 3), count: cands.length};
 }
@@ -1943,11 +1966,11 @@ function planCards(list, dir, Ss){
   return `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:8px">` + list.map((c, n) => `
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
       <b style="font-size:16px">#${n + 1} · ${c.width > 0 ? "range " + f(c.width, 0) + " (" + f(c.width / Ss * 100, 1) + "%)" : "no profit zone"}</b>
-      <div class="note" style="margin:2px 0 4px">Calls: ${c.calls === "rollboth" ? "roll both legs" : c.calls === "rollsold" ? "roll the sold leg" : c.calls === "close" ? "close" : "keep"} · Puts: ${c.puts === "rollboth" ? "roll both legs" : c.puts === "rollsold" ? "roll the sold leg" : c.puts === "close" ? "close" : "keep"}</div>
+      <div class="note" style="margin:2px 0 4px">Calls: ${c.calls === "rollboth" ? "roll both legs" : c.calls === "rollsold" ? "roll the sold leg" : c.calls === "close" ? "close" : "keep"} · Puts: ${c.puts === "rollboth" ? "roll both legs" : c.puts === "rollsold" ? "roll the sold leg" : c.puts === "close" ? "close" : "keep"}${c.extra ? `<br><b>+ extra calls: ${esc(c.extra)}</b>` : ""}</div>
       ${c.width > 0 ? `<div class="note" style="margin-bottom:4px">Profit from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>` : ""}
       <div style="font-size:13px;margin-bottom:6px">${planActLines(c.acts)}</div>
       <div class="note">Cash for these trades ${usd(c.cash)} · realised ${usd(c.realised)}<br>Total P&amp;L at expiry if BTC stays at the new level: <b class="${c.atSpot >= 0 ? "g" : "l"}">${usd(c.atSpot)}</b><br>
-        Chance of profit: implied <b>${pct1(c.pI)}</b> · history <b>${pct1(c.pH)}</b><br>Expected P&amp;L (model): implied ${usd(c.eI)} · history ${c.eH === null ? "–" : usd(c.eH)}<br>Worst P&amp;L within ±30%: ${usd(c.worst)}${c.unlimited ? " · losses uncapped above the sold calls" : ""}</div>
+        Chance of profit: implied <b>${pct1(c.pI)}</b> · history <b>${pct1(c.pH)}</b><br>Expected P&amp;L (model): implied ${usd(c.eI)} · history ${c.eH === null ? "–" : usd(c.eH)}<br>If BTC then moves −5%: ${usd(c.atDn5)} · +5%: ${usd(c.atUp5)}<br>Cushion: ${c.width > 0 ? f((Ss - c.lo) / Ss * 100, 1) + "% below" + (c.atEdge && c.hi >= Ss * 1.29 ? ", no upper limit in range" : ", " + f((c.hi - Ss) / Ss * 100, 1) + "% above") : "–"}<br>Worst P&amp;L within ±30%: ${usd(c.worst)}${c.unlimited ? " · losses uncapped above the sold calls" : ""}</div>
       <p style="margin:8px 0 0"><button data-pl="${dir}:${n}">Show in what-if</button></p></div>`).join("") + `</div>`;
 }
 
@@ -2005,7 +2028,13 @@ $("plrun").onclick = async () => {
     if (!chain.calls.length || !chain.puts.length){ msg.className = "note l"; msg.textContent = "No options found for expiry " + exp + "."; return; }
     const S0 = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, model = planModel(chain, S0, T);
     const hist = candles.length > 600 ? histSamples(candles, Math.max(12, Math.round(Tdays * 288))) : null;
-    const m0 = {S0, step, T, lot, lev, minPct, hist};
+    const soldCallLots = base.filter(l => l.c && l.side === -1).reduce((a, l) => a + l.lots, 0);
+    const xl = Number($("pxlots").value) || soldCallLots || 1000, xp = (Number($("pxpct").value) || 2) / 100, xq = (Number($("pxprot").value) || 0) / 100, extras = [];
+    if ($("pxon").checked){
+      extras.push({c: true, side: -1, pct: xp, lots: xl});
+      if (xq > 0) extras.push({c: true, side: 1, pct: xp + xq, lots: xl});
+    }
+    const m0 = {S0, step, T, lot, lev, minPct, hist, extras};
     const sigma0 = model.sm.ivAt(S0), g0 = planGrid(S0, T, sigma0);
     const base0 = evalPlan(base, [], Object.assign({}, m0, {Ss: S0, dir: 0, sigma: sigma0, grid: g0}));
     const down = planScenario(base, model, -1, m0), up = planScenario(base, model, 1, m0);
