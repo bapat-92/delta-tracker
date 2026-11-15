@@ -98,6 +98,8 @@ h1{padding-right:170px}
 <div class="kpi card" id="summaryCard">
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
+  <div>Closed legs, this expiry<b id="clsum">–</b></div>
+  <div>Combined P&amp;L at mark<b id="comb">–</b></div>
   <div>Nearest strike<b id="near">–</b></div>
 </div>
 
@@ -131,6 +133,8 @@ h1{padding-right:170px}
   <div id="posTip" style="min-height:44px;margin:4px 0">Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.</div>
   <div id="posChart"></div>
   <div id="posStats" class="note"></div>
+  <label style="flex-direction:row;align-items:center;gap:6px;margin-top:8px"><input id="cinc" type="checkbox" style="width:auto" checked> Include closed legs of this expiry (combined result)</label>
+  <div id="posClosed"></div>
 </div>
 
 <div class="card" id="wifCard">
@@ -502,7 +506,7 @@ function payoffStats(lot){
     return {c: p[0] === "C", k: Number(p[2]), side: L.side === -1 ? -1 : 1, q: Number(L.lots) * lot, e: Number(L.entry) || 0};
   });
   if (!ls.length) return null;
-  const pnl = S => ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const off = closedOff(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
   const vals = [0, ...ls.map(l => l.k)].map(pnl);
   const slope = ls.reduce((a, l) => a + (l.c ? l.side * l.q : 0), 0);   // P&L slope above the highest strike
   return {max: slope > 0 ? Infinity : Math.max(...vals), min: slope < 0 ? -Infinity : Math.min(...vals)};
@@ -542,6 +546,7 @@ function showChart(){
 }
 function updateMargin(res, net){
   lastRes = res; lastNet = net;
+  { const off = closedOff(); $("clsum").textContent = off ? money(off) : "–"; $("clsum").className = off ? sg(off) : ""; $("comb").textContent = money(net + off); $("comb").className = sg(net + off); }
   const lev = Number($("lev").value) || 1, lot = Number($("lot").value) || 0;
   let spot = null;
   for (const t of res){ if (t && num(t.spot_price)){ spot = num(t.spot_price); break; } }
@@ -767,6 +772,16 @@ function saveJournal(){
   if (pw) syncJournal().then(() => setSync("Saved to cloud " + new Date().toLocaleTimeString()))
     .catch(e => setSync("Cloud save failed: " + e.message, true));
 }
+// Closed legs of the same expiry as the open position (from the journal), so the position reads as one combined result
+let incClosed = true; try { incClosed = localStorage.getItem("cinc") !== "0"; } catch (e) {}
+function closedLegs(){
+  if (!incClosed) return [];
+  const exps = new Set(legs.filter(L => Number(L.lots) > 0).map(L => String(L.s).split("-")[3]));
+  const out = [];
+  (journal || []).forEach(j => (j.legs || []).forEach(L => { if (exps.has(String(L.s).split("-")[3])) out.push({date: j.date, type: j.type, s: L.s, side: L.side, lots: L.lots, entry: L.entry, exit: L.exit, pnl: legPnl(L, L.exit, j.lot)}); }));
+  return out;
+}
+function closedOff(){ return closedLegs().reduce((a, c) => a + c.pnl, 0); }
 const beN = v => `<span class="be">${f(v, 0)}</span>`;
 const esc = v => String(v).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const money = v => (v < 0 ? "-$" : "+$") + f(Math.abs(v));
@@ -869,7 +884,7 @@ $("jbody").addEventListener("click", e => {
   if (!confirm("Delete this journal entry? This changes your cumulative P&L.")) return;
   journal = readJournal().filter(j => j.id !== id);
   addDel(id);
-  saveJournal(); renderJournal();
+  saveJournal(); renderJournal(); drawPosition(); if (lastRes) updateMargin(lastRes, lastNet);
 });
 $("jcsv").onclick = () => {
   const rows = [["date", "type", "symbol", "side", "lots", "btc_per_lot", "entry", "exit", "leg_pnl", "trade_pnl"]];
@@ -1462,7 +1477,7 @@ function positionProfile(){
   if (!ls.length) return null;
   const ks = ls.map(l => l.k), spot = lastSpotVal || (Math.min(...ks) + Math.max(...ks)) / 2;
   const lo = Math.min(spot * 0.85, Math.min(...ks) * 0.97), hi = Math.max(spot * 1.15, Math.max(...ks) * 1.03);
-  const pnl = S => ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const off = closedOff(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
   const n = 400, S = [], P = [];
   for (let i = 0; i <= n; i++){ const x = lo + (hi - lo) * i / n; S.push(x); P.push(pnl(x)); }
   const be = [];
@@ -1471,7 +1486,7 @@ function positionProfile(){
   }
   const credit = ls.reduce((a, l) => a + (l.side === -1 ? 1 : -1) * l.e * l.q, 0);
   const exps = [...new Set(ls.map(l => l.exp))];
-  return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, atSpot: pnl(spot)};
+  return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, off, atSpot: pnl(spot)};
 }
 
 let posGeom = null, posCur = null;
@@ -1512,7 +1527,7 @@ function drawPosition(){
   const pr = positionProfile();
   if (!pr){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
-    posGeom = null; posCur = null; $("posTip").textContent = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
+    $("posClosed").innerHTML = ""; posGeom = null; posCur = null; $("posTip").textContent = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
     renderWhatIf();
     return;
   }
@@ -1548,7 +1563,7 @@ function drawPosition(){
   const strikes = [...new Set(pr.ls.map(l => l.k))].map(k => `<line x1="${x(k).toFixed(1)}" x2="${x(k).toFixed(1)}" y1="${H - B}" y2="${H - B + 5}" stroke="var(--mut)"/>`).join("");
   const spotLine = `<line x1="${x(pr.spot).toFixed(1)}" x2="${x(pr.spot).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--acc)" stroke-dasharray="5 4"/><text x="${(x(pr.spot) + 4).toFixed(1)}" y="${T + 11}" font-size="11" fill="var(--acc)">spot ${f(pr.spot, 0)}</text>`;
   const nowDot = lastNet !== null && lastNet !== undefined && lastRes
-    ? `<circle cx="${x(pr.spot).toFixed(1)}" cy="${y(lastNet).toFixed(1)}" r="5" fill="var(--acc)"/><text x="${(x(pr.spot) + 8).toFixed(1)}" y="${(y(lastNet) - 6).toFixed(1)}" font-size="11" fill="var(--acc)">now ${money(lastNet)}</text>` : "";
+    ? `<circle cx="${x(pr.spot).toFixed(1)}" cy="${y(lastNet + pr.off).toFixed(1)}" r="5" fill="var(--acc)"/><text x="${(x(pr.spot) + 8).toFixed(1)}" y="${(y(lastNet + pr.off) - 6).toFixed(1)}" font-size="11" fill="var(--acc)">now ${money(lastNet + pr.off)}</text>` : "";
   const beMarks = pr.be.map(b => `<circle cx="${x(b).toFixed(1)}" cy="${y(0).toFixed(1)}" r="4" fill="var(--card)" stroke="var(--fg)" stroke-width="1.5"/>`).join("");
   $("posChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;touch-action:pan-y;cursor:crosshair">${g}
     <line x1="${L}" x2="${W - R}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mut)"/>
@@ -1557,6 +1572,10 @@ function drawPosition(){
     <circle id="posCurDot" cx="0" cy="0" r="5" fill="var(--fg)" stroke="var(--card)" stroke-width="2" visibility="hidden"/>
     <text id="posCurTxt" x="0" y="0" font-size="12" font-weight="700" fill="var(--fg)" visibility="hidden"></text></svg>`;
   posGeom = {pr, W, H, L, R, T, B, x, y};
+  const cl = closedLegs();
+  $("posClosed").innerHTML = cl.length ? `<p style="margin:10px 0 4px"><b>Closed legs of this expiry</b> <span class="note">(from the journal, included in the chart and totals)</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>` +
+    cl.map(c => `<tr><td style="text-align:left">${esc(c.date)}</td><td style="text-align:left">${esc(c.s)}</td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry)}</td><td>${f(c.exit)}</td><td class="${sg(c.pnl)}">${money(c.pnl)}</td></tr>`).join("") +
+    `<tr><td colspan="6" style="text-align:left"><b>Closed total</b></td><td class="${sg(pr.off)}"><b>${money(pr.off)}</b></td></tr></tbody></table></div>` : "";
   if (posCur !== null) showCursor(posCur); else hideCursor(true);
   const st = payoffStats(Number($("lot").value) || 0);
   const mx = st ? (st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0)) : "–", mn = st ? (st.min === -Infinity ? "Unlimited" : (st.min < 0 ? "-$" : "$") + f(Math.abs(st.min), 0)) : "–";
@@ -1565,6 +1584,7 @@ function drawPosition(){
     : "P&L at expiry " + pr.exps[0] + " from your lots and entry prices, per leg price × lots × BTC per lot.";
   $("posStats").innerHTML = `Net premium: <b class="${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b> · Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
     `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(beN).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
+    (pr.off ? `<br>Includes closed legs of this expiry: <b class="${sg(pr.off)}">${money(pr.off)}</b> realised. ` : " ") +
     `Green is profit and red is loss. The dashed line is spot, and the dot on it is your P&amp;L now at mark prices. Fees and the bid-ask spread are not included, and losses can continue beyond the edges of the chart.`;
   renderWhatIf();
 }
@@ -1620,12 +1640,12 @@ function wifCompute(base, acts, lot, spot, lev){
   const n = 400, S = [], A = [], B = [];
   for (let i = 0; i <= n; i++){
     const x = lo + (hi - lo) * i / n; S.push(x);
-    A.push(wifPnl(base, 0, x, lot)); B.push(wifPnl(alt.legs, alt.realised, x, lot));
+    A.push(wifPnl(base, closedOff(), x, lot)); B.push(wifPnl(alt.legs, alt.realised + closedOff(), x, lot));
   }
   const be = arr => { const o = []; for (let i = 1; i < S.length; i++){ if ((arr[i - 1] < 0) !== (arr[i] < 0) && arr[i] !== arr[i - 1]) o.push(S[i - 1] + (0 - arr[i - 1]) * (S[i] - S[i - 1]) / (arr[i] - arr[i - 1])); } return o; };
   const margin = Ls => Ls.filter(l => l.side === -1).reduce((a, l) => a + l.lots * lot * spot / lev, 0);
-  return {alt, lo, hi, S, A, B, beA: be(A), beB: be(B), stA: wifStats(base, 0, lot), stB: wifStats(alt.legs, alt.realised, lot),
-    marA: margin(base), marB: margin(alt.legs), worstA: Math.min(...A), worstB: Math.min(...B), atA: wifPnl(base, 0, spot, lot), atB: wifPnl(alt.legs, alt.realised, spot, lot), spot, base};
+  return {alt, lo, hi, S, A, B, beA: be(A), beB: be(B), stA: wifStats(base, closedOff(), lot), stB: wifStats(alt.legs, alt.realised + closedOff(), lot),
+    marA: margin(base), marB: margin(alt.legs), worstA: Math.min(...A), worstB: Math.min(...B), atA: wifPnl(base, closedOff(), spot, lot), atB: wifPnl(alt.legs, alt.realised + closedOff(), spot, lot), spot, base};
 }
 
 function wifPreset(name){
@@ -1755,7 +1775,7 @@ function hideWifCursor(keepTip){
 function showWifCursor(S){
   const g = wifGeom; if (!g) return;
   const r = g.r; S = Math.min(r.hi, Math.max(r.lo, S)); wifCur = S;
-  const lot = Number($("lot").value) || 0, a = wifPnl(r.base, 0, S, lot), b = wifPnl(r.alt.legs, r.alt.realised, S, lot), px = g.x(S);
+  const lot = Number($("lot").value) || 0, a = wifPnl(r.base, closedOff(), S, lot), b = wifPnl(r.alt.legs, r.alt.realised + closedOff(), S, lot), px = g.x(S);
   const ln = $("wifCurLine"), da = $("wifDotA"), db = $("wifDotB");
   if (ln && ln.setAttribute){
     ln.setAttribute("x1", px.toFixed(1)); ln.setAttribute("x2", px.toFixed(1)); ln.setAttribute("visibility", "visible");
@@ -1932,7 +1952,7 @@ function planGrid(Ss, T, sigma){
 
 function evalPlan(base, acts, m){
   const r = applyActs(base, acts, m.lot), g = m.grid, Ls = r.legs;
-  const pn = g.S.map(S => wifPnl(Ls, r.realised, S, m.lot));
+  const pn = g.S.map(S => wifPnl(Ls, r.realised + closedOff(), S, m.lot));
   const margin = Ls.filter(l => l.side === -1).reduce((a, l) => a + l.lots * m.lot * m.Ss / m.lev, 0), thr = m.minPct / 100 * margin;
   let iS = 0; g.S.forEach((S, i) => { if (Math.abs(S - m.Ss) < Math.abs(g.S[iS] - m.Ss)) iS = i; });
   let lo = null, hi = null, width = 0;
@@ -1940,12 +1960,12 @@ function evalPlan(base, acts, m){
   let pI = 0, eI = 0; pn.forEach((v, i) => { if (v >= thr) pI += g.w[i]; eI += g.w[i] * v; });
   let pH = null, eH = null;
   if (m.hist && m.hist.ret.length){
-    let c = 0, e = 0; m.hist.ret.forEach(x => { const v = wifPnl(Ls, r.realised, m.Ss * Math.exp(x), m.lot); if (v >= thr) c++; e += v; });
+    let c = 0, e = 0; m.hist.ret.forEach(x => { const v = wifPnl(Ls, r.realised + closedOff(), m.Ss * Math.exp(x), m.lot); if (v >= thr) c++; e += v; });
     pH = c / m.hist.ret.length; eH = e / m.hist.ret.length;
   }
   const slope = Ls.reduce((a, l) => a + (l.c ? l.side * l.lots * m.lot : 0), 0);
-  return {acts, legs: Ls, realised: r.realised, cash: r.cash, margin, thr, lo, hi, width, atSpot: wifPnl(Ls, r.realised, m.Ss, m.lot),
-    atUp5: wifPnl(Ls, r.realised, m.Ss * 1.05, m.lot), atDn5: wifPnl(Ls, r.realised, m.Ss * 0.95, m.lot), pI, eI, pH, eH, worst: Math.min(...pn), unlimited: slope < 0, atEdge: lo !== null && (lo <= g.S[0] || hi >= g.S[g.S.length - 1])};
+  return {acts, legs: Ls, realised: r.realised, cash: r.cash, margin, thr, lo, hi, width, atSpot: wifPnl(Ls, r.realised + closedOff(), m.Ss, m.lot),
+    atUp5: wifPnl(Ls, r.realised + closedOff(), m.Ss * 1.05, m.lot), atDn5: wifPnl(Ls, r.realised + closedOff(), m.Ss * 0.95, m.lot), pI, eI, pH, eH, worst: Math.min(...pn), unlimited: slope < 0, atEdge: lo !== null && (lo <= g.S[0] || hi >= g.S[g.S.length - 1])};
 }
 
 function planScenario(base, model, dir, m0){
@@ -2013,7 +2033,7 @@ const usdP = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
 
 function planStatus(base, S0, lot, lev, minPct){
   const r = applyActs(base, [], lot), ks = base.map(l => l.k), lo = Math.min(S0 * 0.7, Math.min(...ks) * 0.9), hi = Math.max(S0 * 1.3, Math.max(...ks) * 1.1);
-  const S = [], P = []; for (let i = 0; i <= 1500; i++){ const x = lo + (hi - lo) * i / 1500; S.push(x); P.push(wifPnl(r.legs, 0, x, lot)); }
+  const S = [], P = []; for (let i = 0; i <= 1500; i++){ const x = lo + (hi - lo) * i / 1500; S.push(x); P.push(wifPnl(r.legs, closedOff(), x, lot)); }
   const margin = r.legs.filter(l => l.side === -1).reduce((a, l) => a + l.lots * lot * S0 / lev, 0), thr = minPct / 100 * margin;
   let iS = 0; S.forEach((x, i) => { if (Math.abs(x - S0) < Math.abs(S[iS] - S0)) iS = i; });
   if (P[iS] >= thr){
@@ -2071,6 +2091,8 @@ $("plout").addEventListener("click", e => {
 });
 
 
+$("cinc").checked = incClosed;
+$("cinc").onchange = () => { incClosed = $("cinc").checked; try { localStorage.setItem("cinc", incClosed ? "1" : "0"); } catch (e) {} drawPosition(); if (lastRes) updateMargin(lastRes, lastNet); };
 // ---------- Apply what-if to the current position ----------
 function readPrev(){ try { return JSON.parse(localStorage.getItem("legsPrev")); } catch (e) { return null; } }
 function showUndo(){ const b = $("wundo"); if (b) b.style.display = readPrev() ? "" : "none"; }
