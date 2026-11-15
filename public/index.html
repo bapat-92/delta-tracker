@@ -135,7 +135,7 @@ h1{padding-right:170px}
 
 <div class="card" id="wifCard">
   <b>What-if adjustments</b>
-  <div class="row" style="margin:8px 0"><button data-wp="clear">Clear</button><span class="note">Results sent from the planner or the call guard appear here with the payoff chart.</span></div>
+  <div class="row" style="margin:8px 0"><button data-wp="clear">Clear</button><button id="wapply">Apply to my current position</button><button id="wundo" style="display:none">Undo last apply</button><span class="note">Results sent from the planner or the call guard appear here with the payoff chart. Apply only after you have placed the trades on Delta.</span></div>
   <div hidden>
     <button data-wp="closecalls"></button><button data-wp="closeputs"></button><button data-wp="closeall"></button><button data-wp="buy3"></button><button data-wp="buy23"></button>
     <select id="wcLeg"></select><input id="wcLots" type="number"><input id="wcPx" type="number"><button id="wcAdd"></button>
@@ -2070,6 +2070,46 @@ $("plout").addEventListener("click", e => {
   const card = $("wifCard"); if (card && card.scrollIntoView) card.scrollIntoView({behavior: "smooth", block: "start"});
 });
 
+
+// ---------- Apply what-if to the current position ----------
+function readPrev(){ try { return JSON.parse(localStorage.getItem("legsPrev")); } catch (e) { return null; } }
+function showUndo(){ const b = $("wundo"); if (b) b.style.display = readPrev() ? "" : "none"; }
+$("wapply").onclick = () => {
+  const acts = wif.acts; if (!acts.length){ $("wmsg").textContent = "Nothing to apply. Load a plan first."; return; }
+  const lot = Number($("lot").value) || 0.001, newLegs = legs.map(L => Object.assign({}, L)), closes = [], adds = [];
+  for (const a of acts){
+    if (a.kind === "close"){
+      const L = newLegs.find(x => x.s === a.sym && (x.side === -1 ? -1 : 1) === a.side && Number(x.lots) > 0);
+      if (!L){ $("wmsg").textContent = "Can't apply: " + a.sym + " isn't in the legs table any more."; return; }
+      const n = Math.min(a.lots, Number(L.lots));
+      closes.push({s: a.sym, side: a.side, lots: n, entry: Number(L.entry) || 0, exit: a.px}); L.lots = Number(L.lots) - n;
+    } else {
+      const same = newLegs.find(x => x.s === a.sym && (x.side === -1 ? -1 : 1) === a.side && Number(x.lots) > 0);
+      if (same){ const tot = Number(same.lots) + a.lots; same.entry = ((Number(same.entry) || 0) * Number(same.lots) + a.px * a.lots) / tot; same.lots = tot; }
+      else newLegs.push({s: a.sym, side: a.side, lots: a.lots, entry: a.px});
+      adds.push(a);
+    }
+  }
+  const real = closes.reduce((t, c) => t + legPnl(c, c.exit, lot), 0);
+  if (!confirm(`Apply ${acts.length} change(s) to your current position?\n\nClosed: ${closes.length} leg(s), realised ${money(real)} (saved to the journal)\nNew legs: ${adds.length}\n\nThis only updates this tracker. It does not place any orders. Use the prices you actually got on Delta: you can edit entries in the legs table afterwards.`)) return;
+  journal = readJournal();
+  const ids = closes.map(c => { const id = Date.now() + "" + Math.floor(Math.random() * 100000);
+    journal.push({id, date: todayStr(), type: "Closed", lot, pnl: legPnl(c, c.exit, lot), legs: [c]}); return id; });
+  try { localStorage.setItem("legsPrev", JSON.stringify({legs, ids, ts: Date.now()})); } catch (e) {}
+  saveJournal();
+  legs = newLegs.filter(L => Number(L.lots) > 0);
+  wif.acts = []; save(); drawInputs(); renderJournal(); renderWhatIf(); showUndo(); tick();
+  $("wmsg").textContent = `Applied. Your legs table now matches the tested position and ${closes.length} closed leg(s) (${money(real)}) went to the journal.`;
+};
+$("wundo").onclick = () => {
+  const pv = readPrev(); if (!pv) return;
+  if (!confirm("Restore the legs table to before the last apply, and remove the journal entries it added?")) return;
+  journal = readJournal().filter(j => !pv.ids.includes(j.id)); pv.ids.forEach(id => addDel(id));
+  saveJournal(); legs = pv.legs; try { localStorage.removeItem("legsPrev"); } catch (e) {}
+  save(); drawInputs(); renderJournal(); renderWhatIf(); showUndo(); tick();
+  $("wmsg").textContent = "Undone: the legs table and journal are back as they were.";
+};
+showUndo();
 
 // ---------- Order list ----------
 let lastTicket = null;
