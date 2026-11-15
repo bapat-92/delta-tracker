@@ -148,6 +148,21 @@ h1{padding-right:170px}
   <div id="wchart"></div>
 </div>
 
+<div class="card" id="ticketCard">
+  <b>Order list (for you to place on Delta)</b>
+  <p class="note" style="margin:4px 0 8px">Turns the changes in the What-if card into an order list: safe order of execution, limit prices from live quotes with a slippage cap, and new sells sized to fit your margin budget. It holds no keys and sends nothing. You place the orders on Delta yourself.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Available balance (USD)<input id="tbal" type="number" min="0" placeholder="uses Total capital if blank"></label>
+    <label>Max margin use (%)<input id="tpct" type="number" min="1" max="100" step="1" value="25"></label>
+    <label>Slippage cap on limits (%)<input id="tslip" type="number" min="0" step="0.1" value="1"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="tscale" type="checkbox" style="width:auto" checked> Scale new sells to fit</label>
+    <button id="tbuild">Build order list</button>
+    <button id="tcopy">Copy list</button>
+  </div>
+  <div id="tmsg" class="note">Load a plan into the What-if card first (from the planner or the call guard).</div>
+  <div id="tout" class="wrap"></div>
+</div>
+
 <div class="card" id="planCard">
   <b>Adjustment planner (next 0.5% move)</b>
   <p class="note" style="margin:4px 0 8px">Checks the odds, then for a 0.5% fall and a 0.5% rise tries combinations of keeping, rolling or closing each side, and ranks the three best by the widest profit range at expiry. Planning only: it places no orders.</p>
@@ -2056,6 +2071,62 @@ $("plout").addEventListener("click", e => {
 });
 
 
+// ---------- Order list ----------
+let lastTicket = null;
+function ticketBuild(base, acts, quotes, cfg, lot, spot, lev){
+  const slip = Math.max(0, Number(cfg.slip) || 0) / 100, per = lot * spot / lev;
+  const budget = Math.max(0, Number(cfg.bal) || 0) * Math.max(0, Number(cfg.pct) || 0) / 100;
+  const full = applyActs(base, acts, lot), shortsFull = full.legs.filter(l => l.side === -1).reduce((a, l) => a + l.lots, 0);
+  const newSell = acts.filter(a => a.kind === "add" && a.side < 0).reduce((a, x) => a + x.lots, 0), kept = shortsFull - newSell;
+  const allowed = Math.max(0, budget / per - kept);
+  const factor = newSell > 0 && cfg.scale ? Math.min(1, allowed / newSell) : 1;
+  const acts2 = acts.map(a => (a.kind === "add" && a.side < 0 && factor < 1) ? Object.assign({}, a, {lots: Math.floor(a.lots * factor)}) : Object.assign({}, a)).filter(a => a.lots > 0);
+  const after = applyActs(base, acts2, lot), shortsAfter = after.legs.filter(l => l.side === -1).reduce((a, l) => a + l.lots, 0);
+  const before = base.filter(l => l.side === -1).reduce((a, l) => a + l.lots, 0);
+  const rank = a => a.kind === "close" ? (a.side < 0 ? 0 : 2) : (a.side > 0 ? 1 : 3);   // buy-backs, new buys, sell-outs, new sells
+  const rows = acts2.map((a, i) => {
+    const q = quotes[a.sym] || {}, buy = a.kind === "close" ? a.side < 0 : a.side > 0;
+    const ref = buy ? (q.ask > 0 ? q.ask : a.px) : (q.bid > 0 ? q.bid : a.px);
+    const limit = buy ? ref * (1 + slip) : ref * (1 - slip);
+    return {i, sym: a.sym, buy, lots: a.lots, limit, reduce: a.kind === "close", rank: rank(a), live: buy ? q.ask > 0 : q.bid > 0, cash: (buy ? -1 : 1) * limit * a.lots * lot};
+  }).sort((a, b) => a.rank - b.rank || a.i - b.i);
+  const orig = acts.reduce((a, x) => a + x.lots, 0), now = acts2.reduce((a, x) => a + x.lots, 0);
+  return {rows, budget, marBefore: before * per, marAfter: shortsAfter * per, factor, scaled: factor < 1, cash: rows.reduce((a, r) => a + r.cash, 0),
+    ok: shortsAfter * per <= budget + 1e-9, dropped: orig - now, newSell, bal: Number(cfg.bal) || 0};
+}
+function ticketText(t, lot){
+  return t.rows.map((r, n) => `${n + 1}. ${r.buy ? "BUY" : "SELL"} ${r.sym} ×${f(r.lots, 0)} lots (${f(r.lots * lot, 3)} BTC) LIMIT ${f(r.limit)}${r.reduce ? " reduce-only" : ""}`).join("\n");
+}
+function renderTicket(t, lot){
+  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  $("tout").innerHTML = `<table><thead><tr><th style="text-align:left">#</th><th style="text-align:left">Order</th><th style="text-align:left">Symbol</th><th>Lots</th><th>BTC</th><th>Limit price</th><th>Cash at limit</th></tr></thead><tbody>` +
+    t.rows.map((r, n) => `<tr><td style="text-align:left">${n + 1}</td><td style="text-align:left"><b class="${r.buy ? "g" : "l"}">${r.buy ? "BUY" : "SELL"}</b>${r.reduce ? " <span class=\"note\">reduce-only</span>" : ""}</td><td style="text-align:left">${esc(r.sym)}</td><td>${f(r.lots, 0)}</td><td>${f(r.lots * lot, 3)}</td><td>${f(r.limit)}${r.live ? "" : " <span class=\"note\">(model price, no live quote)</span>"}</td><td class="${sg(r.cash)}">${usd(r.cash)}</td></tr>`).join("") +
+    `<tr><td colspan="6" style="text-align:left"><b>Net cash if all fill at the limits</b></td><td class="${sg(t.cash)}"><b>${usd(t.cash)}</b></td></tr></tbody></table>` +
+    `<p>Margin estimate (shorts only, rough): <b>$${f(t.marBefore, 0)}</b> now → <b class="${t.ok ? "g" : "l"}">$${f(t.marAfter, 0)}</b> after. Budget <b>$${f(t.budget, 0)}</b> (${t.bal ? f(t.budget / t.bal * 100, 0) + "% of $" + f(t.bal, 0) : "no balance entered"}). ${t.ok ? "Within budget." : "<b class=\"l\">Over budget: lower the sizes or raise the margin share.</b>"}</p>` +
+    (t.scaled ? `<p class="note"><b>New sells were scaled to ${f(t.factor * 100, 0)}% so margin fits.</b> ${f(t.dropped, 0)} lots less than the plan. Bought legs were not scaled, so check the hedge still makes sense in the What-if card.</p>` : "") +
+    `<p class="note">Place them in this order: buy-backs first, then new longs, then sell-outs, and new shorts last, so margin never jumps in between. Use limit orders, and re-check the price on Delta before each one. Delta's real margin (spreads can need less) may differ from this estimate.</p>`;
+}
+$("tbuild").onclick = async () => {
+  const msg = $("tmsg"); msg.className = "note";
+  if (!wif.acts.length){ msg.className = "note l"; msg.textContent = "The What-if card is empty. Load a plan first."; return; }
+  const lot = Number($("lot").value) || 0.001, lev = Number($("lev").value) || 1, spot = lastSpotVal;
+  if (!spot){ msg.className = "note l"; msg.textContent = "Waiting for the BTC price."; return; }
+  const bal = Number($("tbal").value) || Number($("cap").value) || 0;
+  if (!(bal > 0)){ msg.className = "note l"; msg.textContent = "Enter your available balance (or Total capital in Position sizing)."; return; }
+  msg.textContent = "Fetching live quotes…";
+  const base_ = $("base").value.replace(/\/$/, ""), syms = [...new Set(wif.acts.map(a => a.sym))], quotes = {};
+  const res = await Promise.allSettled(syms.map(x => getLeg(base_, x)));
+  res.forEach((r, i) => { if (r.status === "fulfilled" && r.value){ const q = r.value.quotes || {}; quotes[syms[i]] = {bid: num(q.best_bid), ask: num(q.best_ask)}; } });
+  const cfg = {bal, pct: $("tpct").value, slip: $("tslip").value, scale: $("tscale").checked};
+  lastTicket = ticketBuild(wifLegs(lot), wif.acts, quotes, cfg, lot, spot, lev);
+  msg.textContent = `Built ${lastTicket.rows.length} orders from live quotes at ${new Date().toLocaleTimeString()}.`;
+  renderTicket(lastTicket, lot);
+};
+$("tcopy").onclick = async () => {
+  if (!lastTicket){ $("tmsg").textContent = "Build the list first."; return; }
+  try { await navigator.clipboard.writeText(ticketText(lastTicket, Number($("lot").value) || 0.001)); $("tmsg").textContent = "Copied."; } catch (e) { $("tmsg").textContent = "Couldn't copy. Select the table instead."; }
+};
+
 // ---------- Call-side guard ----------
 let guard = {on: false, price: "", mult: 2, buf: 0.5, sec: 15, sound: true};
 try { Object.assign(guard, JSON.parse(localStorage.getItem("guard")) || {}); } catch (e) {}
@@ -2262,7 +2333,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
