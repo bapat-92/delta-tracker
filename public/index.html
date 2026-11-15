@@ -167,6 +167,19 @@ h1{padding-right:170px}
   <div id="wchart"></div>
 </div>
 
+<div class="card" id="planCard">
+  <b>Adjustment planner (next 0.5% move)</b>
+  <p class="note" style="margin:4px 0 8px">Checks the odds, then for a 0.5% fall and a 0.5% rise tries combinations of keeping, rolling or closing each side, and ranks the three best by the widest profit range at expiry. Planning only: it places no orders.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Move step (%)<input id="pstep" type="number" min="0.1" step="0.1" value="0.5"></label>
+    <label>History look-back (days)<input id="pdays" type="number" min="3" max="30" value="30"></label>
+    <label>Profit counts from (% of margin)<input id="ppct" type="number" min="0" step="0.5" value="0"></label>
+    <button id="plrun">Run planner</button>
+  </div>
+  <div id="plmsg" class="note">Uses your current legs, the live chain for their expiry and the expiry time in the strike backtest card (UTC).</div>
+  <div id="plout"></div>
+</div>
+
 <div class="card" id="journalCard">
   <b>Journal (closed and expired positions)</b>
   <div class="wrap"><table>
@@ -1766,6 +1779,254 @@ $("wadd").onclick = () => {
 };
 
 
+// ---------- Adjustment planner ----------
+function normCdf(x){
+  const t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989423 * Math.exp(-x * x / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
+function bsPx(S, K, T, v, t){
+  if (T <= 0 || v <= 0) return t === "C" ? Math.max(S - K, 0) : Math.max(K - S, 0);
+  const d1 = (Math.log(S / K) + 0.5 * v * v * T) / (v * Math.sqrt(T)), d2 = d1 - v * Math.sqrt(T);
+  return t === "C" ? S * normCdf(d1) - K * normCdf(d2) : K * normCdf(-d2) - S * normCdf(-d1);
+}
+function impVol(S, K, T, price, t){
+  const intr = t === "C" ? Math.max(S - K, 0) : Math.max(K - S, 0);
+  if (!(price > intr + 1e-9)) return null;
+  let lo = 0.01, hi = 5;
+  for (let i = 0; i < 80; i++){ const m = (lo + hi) / 2; if (bsPx(S, K, T, m, t) > price) hi = m; else lo = m; }
+  return (lo + hi) / 2;
+}
+function expiryMs(code, hm){
+  const sec = hmSec(hm);
+  return Date.UTC(2000 + Number(code.slice(4)), Number(code.slice(2, 4)) - 1, Number(code.slice(0, 2))) + (sec === null ? 43200 : sec) * 1000;
+}
+
+function buildSmile(chain, S0, T){
+  const pts = [], hmap = {};
+  const add = (o, t, useIv) => {
+    const mk = o.mark;
+    hmap[t + o.strike] = (o.bid > 0 && o.ask > 0 && mk > 0) ? Math.min(0.1, Math.max(0.005, (o.ask - o.bid) / (2 * mk))) : 0.02;
+    if (useIv && mk > 0){ const v = impVol(S0, o.strike, T, mk, t); if (v !== null) pts.push([o.strike, v]); }
+  };
+  chain.calls.forEach(o => add(o, "C", o.strike >= S0));
+  chain.puts.forEach(o => add(o, "P", o.strike <= S0));
+  pts.sort((a, b) => a[0] - b[0]);
+  const ivAt = K => {
+    if (!pts.length) return 0.5;
+    if (K <= pts[0][0]) return pts[0][1];
+    if (K >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+    for (let i = 1; i < pts.length; i++){ if (K <= pts[i][0]){ const a = pts[i - 1], b = pts[i]; return a[1] + (b[1] - a[1]) * (K - a[0]) / (b[0] - a[0] || 1); } }
+    return pts[pts.length - 1][1];
+  };
+  return {ivAt, hAt: (t, K) => hmap[t + K] === undefined ? 0.02 : hmap[t + K], n: pts.length};
+}
+
+function histSamples(candles, H){
+  const ret = [], mn = [], mx = [];
+  for (let i = 0; i + H <= candles.length; i++){
+    if (candles[i + H - 1].time - candles[i].time !== (H - 1) * 300) continue;
+    let lo = Infinity, hi = -Infinity;
+    for (let k = i; k < i + H; k++){ if (candles[k].low < lo) lo = candles[k].low; if (candles[k].high > hi) hi = candles[k].high; }
+    const o = candles[i].open;
+    ret.push(Math.log(candles[i + H - 1].close / o)); mn.push(lo / o - 1); mx.push(hi / o - 1);
+  }
+  return {ret, mn, mx};
+}
+
+function planModel(chain, S0, T){
+  const sm = buildSmile(chain, S0, T);
+  const listed = {C: chain.calls.slice().sort((a, b) => a.strike - b.strike), P: chain.puts.slice().sort((a, b) => a.strike - b.strike)};
+  const price = (t, K, Ss) => bsPx(Ss, K, T, sm.ivAt(K), t);
+  const trade = (t, K, Ss, side) => price(t, K, Ss) * (side > 0 ? 1 + sm.hAt(t, K) : 1 - sm.hAt(t, K));   // buys pay a little more, sells get a little less
+  const nearest = (t, target) => listed[t].reduce((b, o) => !b || Math.abs(o.strike - target) < Math.abs(b.strike - target) ? o : b, null);
+  return {sm, listed, price, trade, nearest, T};
+}
+
+function sideActs(g, action, groupLegs, model, m){
+  if (action === "keep") return {acts: [], ok: true};
+  const closing = action === "rollsold" ? groupLegs.filter(l => l.side === -1) : groupLegs;
+  const acts = closing.map(l => ({kind: "close", sym: l.s, side: l.side, lots: l.lots, px: model.trade(g, l.k, m.Ss, -l.side)}));
+  if (action === "close") return {acts, ok: true};
+  const keptLongs = action === "rollsold" ? groupLegs.filter(l => l.side === 1) : [];
+  const news = closing.map(l => model.nearest(g, l.k * (1 + m.dir * m.step)));
+  if (news.some(o => !o)) return {ok: false};
+  const strikes = news.map(o => o.strike);
+  const soldIdx = closing.map((l, i) => l.side === -1 ? i : -1).filter(i => i >= 0), longIdx = closing.map((l, i) => l.side === 1 ? i : -1).filter(i => i >= 0);
+  const ordered = () => {        // the sold strike must stay further out than the long strike (puts: lower, calls: higher)
+    const longK = keptLongs.map(l => l.k).concat(longIdx.map(i => strikes[i]));
+    return soldIdx.every(i => longK.every(lk => g === "P" ? strikes[i] < lk : strikes[i] > lk));
+  };
+  if (!ordered() && action === "rollboth" && soldIdx.length && longIdx.length){
+    const listedK = model.listed[g].map(o => o.strike);      // rounding pulled the strikes together: move each long leg one listed strike toward the money
+    longIdx.forEach(i => {
+      const maxSold = Math.max(...soldIdx.map(j => strikes[j])), minSold = Math.min(...soldIdx.map(j => strikes[j]));
+      const fix = g === "P" ? listedK.find(k => k > maxSold) : [...listedK].reverse().find(k => k < minSold);
+      if (fix !== undefined){ strikes[i] = fix; news[i] = model.listed[g].find(o => o.strike === fix); }
+    });
+  }
+  if (!ordered()) return {ok: false};
+  if (closing.every((l, i) => strikes[i] === l.k)) return {ok: false};          // rolling to the same strikes changes nothing
+  closing.forEach((l, i) => acts.push({kind: "add", sym: news[i].symbol, side: l.side, lots: l.lots, px: model.trade(g, strikes[i], m.Ss, l.side)}));
+  return {acts, ok: true};
+}
+
+function genPlans(base, model, m){
+  const grp = {C: base.filter(l => l.c), P: base.filter(l => !l.c)};
+  const choices = g => grp[g].length ? ["keep", "rollboth", "rollsold", "close"] : ["keep"];
+  const out = [];
+  choices("C").forEach(ac => choices("P").forEach(ap => {
+    const c = sideActs("C", ac, grp.C, model, m), p = sideActs("P", ap, grp.P, model, m);
+    if (!c.ok || !p.ok) return;
+    out.push({calls: ac, puts: ap, acts: (c.acts || []).concat(p.acts || [])});
+  }));
+  return out;
+}
+
+function planGrid(Ss, T, sigma){
+  const n = 1200, lo = Ss * 0.7, hi = Ss * 1.3, S = [];
+  for (let i = 0; i <= n; i++) S.push(lo + (hi - lo) * i / n);
+  const st = sigma * Math.sqrt(T), mu = Math.log(Ss) - sigma * sigma * T / 2;
+  const edge = i => i <= 0 ? -Infinity : i > n ? Infinity : (S[i - 1] + S[i]) / 2;
+  const w = S.map((x, i) => { const a = i === 0 ? 0 : normCdf((Math.log(edge(i)) - mu) / st), b = i === n ? 1 : normCdf((Math.log(edge(i + 1)) - mu) / st); return Math.max(0, b - a); });
+  const tot = w.reduce((a, v) => a + v, 0) || 1;
+  return {S, w: w.map(v => v / tot)};
+}
+
+function evalPlan(base, acts, m){
+  const r = applyActs(base, acts, m.lot), g = m.grid, Ls = r.legs;
+  const pn = g.S.map(S => wifPnl(Ls, r.realised, S, m.lot));
+  const margin = Ls.filter(l => l.side === -1).reduce((a, l) => a + l.lots * m.lot * m.Ss / m.lev, 0), thr = m.minPct / 100 * margin;
+  let iS = 0; g.S.forEach((S, i) => { if (Math.abs(S - m.Ss) < Math.abs(g.S[iS] - m.Ss)) iS = i; });
+  let lo = null, hi = null, width = 0;
+  if (pn[iS] >= thr){ let a = iS, b = iS; while (a > 0 && pn[a - 1] >= thr) a--; while (b < pn.length - 1 && pn[b + 1] >= thr) b++; lo = g.S[a]; hi = g.S[b]; width = hi - lo; }
+  let pI = 0, eI = 0; pn.forEach((v, i) => { if (v >= thr) pI += g.w[i]; eI += g.w[i] * v; });
+  let pH = null, eH = null;
+  if (m.hist && m.hist.ret.length){
+    let c = 0, e = 0; m.hist.ret.forEach(x => { const v = wifPnl(Ls, r.realised, m.Ss * Math.exp(x), m.lot); if (v >= thr) c++; e += v; });
+    pH = c / m.hist.ret.length; eH = e / m.hist.ret.length;
+  }
+  const slope = Ls.reduce((a, l) => a + (l.c ? l.side * l.lots * m.lot : 0), 0);
+  return {acts, legs: Ls, realised: r.realised, cash: r.cash, margin, thr, lo, hi, width, atSpot: wifPnl(Ls, r.realised, m.Ss, m.lot),
+    pI, eI, pH, eH, worst: Math.min(...pn), unlimited: slope < 0, atEdge: lo !== null && (lo <= g.S[0] || hi >= g.S[g.S.length - 1])};
+}
+
+function planScenario(base, model, dir, m0){
+  const Ss = m0.S0 * (1 + dir * m0.step), sigma = model.sm.ivAt(Ss);
+  const m = Object.assign({}, m0, {Ss, dir, sigma, grid: planGrid(Ss, m0.T, sigma)});
+  const plans = genPlans(base, model, m).map(pl => Object.assign(pl, evalPlan(base, pl.acts, m)));
+  const baseline = plans.find(p => p.calls === "keep" && p.puts === "keep") || evalPlan(base, [], m);
+  const cands = plans.filter(p => p.acts.length);
+  cands.sort((a, b) => b.width - a.width || b.atSpot - a.atSpot || b.eI - a.eI);
+  return {Ss, sigma, baseline, top: cands.slice(0, 3), count: cands.length};
+}
+
+function planEvents(S0, step, sigma, T, hist){
+  const L = S0 * (1 - step), U = S0 * (1 + step), st = sigma * Math.sqrt(T), mu = Math.log(S0) - sigma * sigma * T / 2;
+  const imp = {touchDn: Math.min(1, 2 * normCdf(Math.log(L / S0) / st)), touchUp: Math.min(1, 2 * (1 - normCdf(Math.log(U / S0) / st))),
+    belowDn: normCdf((Math.log(L) - mu) / st), aboveUp: 1 - normCdf((Math.log(U) - mu) / st)};
+  let h = null;
+  if (hist && hist.ret.length){
+    const n = hist.ret.length, fr = a => a / n;
+    h = {touchDn: fr(hist.mn.filter(x => x <= -step).length), touchUp: fr(hist.mx.filter(x => x >= step).length),
+      belowDn: fr(hist.ret.filter(x => x <= Math.log(L / S0)).length), aboveUp: fr(hist.ret.filter(x => x >= Math.log(U / S0)).length), n};
+  }
+  return {imp, hist: h, L, U};
+}
+
+let lastPlan = null;
+const pct1 = v => v === null || v === undefined ? "–" : f(v * 100, 0) + "%";
+function planActLines(acts){
+  return acts.map(a => `${a.kind === "close" ? (a.side < 0 ? "Buy back" : "Sell out") : (a.side > 0 ? "Buy" : "Sell")} ${esc(a.sym)} ×${f(a.lots, 0)} at ~${f(a.px)}`).join("<br>");
+}
+function planCards(list, dir, Ss){
+  if (!list.length) return `<p class="note">No valid combinations for this move.</p>`;
+  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  return `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:8px">` + list.map((c, n) => `
+    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
+      <b style="font-size:16px">#${n + 1} · ${c.width > 0 ? "range " + f(c.width, 0) + " (" + f(c.width / Ss * 100, 1) + "%)" : "no profit zone"}</b>
+      <div class="note" style="margin:2px 0 4px">Calls: ${c.calls === "rollboth" ? "roll both legs" : c.calls === "rollsold" ? "roll the sold leg" : c.calls === "close" ? "close" : "keep"} · Puts: ${c.puts === "rollboth" ? "roll both legs" : c.puts === "rollsold" ? "roll the sold leg" : c.puts === "close" ? "close" : "keep"}</div>
+      ${c.width > 0 ? `<div class="note" style="margin-bottom:4px">Profit from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>` : ""}
+      <div style="font-size:13px;margin-bottom:6px">${planActLines(c.acts)}</div>
+      <div class="note">Cash for these trades ${usd(c.cash)} · realised ${usd(c.realised)}<br>Total P&amp;L at expiry if BTC stays at the new level: <b class="${c.atSpot >= 0 ? "g" : "l"}">${usd(c.atSpot)}</b><br>
+        Chance of profit: implied <b>${pct1(c.pI)}</b> · history <b>${pct1(c.pH)}</b><br>Expected P&amp;L (model): implied ${usd(c.eI)} · history ${c.eH === null ? "–" : usd(c.eH)}<br>Worst P&amp;L within ±30%: ${usd(c.worst)}${c.unlimited ? " · losses uncapped above the sold calls" : ""}</div>
+      <p style="margin:8px 0 0"><button data-pl="${dir}:${n}">Show in what-if</button></p></div>`).join("") + `</div>`;
+}
+
+function renderPlan(info){
+  const {S0, step, exp, T, status, ev, down, up, base, sigma0, histN, base0} = info;
+  const e = ev, row = (lbl, a, b) => `<tr><td style="text-align:left">${lbl}</td><td>${pct1(a)}</td><td>${pct1(b)}</td></tr>`;
+  let h = `<p style="margin-top:8px"><b>${esc(status.text)}</b></p>`;
+  h += `<p class="note">Spot ${f(S0, 0)} · expiry ${esc(exp)} in ${f(T, 2)} days · implied volatility near spot ${f(sigma0 * 100, 0)}% · ${histN ? f(histN, 0) + " historical windows" : "no candle history"}</p>`;
+  h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Chance, from now to expiry</th><th>Implied (options market)</th><th>History (past candles)</th></tr></thead><tbody>` +
+    row(`BTC touches ${f(e.L, 0)} (−${f(step * 100, 1)}%)`, e.imp.touchDn, e.hist && e.hist.touchDn) +
+    row(`BTC touches ${f(e.U, 0)} (+${f(step * 100, 1)}%)`, e.imp.touchUp, e.hist && e.hist.touchUp) +
+    row(`Finishes below ${f(e.L, 0)}`, e.imp.belowDn, e.hist && e.hist.belowDn) +
+    row(`Finishes above ${f(e.U, 0)}`, e.imp.aboveUp, e.hist && e.hist.aboveUp) +
+    row("Your current legs finish in profit (no adjustment)", base0.pI, base0.pH) + `</tbody></table></div>`;
+  h += `<p style="margin:14px 0 0"><b>If BTC falls ${f(step * 100, 1)}% to ${f(down.Ss, 0)}</b> <span class="note">roll the range down: best 3 by widest profit range (${down.count} combinations tried)</span></p>` +
+    `<div class="note">Without any change you'd have: P&amp;L at expiry if BTC stays ${usdP(down.baseline.atSpot)} · chance of profit implied ${pct1(down.baseline.pI)} / history ${pct1(down.baseline.pH)}</div>` + planCards(down.top, "down", down.Ss);
+  h += `<p style="margin:14px 0 0"><b>If BTC rises ${f(step * 100, 1)}% to ${f(up.Ss, 0)}</b> <span class="note">roll the range up: best 3 by widest profit range (${up.count} combinations tried)</span></p>` +
+    `<div class="note">Without any change you'd have: P&amp;L at expiry if BTC stays ${usdP(up.baseline.atSpot)} · chance of profit implied ${pct1(up.baseline.pI)} / history ${pct1(up.baseline.pH)}</div>` + planCards(up.top, "up", up.Ss);
+  h += `<p class="note">How to read this: prices for the closes and new strikes at the moved BTC level are model estimates (Black-Scholes using each strike's implied volatility from the live chain today, plus the bid-ask spread seen now), so real quotes will differ. Implied odds assume a lognormal move with the options market's volatility near that level; history odds replay past ${f(T, 1)}-day moves from the candles. "Range" is where the total result at expiry is at or above your profit threshold and contains the new BTC level. Fees aren't included. A wider range isn't lower risk, and neither odds are a forecast.</p>`;
+  $("plout").innerHTML = h;
+}
+const usdP = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+
+function planStatus(base, S0, lot, lev, minPct){
+  const r = applyActs(base, [], lot), ks = base.map(l => l.k), lo = Math.min(S0 * 0.7, Math.min(...ks) * 0.9), hi = Math.max(S0 * 1.3, Math.max(...ks) * 1.1);
+  const S = [], P = []; for (let i = 0; i <= 1500; i++){ const x = lo + (hi - lo) * i / 1500; S.push(x); P.push(wifPnl(r.legs, 0, x, lot)); }
+  const margin = r.legs.filter(l => l.side === -1).reduce((a, l) => a + l.lots * lot * S0 / lev, 0), thr = minPct / 100 * margin;
+  let iS = 0; S.forEach((x, i) => { if (Math.abs(x - S0) < Math.abs(S[iS] - S0)) iS = i; });
+  if (P[iS] >= thr){
+    let a = iS, b = iS; while (a > 0 && P[a - 1] >= thr) a--; while (b < P.length - 1 && P[b + 1] >= thr) b++;
+    return {kind: "inside", lo: S[a], hi: S[b], text: `BTC is inside your profit range (${f(S[a], 0)} to ${f(S[b], 0)}): ${f(S0 - S[a], 0)} above the lower edge and ${f(S[b] - S0, 0)} below the upper edge.`};
+  }
+  let below = null, above = null;
+  for (let i = 0; i < S.length; i++){ if (P[i] >= thr){ if (S[i] < S0) below = S[i]; else if (above === null) above = S[i]; } }
+  if (below !== null && (above === null || S0 - below <= above - S0)) return {kind: "above", text: `BTC has crossed above your profit range (it ends near ${f(below, 0)}), so the upside plan (roll up) is the relevant one.`};
+  if (above !== null) return {kind: "below", text: `BTC has crossed below your profit range (it starts near ${f(above, 0)}), so the downside plan (roll down) is the relevant one.`};
+  return {kind: "none", text: "Your current legs have no profit zone at your threshold: both plans below are damage-limiting."};
+}
+
+$("plrun").onclick = async () => {
+  const msg = $("plmsg"); msg.className = "note";
+  const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, step = (Number($("pstep").value) || 0.5) / 100;
+  const days = Math.min(30, Math.max(3, Number($("pdays").value) || 30)), minPct = Math.max(0, Number($("ppct").value) || 0);
+  const base = wifLegs(lot);
+  if (!base.length){ msg.className = "note l"; msg.textContent = "Add legs with lots first."; return; }
+  const exps = [...new Set(base.map(l => l.s.split("-")[3]))];
+  if (exps.length > 1){ msg.className = "note l"; msg.textContent = "Your legs have different expiries (" + exps.join(", ") + "). The planner needs one expiry."; return; }
+  const exp = exps[0], Tdays = (expiryMs(exp, $("bexp").value) - Date.now()) / 86400000;
+  if (!(Tdays > 0.01)){ msg.className = "note l"; msg.textContent = "Expiry " + exp + " has passed or is about to, so there's nothing to plan."; return; }
+  const T = Tdays / 365;                                   // years, for the option maths
+  msg.textContent = "Loading the chain and candle history…"; $("plout").innerHTML = "";
+  try {
+    const base_ = $("base").value.replace(/\/$/, "");
+    const [chain, candles] = await Promise.all([fetchChain(exp), fetchCandles(base_, "BTCUSD", days).catch(() => [])]);
+    if (!chain.calls.length || !chain.puts.length){ msg.className = "note l"; msg.textContent = "No options found for expiry " + exp + "."; return; }
+    const S0 = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, model = planModel(chain, S0, T);
+    const hist = candles.length > 600 ? histSamples(candles, Math.max(12, Math.round(Tdays * 288))) : null;
+    const m0 = {S0, step, T, lot, lev, minPct, hist};
+    const sigma0 = model.sm.ivAt(S0), g0 = planGrid(S0, T, sigma0);
+    const base0 = evalPlan(base, [], Object.assign({}, m0, {Ss: S0, dir: 0, sigma: sigma0, grid: g0}));
+    const down = planScenario(base, model, -1, m0), up = planScenario(base, model, 1, m0);
+    const info = {S0, step, exp, T: Tdays, status: planStatus(base, S0, lot, lev, minPct), ev: planEvents(S0, step, sigma0, T, hist), down, up, base, sigma0, histN: hist ? hist.ret.length : 0, base0};
+    lastPlan = {down: down.top, up: up.top};
+    msg.textContent = hist ? "Done." : "Done, but there was too little candle history, so only the implied odds are shown.";
+    renderPlan(info);
+  } catch (e){ msg.className = "note l"; msg.textContent = "Planner failed: " + e.message; }
+};
+$("plout").addEventListener("click", e => {
+  const v = e.target.dataset.pl; if (!v || !lastPlan) return;
+  const [dir, n] = v.split(":"), c = (lastPlan[dir] || [])[Number(n)]; if (!c) return;
+  wif.acts = c.acts.map(a => Object.assign({}, a));
+  $("wmsg").textContent = "Loaded planner option #" + (Number(n) + 1) + " (" + dir + " move). Its prices at the moved BTC level are model estimates.";
+  renderWhatIf();
+  const card = $("wifCard"); if (card && card.scrollIntoView) card.scrollIntoView({behavior: "smooth", block: "start"});
+});
+
+
 // ---------- Move trigger ----------
 let trig = {armed: false, ref: null, step: 1, prem: 100, exp: "", needAnchor: false, log: []};
 try { const d = JSON.parse(localStorage.getItem("trig")); if (d) trig = Object.assign(trig, d); } catch (e) {}
@@ -1868,7 +2129,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["planCard", "Adjustment planner"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
