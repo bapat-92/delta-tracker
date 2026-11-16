@@ -304,7 +304,8 @@ h1{padding-right:170px}
     <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
     <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
-    <label>Allowed worst loss (% of margin)<input id="iplim" type="number" min="0.5" step="0.5" value="10"></label>
+    <label>Allowed worst loss (% of margin)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
+    <label>Minimum profit if BTC stays ($)<input id="iprmin" type="number" step="1" value="0"></label>
     <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
     <button id="ifind">Find combinations</button>
   </div>
@@ -1436,53 +1437,82 @@ function batCards(list, spot, labels, equi){
 // ---------- Batman protection (outside wings) ----------
 // Delta options fee: GST x min(0.01% of notional, 3.5% of premium)
 const feeOpt = (lots, px, spot, lot) => 1.18 * Math.min(0.0001 * lots * lot * spot, 0.035 * px * lots * lot);
-function protectSearch(c, chain, spot, limitPct, lot){
-  const net = c.sold - c.bought; if (net < 1) return null;
-  const lim = limitPct / 100 * c.margin, grid = c.grid;
-  const BL = [{c: true, K: c.callShort.strike, side: -1, n: c.sold, e: c.callShort.bid}, {c: true, K: c.callLong.strike, side: 1, n: c.bought, e: c.callLong.ask},
-              {c: false, K: c.putShort.strike, side: -1, n: c.sold, e: c.putShort.bid}, {c: false, K: c.putLong.strike, side: 1, n: c.bought, e: c.putLong.ask}];
-  const pay = (L, S) => L.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.n * lot, 0);
-  const cost = ws => ws.reduce((a, w) => a + w.e * w.n * lot + feeOpt(w.n, w.e, spot, lot), 0);
-  const mults = [0.4, 0.7, 1, 1.4];
-  const side = isCall => {
+function protectSearch(c, chain, spot, limitPct, lot, minProfit){
+  const lim = limitPct / 100 * c.margin, pmin = Number(minProfit) || 0, grid = c.grid;
+  const u = Math.max(1, Math.round(c.sold / 20));
+  const sideWings = isCall => {
     const opts = (isCall ? chain.calls : chain.puts).filter(o => o.ask > 0 && (isCall ? o.strike > c.callShort.strike && o.strike <= spot * 1.15 : o.strike < c.putShort.strike && o.strike >= spot * 0.85))
-      .sort((a, b) => isCall ? a.strike - b.strike : b.strike - a.strike).slice(0, 16);
-    const lotSets = mults.map(m => Math.max(1, Math.round(net * m)));
+      .sort((a, b) => isCall ? a.strike - b.strike : b.strike - a.strike).slice(0, 8);
     const cand = [[]];
-    opts.forEach(o => lotSets.forEach(n => cand.push([{o, n}])));
+    opts.forEach(o => { for (let k = 1; k <= 20; k++) cand.push([{o, n: u * k}]); });
     for (let i = 0; i < opts.length; i++) for (let j = i + 1; j < opts.length; j++)
-      lotSets.forEach(n1 => lotSets.forEach(n2 => cand.push([{o: opts[i], n: n1}, {o: opts[j], n: n2}])));
-    return cand.map(w => {
+      for (let k = 1; k <= 10; k++) for (let m = 1; m <= 10; m++) cand.push([{o: opts[i], n: 2 * u * k}, {o: opts[j], n: 2 * u * m}]);
+    return cand.map(w => ({w, tot: w.reduce((a, x) => a + x.n, 0)}));
+  };
+  const W = {true: sideWings(true), false: sideWings(false)};
+  const legPay = (l, S) => l.n * lot * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.side;
+  const sideOpts = (isCall, s, b) => {
+    const sh = isCall ? c.callShort : c.putShort, lg = isCall ? c.callLong : c.putLong;
+    const base = [{c: isCall, K: sh.strike, side: -1, n: s, e: sh.bid}].concat(b > 0 ? [{c: isCall, K: lg.strike, side: 1, n: b, e: lg.ask}] : []);
+    const baseFee = base.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
+    const out = [];
+    W[isCall].forEach(({w, tot}) => {
+      if (b + tot < s) return;                                             // tail must be bounded
       const ws = w.map(x => ({c: isCall, K: x.o.strike, side: 1, n: x.n, e: x.o.ask, o: x.o}));
-      const all = BL.concat(ws), ks = all.map(l => l.K);
+      const all = base.concat(ws), ks = all.map(l => l.K);
       const pts = isCall ? [spot, ...ks.filter(k => k >= spot), Math.max(...ks) * 1.5] : [spot, ...ks.filter(k => k <= spot), 0];
-      const cst = cost(ws), fees = ws.reduce((t, w) => t + feeOpt(w.n, w.e, spot, lot), 0), worst = Math.min(...pts.map(S => pay(all, S) - fees));   // pay() already nets the wing premiums
-      return {ws, cost: cst, worst, tot: w.reduce((a, x) => a + x.n, 0)};
+      const fee = baseFee + ws.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
+      const prem = all.reduce((t, l) => t - l.side * l.n * lot * l.e, 0);
+      let worst = Infinity; pts.forEach(S => { const v = all.reduce((t, l) => t + legPay(l, S), 0); if (v < worst) worst = v; });
+      out.push({prof: prem - fee, w: worst - fee, ws});
     });
+    out.sort((a, b2) => b2.prof - a.prof || b2.w - a.w);
+    const keep = []; let bw = -Infinity; out.forEach(x => { if (x.w > bw + 1e-9){ keep.push(x); bw = x.w; } });
+    return keep;
   };
-  const sc = side(true), sp = side(false);
-  const pick = (arr, L) => {
-    const ok = arr.filter(x => x.worst >= -L && (x.ws.length === 0 || x.tot >= net));      // bounded: wings cover the net short lots
-    const base = ok.length ? ok : arr.filter(x => x.tot >= net || x.ws.length === 0);
-    return ok.length ? ok.reduce((b, x) => (x.cost < b.cost - 1e-9 || (Math.abs(x.cost - b.cost) < 1e-9 && x.ws.length < b.ws.length) ? x : b))
-                     : base.reduce((b, x) => x.worst > b.worst ? x : b);
-  };
-  const plans = [["Tight", 0.5], ["Balanced", 1], ["Cheap", 2]].map(([name, m]) => {
-    let a = pick(sc, lim * m), b = pick(sp, lim * m);
-    for (let it = 0; it < 4; it++){ a = pick(sc, Math.max(0, lim * m - b.cost)); b = pick(sp, Math.max(0, lim * m - a.cost)); }   // each side also pays for the other side's wings
-    const ws = a.ws.concat(b.ws), cst = a.cost + b.cost;
-    const tot = grid.map((S, i) => c.tot[i] + ws.reduce((t, w) => t + w.n * lot * (w.c ? Math.max(S - w.K, 0) : Math.max(w.K - S, 0)), 0) - cst);
-    const at = c.tot[grid.reduce((bi, S, i) => Math.abs(S - spot) < Math.abs(grid[bi] - spot) ? i : bi, 0)];
-    let iS = 0; grid.forEach((S, i) => { if (Math.abs(S - spot) < Math.abs(grid[iS] - spot)) iS = i; });
-    let b1 = iS, b2 = iS; while (b1 > 0 && tot[b1 - 1] >= 0) b1--; while (b2 < grid.length - 1 && tot[b2 + 1] >= 0) b2++;
-    return {name, ws, cost: cst, atSpot: tot[iS], worstUp: a.worst - b.cost, worstDown: b.worst - a.cost, worst: Math.min(a.worst - b.cost, b.worst - a.cost), be: [grid[b1], grid[b2]], tot, met: Math.min(a.worst - b.cost, b.worst - a.cost) >= -lim * m - 1e-9, limit: lim * m};
+  const sSet = new Set([c.sold]); for (let k = 1; k <= 20; k++) sSet.add(Math.min(c.sold, u * k));
+  const combos = [];
+  [...sSet].filter(s => s >= 1).sort((a, b) => a - b).forEach(s => {
+    const bSet = new Set([0, Math.round(s * 0.1), Math.round(s * 0.2), Math.round(s * 0.3), Math.round(s * c.bought / c.sold)]);
+    if (s === c.sold) bSet.add(c.bought);
+    [...bSet].filter(b => b >= 0 && b < s).forEach(b => {
+      const co = sideOpts(true, s, b), po = sideOpts(false, s, b);
+      if (co.length && po.length) combos.push({s, b, co, po});
+    });
   });
-  return {plans, lim, net};
+  const full = (s, b, a, p) => {
+    const ws = a.ws.concat(p.ws);
+    const legs = [{c: true, K: c.callShort.strike, side: -1, n: s, e: c.callShort.bid}, {c: true, K: c.callLong.strike, side: 1, n: b, e: c.callLong.ask},
+                  {c: false, K: c.putShort.strike, side: -1, n: s, e: c.putShort.bid}, {c: false, K: c.putLong.strike, side: 1, n: b, e: c.putLong.ask}].concat(ws).filter(l => l.n > 0);
+    const fees = legs.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
+    return grid.map(S => legs.reduce((t, l) => t + legPay(l, S), 0) - fees);
+  };
+  const near = S => grid.reduce((bi, x, i) => Math.abs(x - S) < Math.abs(grid[bi] - S) ? i : bi, 0);
+  const iS = near(spot);
+  const hold = full(c.sold, c.bought, {ws: []}, {ws: []});
+  const groups = [["Keep lots", x => x.s === c.sold && x.b === c.bought], ["Batman-like", x => x.b >= 0.19 * x.s && x.b > 0], ["Max profit", () => true]];
+  const plans = groups.map(([name, ok]) => {
+    let best = null;
+    combos.filter(ok).forEach(g => g.co.forEach(a => g.po.forEach(p => {
+      const prof = a.prof + p.prof, wu = a.w + p.prof, wd = p.w + a.prof, worst = Math.min(wu, wd), met = worst >= -lim - 1e-9 && prof >= pmin - 1e-9;
+      const capOK = worst >= -lim - 1e-9;
+      const score = met ? 3 : capOK ? 2 : 1;
+      const key = score === 1 ? worst : prof;
+      if (!best || score > best.score || (score === best.score && key > best.key + 1e-9)) best = {score, key, s: g.s, b: g.b, a, p, prof, wu, wd, worst, met, capOK};
+    })));
+    if (!best) return {name, none: true};
+    const tot = full(best.s, best.b, best.a, best.p), ws = best.a.ws.concat(best.p.ws);
+    const wcost = ws.reduce((t, w) => t + w.e * w.n * lot + feeOpt(w.n, w.e, spot, lot), 0);
+    let b1 = iS, b2 = iS; while (b1 > 0 && tot[b1 - 1] >= 0) b1--; while (b2 < grid.length - 1 && tot[b2 + 1] >= 0) b2++;
+    return {name, sold: best.s, bought: best.b, ws, cost: wcost, atSpot: tot[iS], profit: best.prof, worstUp: best.wu, worstDown: best.wd, worst: best.worst,
+            be: [grid[b1], grid[b2]], tot, met: best.met, capOK: best.capOK, limit: lim, margin: c.margin * best.s / c.sold};
+  });
+  return {plans, lim, pmin, hold, holdAt: hold[iS]};
 }
 const usdD = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 2);
 function protChart(c, pr){
-  const W = 320, H = 130, L = 6, R = 6, T = 6, B = 6, g = c.grid, cols = {Tight: "var(--gain)", Balanced: "var(--acc)", Cheap: "#d98c00"};
-  const series = [["Hold", c.tot, "var(--mut)"]].concat(pr.plans.map(p => [p.name, p.tot, cols[p.name]]));
+  const W = 320, H = 130, L = 6, R = 6, T = 6, B = 6, g = c.grid, cols = {"Keep lots": "var(--gain)", "Batman-like": "var(--acc)", "Max profit": "#d98c00"};
+  const series = [["Hold", pr.hold, "var(--mut)"]].concat(pr.plans.filter(p => !p.none).map(p => [p.name, p.tot, cols[p.name]]));
   const all = series.flatMap(x => x[1]), lo = Math.min(...all, 0), hi = Math.max(...all, 0), yy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo || 1));
   const xx = i => L + (W - L - R) * i / (g.length - 1);
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:340px;height:auto;display:block"><line x1="${L}" x2="${W - R}" y1="${yy(0).toFixed(1)}" y2="${yy(0).toFixed(1)}" stroke="var(--line)"/>` +
@@ -1490,14 +1520,22 @@ function protChart(c, pr){
     `<div class="note" style="margin:2px 0 6px">P&amp;L at expiry, -15% to +15% of spot. ${series.map(([n, , col]) => `<span style="color:${col};font-weight:700">━ ${n}</span>`).join(" ")}</div>`;
 }
 function protBlock(c, label){
-  const pr = c.prot; if (!pr) return "";
-  if (pr.plans === undefined) return "";
-  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">buy outside calls and puts to cap the loss; allowed worst loss ${usdD(pr.lim)} (Balanced), half (Tight), double (Cheap). Buys at the ask, fees included.</span>` +
-    protChart(c, pr) +
-    pr.plans.map((p, i) => `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> · cost <b>${usdD(p.cost)}</b> · profit if BTC stays <b class="${sg(p.atSpot)}">${usdD(p.atSpot)}</b> (hold ${usdD(c.tot[c.grid.reduce((bi, S, j) => Math.abs(S - c.spot) < Math.abs(c.grid[bi] - c.spot) ? j : bi, 0)])})` +
-      `<br><span class="note">Worst P&amp;L: up ${usdD(p.worstUp)} · down ${usdD(p.worstDown)}${p.met ? "" : " · limit not reachable with the listed strikes"} · ${p.atSpot >= 0 ? "break-even " + beN(p.be[0]) + " to " + beN(p.be[1]) : "no profit zone at this price"}</span>` +
-      (p.ws.length ? `<table style="min-width:0"><tbody>${p.ws.map(w => `<tr><td style="text-align:left">Buy ${w.c ? "call" : "put"}</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("")}</tbody></table>` : `<div class="note">No wings needed on either side.</div>`) +
-      `<button data-iprot="${label}:${i}" style="margin-top:4px">Load with this protection</button></div>`).join("") + `</div>`;
+  const pr = c.prot; if (!pr || pr.plans === undefined) return "";
+  const card = (p, i) => {
+    if (p.none) return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> <span class="note l">no bounded structure exists with the listed strikes (no wings beyond a sold leg).</span></div>`;
+    const resized = p.sold !== c.sold || p.bought !== c.bought;
+    const verdict = p.met ? `<span class="g">meets the cap${pr.pmin ? " and the minimum profit" : ""}</span>` : p.capOK ? `<span class="l">cap met but profit below your minimum</span>` : `<span class="l">cap not reachable, this is the smallest loss found</span>`;
+    return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> · profit if BTC stays <b class="${sg(p.atSpot)}">${usdD(p.atSpot)}</b> after fees (hold ${usdD(pr.holdAt)}) · wings cost <b>${usdD(p.cost)}</b> · ${verdict}` +
+      `<br><span class="note">Worst P&amp;L: up ${usdD(p.worstUp)} · down ${usdD(p.worstDown)} (cap ${usdD(-p.limit)}) · ${p.atSpot >= 0 ? "break-even " + beN(p.be[0]) + " to " + beN(p.be[1]) : "no profit zone at this price"}${resized ? " · est. margin " + usdD(p.margin) : ""}</span>` +
+      `<table style="min-width:0"><tbody><tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(p.sold, 0)}</td><td>${f(c.callShort.bid)}</td></tr>` +
+      (p.bought > 0 ? `<tr><td style="text-align:left">Buy call</td><td>${f(c.callLong.strike, 0)}</td><td>×${f(p.bought, 0)}</td><td>${f(c.callLong.ask)}</td></tr>` : "") +
+      `<tr><td style="text-align:left">Sell put</td><td>${f(c.putShort.strike, 0)}</td><td>×${f(p.sold, 0)}</td><td>${f(c.putShort.bid)}</td></tr>` +
+      (p.bought > 0 ? `<tr><td style="text-align:left">Buy put</td><td>${f(c.putLong.strike, 0)}</td><td>×${f(p.bought, 0)}</td><td>${f(c.putLong.ask)}</td></tr>` : "") +
+      p.ws.map(w => `<tr><td style="text-align:left">Buy ${w.c ? "call" : "put"} (wing)</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("") + `</tbody></table>` +
+      `<button data-iprot="${label}:${i}" style="margin-top:4px">Load this structure</button></div>`;
+  };
+  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of margin)${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
+    protChart(c, pr) + pr.plans.map(card).join("") + `</div>`;
 }
 function renderBat(main, equi, spot, exp, tol){
   let h = "";
@@ -1552,7 +1590,7 @@ $("ifind").onclick = async () => {
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
-    if ($("iprot").checked){ const lim = Number($("iplim").value) || 10; main.concat(equi).forEach(c => { c.prot = protectSearch(c, chain, spot, lim, lot); }); }
+    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0; main.concat(equi).forEach(c => { c.prot = protectSearch(c, chain, spot, lim, lot, pm); }); }
     lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
     $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
     renderBat(main, equi, spot, exp, tol);
@@ -1564,7 +1602,8 @@ $("iout").addEventListener("click", e => {
     const [lab, k] = pl.split(":"), hit = lastBat.find(x => x.label === lab); if (!hit || !hit.c.prot) return;
     const {c} = hit, pp = c.prot.plans[Number(k)];
     const add = (o, side, lots, px) => legs.push({s: o.symbol, side, lots, entry: px});
-    add(c.callShort, -1, c.sold, c.callShort.bid); add(c.callLong, 1, c.bought, c.callLong.ask); add(c.putShort, -1, c.sold, c.putShort.bid); add(c.putLong, 1, c.bought, c.putLong.ask);
+    if (pp.none) return;
+    add(c.callShort, -1, pp.sold, c.callShort.bid); if (pp.bought > 0) add(c.callLong, 1, pp.bought, c.callLong.ask); add(c.putShort, -1, pp.sold, c.putShort.bid); if (pp.bought > 0) add(c.putLong, 1, pp.bought, c.putLong.ask);
     pp.ws.forEach(w => add(w.o, 1, w.n, w.e));
     save(); drawInputs(); tick();
     $("imsg").className = "note"; $("imsg").textContent = `Loaded combination ${lab} with the ${pp.name} protection (${pp.ws.length} extra leg(s)) into the table.`;
