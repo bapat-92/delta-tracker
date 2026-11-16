@@ -114,6 +114,20 @@ h1{padding-right:170px}
   <div>Nearest strike<b id="near">–</b></div>
 </div>
 
+<div class="card" id="impCard">
+  <b>Import from Delta order history</b>
+  <p class="note" style="margin:4px 0 8px">Paste the order history you copied from Delta (the CSV text or the table rows). The orders are replayed in time order, and your current position and the journal are built from them: open contracts become legs with their average entry price, and anything closed goes to the journal. Nothing is sent anywhere.</p>
+  <textarea id="impText" rows="5" style="width:100%;font:12px/1.4 ui-monospace,monospace;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)" placeholder="Time,Contract,Qty,Side,Filled/Remaining,Exec.Price,..."></textarea>
+  <div class="row" style="margin:8px 0">
+    <label>When loading<select id="impMode"><option value="replace">Replace my legs table</option><option value="add">Add to my legs (skip orders already loaded)</option></select></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="impAuto" type="checkbox" style="width:auto" checked> Load automatically on paste</label>
+    <button id="impGo">Load into current position</button>
+    <button id="impClear">Clear</button>
+  </div>
+  <div id="impMsg" class="note"></div>
+  <div id="impOut" class="wrap"></div>
+</div>
+
 <div class="card wrap" id="legsCard">
   <table>
     <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th></th></tr></thead>
@@ -178,6 +192,18 @@ h1{padding-right:170px}
   <div id="tout" class="wrap"></div>
 </div>
 
+<div class="card" id="adjCard">
+  <b>Batman adjustment trigger (alert only)</b>
+  <p class="note" style="margin:4px 0 8px">On each side the payoff climbs in a straight line from your bought strike up to the hump at the sold strike. This watches BTC and alerts when it is halfway along that climb (the trigger), so you can adjust early. It never places orders.</p>
+  <div class="row" style="margin:8px 0">
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="aon" type="checkbox" style="width:auto"> Watch the triggers</label>
+    <label>Trigger point (% of the way from bought to sold strike)<input id="afrac" type="number" min="10" max="100" step="5" value="50"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="asound" type="checkbox" style="width:auto" checked> Beep</label>
+  </div>
+  <div id="astat" class="note">Off.</div>
+  <div id="atab" class="wrap"></div>
+</div>
+
 <div class="card" id="planCard">
   <b>Adjustment planner (next 0.5% move)</b>
   <p class="note" style="margin:4px 0 8px">Checks the odds, then for a 0.5% fall and a 0.5% rise tries combinations of keeping, rolling or closing each side, and ranks the three best by the widest profit range at expiry. Planning only: it places no orders.</p>
@@ -185,6 +211,7 @@ h1{padding-right:170px}
     <label>Move step (%)<input id="pstep" type="number" min="0.1" step="0.1" value="0.5"></label>
     <label>History look-back (days)<input id="pdays" type="number" min="3" max="30" value="30"></label>
     <label>Profit counts from (% of margin)<input id="ppct" type="number" min="0" step="0.5" value="0"></label>
+    <label>Plan from BTC level (blank = now)<input id="pat" type="number" min="0" step="10" placeholder="now"></label>
     <button id="plrun">Run planner</button>
   </div>
   <div class="row" style="margin:8px 0">
@@ -269,9 +296,15 @@ h1{padding-right:170px}
   <p class="note" style="margin:4px 0 8px">Sell more of the outer call and put, buy fewer of the inner ones (your 5,000 sold / 1,500 bought structure). It tries many strike combinations from the live chain and ranks them by the BTC price range at expiry where profit stays at or above your minimum share of margin. A second group below shows three more options where the call and put are the same distance from spot.</p>
   <div class="row" style="margin:8px 0">
     <label>Expiry<select id="iexp"></select></label>
+    <label>Funds available (USD)<input id="ifunds" type="number" min="0" placeholder="e.g. 5000"></label>
+    <label>Margin to use (%)<input id="imsh" type="number" min="1" max="100" step="1" value="25"></label>
+    <label>Bought ÷ sold (%)<input id="irat" type="number" min="1" max="99" step="1" value="30"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="iauto" type="checkbox" style="width:auto"> Auto-size lots from funds</label>
     <label>Sold lots per leg<input id="isold" type="number" min="1" value="5000"></label>
     <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
     <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
+    <label>Allowed worst loss (% of margin)<input id="iplim" type="number" min="0.5" step="0.5" value="10"></label>
     <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
     <button id="ifind">Find combinations</button>
   </div>
@@ -374,7 +407,7 @@ try { const saved = JSON.parse(localStorage.getItem("legs")); if (Array.isArray(
 function save(){
   try { localStorage.setItem("legs", JSON.stringify(legs)); } catch (e) {}
   cloudPush("legs", () => legs);
-  if (typeof drawPosition === "function" && typeof lastNet !== "undefined") drawPosition();  if (typeof guardEval === "function") guardEval();
+  if (typeof drawPosition === "function" && typeof lastNet !== "undefined") drawPosition();  if (typeof guardEval === "function") guardEval(); if (typeof adjEval === "function") adjEval();
 }
 
 const num = v => (v === undefined || v === null || v === "") ? null : Number(v);
@@ -481,6 +514,7 @@ function showSpot(spot){
   checkTrigger(spot);
   drawPosition();
   if (typeof guardEval === "function") guardEval();
+  if (typeof adjEval === "function") adjEval();
   $("spot").textContent = f(spot, 0);
   let best = null;
   legs.filter(L => L.side === -1).forEach(L => {
@@ -1396,9 +1430,75 @@ function batCards(list, spot, labels, equi){
       <div class="note" style="margin:6px 0">Net credit <b class="g">${usdB(c.credit)}</b> · est. margin ${usdB(c.margin)} · break-even ${beN(c.be[0])} to ${beN(c.be[1])}</div>
       <div class="note l" style="margin-bottom:6px">Worst P&amp;L within ±15%: ${usdB(c.maxLoss)} at ${f(c.maxLossAt, 0)}. Losses are not capped above the sold call.</div>
       ${batChart(c)}
-      <p style="margin:8px 0 0"><button data-iload="${labels[n]}">Load into table</button></p></div>`).join("") + `</div>`;
+      <p style="margin:8px 0 0"><button data-iload="${labels[n]}">Load into table</button></p>${protBlock(c, labels[n])}</div>`).join("") + `</div>`;
 }
 
+// ---------- Batman protection (outside wings) ----------
+// Delta options fee: GST x min(0.01% of notional, 3.5% of premium)
+const feeOpt = (lots, px, spot, lot) => 1.18 * Math.min(0.0001 * lots * lot * spot, 0.035 * px * lots * lot);
+function protectSearch(c, chain, spot, limitPct, lot){
+  const net = c.sold - c.bought; if (net < 1) return null;
+  const lim = limitPct / 100 * c.margin, grid = c.grid;
+  const BL = [{c: true, K: c.callShort.strike, side: -1, n: c.sold, e: c.callShort.bid}, {c: true, K: c.callLong.strike, side: 1, n: c.bought, e: c.callLong.ask},
+              {c: false, K: c.putShort.strike, side: -1, n: c.sold, e: c.putShort.bid}, {c: false, K: c.putLong.strike, side: 1, n: c.bought, e: c.putLong.ask}];
+  const pay = (L, S) => L.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.n * lot, 0);
+  const cost = ws => ws.reduce((a, w) => a + w.e * w.n * lot + feeOpt(w.n, w.e, spot, lot), 0);
+  const mults = [0.4, 0.7, 1, 1.4];
+  const side = isCall => {
+    const opts = (isCall ? chain.calls : chain.puts).filter(o => o.ask > 0 && (isCall ? o.strike > c.callShort.strike && o.strike <= spot * 1.15 : o.strike < c.putShort.strike && o.strike >= spot * 0.85))
+      .sort((a, b) => isCall ? a.strike - b.strike : b.strike - a.strike).slice(0, 16);
+    const lotSets = mults.map(m => Math.max(1, Math.round(net * m)));
+    const cand = [[]];
+    opts.forEach(o => lotSets.forEach(n => cand.push([{o, n}])));
+    for (let i = 0; i < opts.length; i++) for (let j = i + 1; j < opts.length; j++)
+      lotSets.forEach(n1 => lotSets.forEach(n2 => cand.push([{o: opts[i], n: n1}, {o: opts[j], n: n2}])));
+    return cand.map(w => {
+      const ws = w.map(x => ({c: isCall, K: x.o.strike, side: 1, n: x.n, e: x.o.ask, o: x.o}));
+      const all = BL.concat(ws), ks = all.map(l => l.K);
+      const pts = isCall ? [spot, ...ks.filter(k => k >= spot), Math.max(...ks) * 1.5] : [spot, ...ks.filter(k => k <= spot), 0];
+      const cst = cost(ws), fees = ws.reduce((t, w) => t + feeOpt(w.n, w.e, spot, lot), 0), worst = Math.min(...pts.map(S => pay(all, S) - fees));   // pay() already nets the wing premiums
+      return {ws, cost: cst, worst, tot: w.reduce((a, x) => a + x.n, 0)};
+    });
+  };
+  const sc = side(true), sp = side(false);
+  const pick = (arr, L) => {
+    const ok = arr.filter(x => x.worst >= -L && (x.ws.length === 0 || x.tot >= net));      // bounded: wings cover the net short lots
+    const base = ok.length ? ok : arr.filter(x => x.tot >= net || x.ws.length === 0);
+    return ok.length ? ok.reduce((b, x) => (x.cost < b.cost - 1e-9 || (Math.abs(x.cost - b.cost) < 1e-9 && x.ws.length < b.ws.length) ? x : b))
+                     : base.reduce((b, x) => x.worst > b.worst ? x : b);
+  };
+  const plans = [["Tight", 0.5], ["Balanced", 1], ["Cheap", 2]].map(([name, m]) => {
+    let a = pick(sc, lim * m), b = pick(sp, lim * m);
+    for (let it = 0; it < 4; it++){ a = pick(sc, Math.max(0, lim * m - b.cost)); b = pick(sp, Math.max(0, lim * m - a.cost)); }   // each side also pays for the other side's wings
+    const ws = a.ws.concat(b.ws), cst = a.cost + b.cost;
+    const tot = grid.map((S, i) => c.tot[i] + ws.reduce((t, w) => t + w.n * lot * (w.c ? Math.max(S - w.K, 0) : Math.max(w.K - S, 0)), 0) - cst);
+    const at = c.tot[grid.reduce((bi, S, i) => Math.abs(S - spot) < Math.abs(grid[bi] - spot) ? i : bi, 0)];
+    let iS = 0; grid.forEach((S, i) => { if (Math.abs(S - spot) < Math.abs(grid[iS] - spot)) iS = i; });
+    let b1 = iS, b2 = iS; while (b1 > 0 && tot[b1 - 1] >= 0) b1--; while (b2 < grid.length - 1 && tot[b2 + 1] >= 0) b2++;
+    return {name, ws, cost: cst, atSpot: tot[iS], worstUp: a.worst - b.cost, worstDown: b.worst - a.cost, worst: Math.min(a.worst - b.cost, b.worst - a.cost), be: [grid[b1], grid[b2]], tot, met: Math.min(a.worst - b.cost, b.worst - a.cost) >= -lim * m - 1e-9, limit: lim * m};
+  });
+  return {plans, lim, net};
+}
+const usdD = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 2);
+function protChart(c, pr){
+  const W = 320, H = 130, L = 6, R = 6, T = 6, B = 6, g = c.grid, cols = {Tight: "var(--gain)", Balanced: "var(--acc)", Cheap: "#d98c00"};
+  const series = [["Hold", c.tot, "var(--mut)"]].concat(pr.plans.map(p => [p.name, p.tot, cols[p.name]]));
+  const all = series.flatMap(x => x[1]), lo = Math.min(...all, 0), hi = Math.max(...all, 0), yy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo || 1));
+  const xx = i => L + (W - L - R) * i / (g.length - 1);
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:340px;height:auto;display:block"><line x1="${L}" x2="${W - R}" y1="${yy(0).toFixed(1)}" y2="${yy(0).toFixed(1)}" stroke="var(--line)"/>` +
+    series.map(([n, t, col]) => `<polyline points="${t.map((v, i) => xx(i).toFixed(1) + "," + yy(v).toFixed(1)).join(" ")}" fill="none" stroke="${col}" stroke-width="${n === "Hold" ? 1.5 : 2}"${n === "Hold" ? ' stroke-dasharray="4 3"' : ""}/>`).join("") + `</svg>` +
+    `<div class="note" style="margin:2px 0 6px">P&amp;L at expiry, -15% to +15% of spot. ${series.map(([n, , col]) => `<span style="color:${col};font-weight:700">━ ${n}</span>`).join(" ")}</div>`;
+}
+function protBlock(c, label){
+  const pr = c.prot; if (!pr) return "";
+  if (pr.plans === undefined) return "";
+  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">buy outside calls and puts to cap the loss; allowed worst loss ${usdD(pr.lim)} (Balanced), half (Tight), double (Cheap). Buys at the ask, fees included.</span>` +
+    protChart(c, pr) +
+    pr.plans.map((p, i) => `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> · cost <b>${usdD(p.cost)}</b> · profit if BTC stays <b class="${sg(p.atSpot)}">${usdD(p.atSpot)}</b> (hold ${usdD(c.tot[c.grid.reduce((bi, S, j) => Math.abs(S - c.spot) < Math.abs(c.grid[bi] - c.spot) ? j : bi, 0)])})` +
+      `<br><span class="note">Worst P&amp;L: up ${usdD(p.worstUp)} · down ${usdD(p.worstDown)}${p.met ? "" : " · limit not reachable with the listed strikes"} · ${p.atSpot >= 0 ? "break-even " + beN(p.be[0]) + " to " + beN(p.be[1]) : "no profit zone at this price"}</span>` +
+      (p.ws.length ? `<table style="min-width:0"><tbody>${p.ws.map(w => `<tr><td style="text-align:left">Buy ${w.c ? "call" : "put"}</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("")}</tbody></table>` : `<div class="note">No wings needed on either side.</div>`) +
+      `<button data-iprot="${label}:${i}" style="margin-top:4px">Load with this protection</button></div>`).join("") + `</div>`;
+}
 function renderBat(main, equi, spot, exp, tol){
   let h = "";
   if (main.length) h += batCards(main, spot, main.map((c, i) => "#" + (i + 1)), false);
@@ -1410,7 +1510,33 @@ function renderBat(main, equi, spot, exp, tol){
   $("iout").innerHTML = h;
 }
 
+// Lots from funds: margin used = (sold call lots + sold put lots) x BTC per lot x spot / leverage <= funds x margin share
+function autoLots(funds, pct, spot, lot, lev, ratio){
+  const per = lot * spot / lev, budget = funds * pct / 100;
+  if (!(per > 0) || !(budget > 0)) return null;
+  const sold = Math.floor(budget / (2 * per) / 10) * 10;
+  if (sold < 10) return {sold: 0, bought: 0, margin: 0, budget, per};
+  const bought = Math.max(1, Math.round(sold * ratio));
+  return {sold, bought, margin: 2 * sold * per, budget, per};
+}
+let batNote = "";
+function batFunds(){ return Number($("ifunds").value) || Number($("tbal").value) || Number($("cap").value) || 0; }
+function batAutoPreview(){
+  if (!$("iauto").checked) return;
+  const funds = batFunds(), spot = lastSpotVal, lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1;
+  if (!funds || !spot || !lot){ $("imsg").className = "note"; $("imsg").textContent = "Enter your funds available to size the lots."; return; }
+  const r = autoLots(funds, Number($("imsh").value) || 25, spot, lot, lev, (Number($("irat").value) || 30) / 100);
+  if (!r || r.sold < 10){ $("imsg").className = "note l"; $("imsg").textContent = "Those funds are too small for even 10 sold lots at this leverage."; return; }
+  $("isold").value = r.sold; $("ibought").value = r.bought;
+  batNote = `Auto-sized from $${f(funds, 0)} × ${$("imsh").value || 25}% at ${lev}x: ${f(r.sold, 0)} sold and ${f(r.bought, 0)} bought per leg, estimated margin $${f(r.margin, 0)} (rough, shorts only).`;
+  $("imsg").className = "note"; $("imsg").textContent = batNote;
+}
+["ifunds", "imsh", "irat", "iauto", "lev", "lot"].forEach(id => $(id).addEventListener("input", batAutoPreview));
+$("iauto").addEventListener("change", batAutoPreview);
+$("iprot").addEventListener("change", () => { if (lastBat && lastBat.length) $("ifind").click(); });
 $("ifind").onclick = async () => {
+  batNote = ""; batAutoPreview();
+  if ($("iauto").checked && !batNote) return;
   const exp = $("iexp").value.trim() || $("texp").value.trim() || $("fexp").value.trim();
   const sold = Number($("isold").value) || 0, bought = Number($("ibought").value) || 0, minPct = Number($("ipct").value);
   const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1;
@@ -1426,12 +1552,24 @@ $("ifind").onclick = async () => {
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
+    if ($("iprot").checked){ const lim = Number($("iplim").value) || 10; main.concat(equi).forEach(c => { c.prot = protectSearch(c, chain, spot, lim, lot); }); }
     lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
-    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.`;
+    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
     renderBat(main, equi, spot, exp, tol);
   } catch (e){ $("imsg").className = "note l"; $("imsg").textContent = "Could not load the chain: " + e.message; }
 };
 $("iout").addEventListener("click", e => {
+  const pl = e.target.dataset.iprot;
+  if (pl !== undefined){
+    const [lab, k] = pl.split(":"), hit = lastBat.find(x => x.label === lab); if (!hit || !hit.c.prot) return;
+    const {c} = hit, pp = c.prot.plans[Number(k)];
+    const add = (o, side, lots, px) => legs.push({s: o.symbol, side, lots, entry: px});
+    add(c.callShort, -1, c.sold, c.callShort.bid); add(c.callLong, 1, c.bought, c.callLong.ask); add(c.putShort, -1, c.sold, c.putShort.bid); add(c.putLong, 1, c.bought, c.putLong.ask);
+    pp.ws.forEach(w => add(w.o, 1, w.n, w.e));
+    save(); drawInputs(); tick();
+    $("imsg").className = "note"; $("imsg").textContent = `Loaded combination ${lab} with the ${pp.name} protection (${pp.ws.length} extra leg(s)) into the table.`;
+    return;
+  }
   const lab = e.target.dataset.iload; if (lab === undefined) return;
   const hit = lastBat.find(x => x.label === lab); if (!hit) return;
   const {c} = hit;
@@ -2085,7 +2223,7 @@ $("plrun").onclick = async () => {
     const base_ = $("base").value.replace(/\/$/, "");
     const [chain, candles] = await Promise.all([fetchChain(exp), fetchCandles(base_, "BTCUSD", days).catch(() => [])]);
     if (!chain.calls.length || !chain.puts.length){ msg.className = "note l"; msg.textContent = "No options found for expiry " + exp + "."; return; }
-    const S0 = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, model = planModel(chain, S0, T);
+    const S0 = Number($("pat").value) || lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, model = planModel(chain, S0, T);
     const hist = candles.length > 600 ? histSamples(candles, Math.max(12, Math.round(Tdays * 288))) : null;
     const soldCallLots = base.filter(l => l.c && l.side === -1).reduce((a, l) => a + l.lots, 0);
     const xl = Number($("pxlots").value) || soldCallLots || 1000, xp = (Number($("pxpct").value) || 2) / 100, xq = (Number($("pxprot").value) || 0) / 100, extras = [];
@@ -2133,6 +2271,79 @@ function bsDelta(S, K, T, v, isCall){
   const d1 = (Math.log(S / K) + 0.5 * v * v * T) / (v * Math.sqrt(T)); const n = normCdf(d1);
   return isCall ? n : n - 1;
 }
+
+// ---------- Import from Delta order history ----------
+function csvSplit(line, sep){
+  const out = []; let cur = "", q = false;
+  for (let i = 0; i < line.length; i++){ const ch = line[i];
+    if (q){ if (ch === '"'){ if (line[i + 1] === '"'){ cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true; else if (ch === sep){ out.push(cur); cur = ""; } else cur += ch; }
+  out.push(cur); return out.map(x => x.trim());
+}
+function parseDeltaLog(text){
+  const lines = String(text).split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return {err: "Paste the header row and at least one order."};
+  const sep = lines[0].includes("\t") ? "\t" : ",";
+  const head = csvSplit(lines[0], sep).map(h => h.toLowerCase().replace(/[^a-z]/g, ""));
+  const ix = n => head.indexOf(n), iT = ix("time"), iC = ix("contract"), iQ = ix("qty"), iS = ix("side"), iF = ix("filledremaining"), iP = ix("execprice"), iFee = ix("tradingfees"), iId = ix("orderid");
+  if (iC < 0 || iS < 0 || iP < 0 || (iQ < 0 && iF < 0)) return {err: "I couldn't find the Contract, Side, Qty and Exec.Price columns. Paste the header row too."};
+  const fills = [];
+  lines.slice(1).forEach((ln, n) => {
+    const c = csvSplit(ln, sep), sym = (c[iC] || "").trim();
+    if (!/^[CP]-[A-Z]+-\d+-\d{6}$/.test(sym)) return;
+    const filled = iF >= 0 && c[iF] ? Number(String(c[iF]).split("/")[0]) : Number(c[iQ]);
+    const px = Number(c[iP]), side = /^b/i.test(c[iS] || "") ? 1 : /^s/i.test(c[iS] || "") ? -1 : 0;
+    if (!(filled > 0) || !(px > 0) || !side) return;
+    fills.push({s: sym, side, n: filled, px, time: iT >= 0 ? c[iT] : "", fee: iFee >= 0 ? Number(c[iFee]) || 0 : 0, id: iId >= 0 && c[iId] ? c[iId] : "r" + n + "-" + sym + "-" + px});
+  });
+  if (!fills.length) return {err: "No filled option orders found in that text."};
+  return {fills};
+}
+// Replay in time order: same-direction fills average in; opposite fills close and realise
+function replayFills(fills, seed){
+  const ord = fills.map((x, i) => Object.assign({i}, x)).sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : a.i - b.i));
+  const pos = {}, closed = []; let fees = 0;
+  (seed || []).forEach(L => { const q = (L.side === -1 ? -1 : 1) * Number(L.lots); if (q && L.s){ const P = pos[L.s] || (pos[L.s] = {q: 0, e: 0}); const cur = Math.abs(P.q); P.e = cur + Math.abs(q) ? (P.e * cur + (Number(L.entry) || 0) * Math.abs(q)) / (cur + Math.abs(q)) : 0; P.q += q; } });
+  ord.forEach(x => {
+    fees += x.fee; const P = pos[x.s] || (pos[x.s] = {q: 0, e: 0});
+    let n = x.n;
+    if (P.q !== 0 && Math.sign(P.q) !== x.side){
+      const m = Math.min(n, Math.abs(P.q));
+      closed.push({s: x.s, side: Math.sign(P.q), lots: m, entry: P.e, exit: x.px, time: x.time, id: x.id + ":" + x.s});
+      P.q += x.side * m; n -= m; if (P.q === 0) P.e = 0;
+    }
+    if (n > 0){ const cur = Math.abs(P.q); P.e = (P.e * cur + x.px * n) / (cur + n); P.q += x.side * n; }
+  });
+  const open = Object.keys(pos).filter(k => pos[k].q !== 0).map(k => ({s: k, side: pos[k].q > 0 ? 1 : -1, lots: Math.abs(pos[k].q), entry: pos[k].e}));
+  return {open, closed, fees};
+}
+function impIds(){ try { return new Set(JSON.parse(localStorage.getItem("impIds")) || []); } catch (e) { return new Set(); } }
+function importLog(){
+  const msg = $("impMsg"), out = $("impOut"); msg.className = "note"; out.innerHTML = "";
+  const r = parseDeltaLog($("impText").value);
+  if (r.err){ msg.className = "note l"; msg.textContent = r.err; return; }
+  const add = $("impMode").value === "add", seen = add ? impIds() : new Set();
+  const fills = r.fills.filter(x => !seen.has(x.id));
+  if (!fills.length){ msg.textContent = "Every order in that text was already loaded."; return; }
+  const lot = Number($("lot").value) || 0.001, rp = replayFills(fills, add ? legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)) : null);
+  const prevLegs = legs.map(L => Object.assign({}, L));
+  const newLegs = rp.open.map(o => ({s: o.s, side: o.side, lots: o.lots, entry: Math.round(o.entry * 1e6) / 1e6}));
+  journal = readJournal(); const jids = []; let realised = 0;
+  rp.closed.forEach(c => { const id = "imp-" + c.id + "-" + c.lots;
+    if (journal.some(j => j.id === id)) return;
+    const pnl = legPnl(c, c.exit, lot); realised += pnl;
+    journal.push({id, date: String(c.time).slice(0, 10) || todayStr(), type: "Closed", lot, pnl, legs: [{s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit}]}); jids.push(id); });
+  try { localStorage.setItem("legsPrev", JSON.stringify({legs: prevLegs, ids: jids, ts: Date.now()})); } catch (e) {}
+  try { const all = impIds(); r.fills.forEach(x => all.add(x.id)); localStorage.setItem("impIds", JSON.stringify([...all].slice(-2000))); } catch (e) {}
+  saveJournal(); legs = newLegs; save(); drawInputs(); renderJournal(); showUndo(); tick();
+  const nl = legs.filter(L => Number(L.lots) > 0).length;
+  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${jids.length} closed leg(s) saved to the journal (${money(realised)} realised). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
+  out.innerHTML = `<table><thead><tr><th style="text-align:left">Contract</th><th>Side</th><th>Lots</th><th>Avg entry</th></tr></thead><tbody>` +
+    rp.open.map(o => `<tr><td style="text-align:left">${esc(o.s)}</td><td>${o.side === -1 ? "Sell" : "Buy"}</td><td>${f(o.lots, 0)}</td><td>${f(o.entry, 2)}</td></tr>`).join("") + `</tbody></table>`;
+}
+$("impGo").onclick = importLog;
+$("impClear").onclick = () => { $("impText").value = ""; $("impMsg").textContent = ""; $("impOut").innerHTML = ""; };
+$("impText").addEventListener("paste", () => { if ($("impAuto").checked) setTimeout(importLog, 50); });
 
 // ---------- Apply what-if to the current position ----------
 function readPrev(){ try { return JSON.parse(localStorage.getItem("legsPrev")); } catch (e) { return null; } }
@@ -2214,7 +2425,7 @@ $("tbuild").onclick = async () => {
   if (!wif.acts.length){ msg.className = "note l"; msg.textContent = "The What-if card is empty. Load a plan first."; return; }
   const lot = Number($("lot").value) || 0.001, lev = Number($("lev").value) || 1, spot = lastSpotVal;
   if (!spot){ msg.className = "note l"; msg.textContent = "Waiting for the BTC price."; return; }
-  const bal = Number($("tbal").value) || Number($("cap").value) || 0;
+  const bal = Number($("tbal").value) || Number($("ifunds").value) || Number($("cap").value) || 0;
   if (!(bal > 0)){ msg.className = "note l"; msg.textContent = "Enter your available balance (or Total capital in Position sizing)."; return; }
   msg.textContent = "Fetching live quotes…";
   const base_ = $("base").value.replace(/\/$/, ""), syms = [...new Set(wif.acts.map(a => a.sym))], quotes = {};
@@ -2229,6 +2440,57 @@ $("tcopy").onclick = async () => {
   if (!lastTicket){ $("tmsg").textContent = "Build the list first."; return; }
   try { await navigator.clipboard.writeText(ticketText(lastTicket, Number($("lot").value) || 0.001)); $("tmsg").textContent = "Copied."; } catch (e) { $("tmsg").textContent = "Couldn't copy. Select the table instead."; }
 };
+
+// ---------- Batman adjustment trigger ----------
+let adj = {on: false, frac: 50, sound: true};
+try { Object.assign(adj, JSON.parse(localStorage.getItem("adj")) || {}); } catch (e) {}
+let adjFired = {C: false, P: false}, adjNote = {C: 0, P: 0};
+// For each side: the sold strike nearest spot, the bought strike just inside it, and the trigger a set share of the way between them
+function adjLevels(ls, spot, frac){
+  const out = {C: null, P: null};
+  const sc = ls.filter(l => l.c && l.side === -1 && l.k > spot).sort((a, b) => a.k - b.k)[0];
+  if (sc){ const lg = ls.filter(l => l.c && l.side === 1 && l.k < sc.k).sort((a, b) => b.k - a.k)[0];
+    if (lg) out.C = {sold: sc.k, bought: lg.k, trig: lg.k + (sc.k - lg.k) * frac}; }
+  const sp = ls.filter(l => !l.c && l.side === -1 && l.k < spot).sort((a, b) => b.k - a.k)[0];
+  if (sp){ const lg = ls.filter(l => !l.c && l.side === 1 && l.k > sp.k).sort((a, b) => a.k - b.k)[0];
+    if (lg) out.P = {sold: sp.k, bought: lg.k, trig: lg.k - (lg.k - sp.k) * frac}; }
+  return out;
+}
+function adjEval(){
+  const stat = $("astat"); if (!stat) return;
+  if (!adj.on){ stat.textContent = "Off."; $("atab").innerHTML = ""; adjFired = {C: false, P: false}; return; }
+  const spot = typeof lastSpotVal === "number" ? lastSpotVal : null;
+  if (!spot){ stat.textContent = "Waiting for the BTC price…"; return; }
+  const lv = adjLevels(wifLegs(Number($("lot").value) || 0.001), spot, adj.frac / 100);
+  if (!lv.C && !lv.P){ stat.textContent = "No bought strike inside a sold strike was found, so there is no climb to watch (needs a bought call below a sold call and/or a bought put above a sold put)."; $("atab").innerHTML = ""; return; }
+  let pr = null; try { pr = positionProfile(); } catch (e) {}
+  const hit = {C: lv.C && spot >= lv.C.trig, P: lv.P && spot <= lv.P.trig}, rows = [];
+  ["C", "P"].forEach(sd => { const L = lv[sd]; if (!L) return;
+    const away = sd === "C" ? (L.trig - spot) / spot * 100 : (spot - L.trig) / spot * 100;
+    rows.push(`<tr${hit[sd] ? ' style="background:var(--warn,#fdecea)"' : ""}><td style="text-align:left">${sd === "C" ? "Call side (up)" : "Put side (down)"}</td><td>${f(L.bought, 0)}</td><td>${f(L.sold, 0)}</td><td><b style="font-size:1.2em">${f(L.trig, 0)}</b></td><td>${hit[sd] ? "reached" : f(away, 2) + "% away"}</td><td>${pr ? money(pr.pnl(L.trig)) : "–"} <span class="note">(peak ${pr ? money(pr.pnl(L.sold)) : "–"})</span></td><td><button data-aplan="${L.trig}">Plan adjustment here</button></td></tr>`); });
+  $("atab").innerHTML = `<table><thead><tr><th style="text-align:left">Side</th><th>Bought strike</th><th>Sold strike</th><th>Trigger BTC</th><th>BTC now</th><th>P&amp;L at expiry at trigger</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  const names = ["C", "P"].filter(sd => hit[sd]).map(sd => sd === "C" ? `call side (BTC ${f(spot, 0)} ≥ ${f(lv.C.trig, 0)})` : `put side (BTC ${f(spot, 0)} ≤ ${f(lv.P.trig, 0)})`);
+  if (names.length){
+    stat.innerHTML = `<b style="color:var(--loss,#b3261e)">ADJUST: halfway trigger reached on the ${esc(names.join(" and "))}. Use "Plan adjustment here".</b>`;
+    document.title = "⚠ ADJUST – tracker";
+    ["C", "P"].forEach(sd => { if (!hit[sd]){ adjFired[sd] = false; return; }
+      const now = Date.now();
+      if (!adjFired[sd] || now - adjNote[sd] > 600000){ adjFired[sd] = true; adjNote[sd] = now;
+        if (adj.sound) guardBeep();
+        try { if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("Batman adjustment trigger", {body: (sd === "C" ? "Call side" : "Put side") + " halfway trigger reached at BTC " + f(spot, 0)}); } catch (e) {} } });
+  } else {
+    stat.textContent = `Watching. BTC ${f(spot, 0)}. Triggers: ${lv.P ? "down " + f(lv.P.trig, 0) : "no put side"} · ${lv.C ? "up " + f(lv.C.trig, 0) : "no call side"}.`;
+    if (adjFired.C || adjFired.P){ adjFired = {C: false, P: false}; if (!guardFired) document.title = "Delta India position tracker"; }
+  }
+}
+function readAdj(){ adj.on = $("aon").checked; adj.frac = Math.min(100, Math.max(10, Number($("afrac").value) || 50)); adj.sound = $("asound").checked;
+  try { localStorage.setItem("adj", JSON.stringify(adj)); } catch (e) {}
+  if (adj.on){ try { if (typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission(); } catch (e) {} }
+  adjFired = {C: false, P: false}; adjEval(); }
+$("aon").checked = !!adj.on; $("afrac").value = adj.frac; $("asound").checked = !!adj.sound;
+["aon", "afrac", "asound"].forEach(id => $(id).addEventListener("change", readAdj));
+$("atab").addEventListener("click", e => { const t = e.target.dataset.aplan; if (!t) return;
+  $("pat").value = Math.round(Number(t)); const c = $("planCard"); if (c && c.scrollIntoView) c.scrollIntoView({behavior: "smooth"}); $("plrun").click(); });
 
 // ---------- Call-side guard ----------
 let guard = {on: false, price: "", mult: 2, buf: 0.5, sec: 15, sound: true};
@@ -2436,7 +2698,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["dfCard", "Delta filter"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
@@ -2471,6 +2733,7 @@ initSync();
 loadExpiries();
 drawPosition();
 guardStart();
+adjEval();
 </script>
 </body>
 </html>
