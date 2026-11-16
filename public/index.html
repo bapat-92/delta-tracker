@@ -316,6 +316,20 @@ h1{padding-right:170px}
   <div id="iout"></div>
 </div>
 
+<div class="card" id="nbCard">
+  <b>Not-inverted Batman: back-ratio spreads</b>
+  <p class="note" style="margin:4px 0 8px">The opposite shape to the Inverted Batman. On each side you sell fewer options close to the price and buy more further out, so a big move either way pays and the loss sits in a pocket between the strikes. It tries every strike pair and lot ratio and keeps the ones with the best profit if BTC stays that also keep the pocket loss inside your cap.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Expiry<select id="nexp"></select></label>
+    <label>Outer bought lots per side<input id="nlots" type="number" min="4" value="5000"></label>
+    <label>Allowed worst loss (% of funds)<input id="ncap" type="number" min="0.5" step="0.5" value="15"></label>
+    <label>Minimum profit if BTC stays ($)<input id="nmin" type="number" step="1" value="0"></label>
+    <button id="nfind">Find combinations</button>
+  </div>
+  <div id="nmsg" class="note">Uses the funds from the Inverted Batman box (or Available balance), and the leverage and BTC-per-lot boxes above.</div>
+  <div id="nbout"></div>
+</div>
+
 <div class="card" id="trigCard">
   <b>Move trigger (alerts only, places no orders)</b>
   <p class="note" style="margin:4px 0 8px">Each time BTC moves by the step from the last trigger price: a rise suggests selling the call, a fall suggests selling the put, at the strike priced nearest your target premium.</p>
@@ -1646,9 +1660,104 @@ $("iout").addEventListener("click", e => {
   $("imsg").className = "note"; $("imsg").textContent = "Loaded the four legs of combination " + lab + " into the table (sells at the bid, buys at the ask).";
 });
 
+// ---------- Not-inverted Batman (call and put back-ratio spreads: sell fewer inner, buy more outer) ----------
+let lastNB = [];
+function nbSearch(chain, spot, lot, P){
+  const grid = []; for (let i = 0; i <= 60; i++) grid.push(spot * (0.85 + 0.15 * i / 30));
+  const iS = grid.reduce((bi, x, i) => Math.abs(x - spot) < Math.abs(grid[bi] - spot) ? i : bi, 0);
+  const legPay = (l, S) => l.n * lot * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.side;
+  const ratios = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9], bigs = [1, 0.75, 0.5, 0.25].map(m => Math.max(2, Math.round(P.lots * m)));
+  const side = isCall => {
+    const ch = (isCall ? chain.calls : chain.puts), dist = o => isCall ? o.strike / spot - 1 : 1 - o.strike / spot;
+    const inner = ch.filter(o => o.bid > 0 && dist(o) >= 0.005 && dist(o) <= 0.06), outer = ch.filter(o => o.ask > 0 && dist(o) >= 0.01 && dist(o) <= 0.12);
+    const out = [];
+    inner.forEach(i => outer.forEach(o => {
+      if (dist(o) <= dist(i)) return;
+      bigs.forEach(b => ratios.forEach(r => {
+        const s = Math.max(1, Math.round(b * r)); if (s >= b) return;
+        const legs = [{c: isCall, K: i.strike, side: -1, n: s, e: i.bid}, {c: isCall, K: o.strike, side: 1, n: b, e: o.ask}];
+        const far = isCall ? o.strike * 1.6 : 0, pts = [spot, i.strike, o.strike, far];
+        const fee = feeOpt(s, i.bid, spot, lot) + feeOpt(b, o.ask, spot, lot), prem = (s * i.bid - b * o.ask) * lot;
+        let w = Infinity, wAt = spot; pts.forEach(S => { const v = legs.reduce((t, l) => t + legPay(l, S), 0); if (v < w){ w = v; wAt = S; } });
+        out.push({prof: prem - fee, w: w - fee, wAt, i, o, s, b});
+      }));
+    }));
+    out.sort((a, b) => b.prof - a.prof || b.w - a.w);
+    const keep = []; let bw = -Infinity; out.forEach(x => { if (x.w > bw + 1e-9){ keep.push(x); bw = x.w; } });
+    return keep;
+  };
+  const co = side(true), po = side(false), res = [];
+  co.forEach(a => po.forEach(p => {
+    const prof = a.prof + p.prof, wu = a.w + p.prof, wd = p.w + a.prof, worst = Math.min(wu, wd);
+    const met = worst >= -P.cap - 1e-9 && prof >= P.pmin - 1e-9;
+    res.push({a, p, prof, worst, worstAt: wu <= wd ? a.wAt : p.wAt, met, capOK: worst >= -P.cap - 1e-9});
+  }));
+  const pickBest = arr => { const seen = new Set(), out = []; arr.sort((x, y) => y.prof - x.prof).forEach(x => { const k = [x.a.i.strike, x.a.o.strike, x.p.i.strike, x.p.o.strike].join("/"); if (!seen.has(k) && out.length < 4){ seen.add(k); out.push(x); } }); return out; };
+  let list = pickBest(res.filter(x => x.met)), note = "";
+  if (!list.length){
+    const capOK = res.filter(x => x.capOK);
+    list = capOK.length ? pickBest(capOK) : pickBest(res.slice().sort((x, y) => y.worst - x.worst));
+    note = capOK.length ? "No combination reaches your minimum profit inside the loss cap. These keep the cap with the best profit available." : "No combination keeps the worst loss inside your cap. These have the smallest worst loss found.";
+  }
+  const plans = list.map(x => {
+    const legs = [{c: true, K: x.a.i.strike, side: -1, n: x.a.s, e: x.a.i.bid}, {c: true, K: x.a.o.strike, side: 1, n: x.a.b, e: x.a.o.ask},
+                  {c: false, K: x.p.i.strike, side: -1, n: x.p.s, e: x.p.i.bid}, {c: false, K: x.p.o.strike, side: 1, n: x.p.b, e: x.p.o.ask}];
+    const fees = legs.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
+    const tot = grid.map(S => legs.reduce((t, l) => t + legPay(l, S), 0) - fees);
+    let b1 = iS, b2 = iS; while (b1 > 0 && tot[b1 - 1] >= 0) b1--; while (b2 < grid.length - 1 && tot[b2 + 1] >= 0) b2++;
+    let up = null, dn = null; for (let i = b2 + 1; i < grid.length; i++) if (tot[i] >= 0){ up = grid[i]; break; } for (let i = b1 - 1; i >= 0; i--) if (tot[i] >= 0){ dn = grid[i]; break; }
+    const shorts = x.a.s + x.p.s;
+    return {x, legs, tot, atSpot: tot[iS], prof: x.prof, worst: x.worst, worstAt: x.worstAt, met: x.met, capOK: x.capOK, be: [grid[b1], grid[b2]], up, dn, margin: shorts * lot * spot / P.lev, fees};
+  });
+  return {plans, grid, note, cap: P.cap};
+}
+function nbChart(r){
+  const W = 320, H = 130, L = 6, R = 6, T = 6, B = 6, g = r.grid, cols = ["var(--gain)", "var(--acc)", "#d98c00", "#8e44ad"];
+  const all = r.plans.flatMap(p => p.tot), lo = Math.min(...all, 0), hi = Math.max(...all, 0), yy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo || 1)), xx = i => L + (W - L - R) * i / (g.length - 1);
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:340px;height:auto;display:block"><line x1="${L}" x2="${W - R}" y1="${yy(0).toFixed(1)}" y2="${yy(0).toFixed(1)}" stroke="var(--line)"/>` +
+    r.plans.map((p, k) => `<polyline points="${p.tot.map((v, i) => xx(i).toFixed(1) + "," + yy(v).toFixed(1)).join(" ")}" fill="none" stroke="${cols[k]}" stroke-width="2"/>`).join("") + `</svg>` +
+    `<div class="note" style="margin:2px 0 6px">P&amp;L at expiry, -15% to +15% of spot. ${r.plans.map((p, k) => `<span style="color:${cols[k]};font-weight:700">━ N${k + 1}</span>`).join(" ")}</div>`;
+}
+function renderNB(r, spot, exp){
+  if (!r.plans.length){ $("nbout").innerHTML = `<p class="note l">No strike combinations found for this expiry.</p>`; return; }
+  $("nbout").innerHTML = (r.note ? `<p class="note l">${esc(r.note)}</p>` : "") + nbChart(r) + r.plans.map((p, i) => {
+    const l = p.legs, tails = (p.dn ? "below " + beN(p.dn) : "no profit inside −15%") + " · " + (p.up ? "above " + beN(p.up) : "no profit inside +15%");
+    return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>N${i + 1}</b> · profit if BTC stays <b class="${sg(p.atSpot)}">${usdD(p.atSpot)}</b> after fees · worst loss <b class="l">${usdD(p.worst)}</b> near ${f(p.worstAt, 0)} · ${p.met ? '<span class="g">meets cap and minimum</span>' : '<span class="l">compromise, see note above</span>'}` +
+      `<br><span class="note">Centre profit zone ${p.atSpot >= 0 ? beN(p.be[0]) + " to " + beN(p.be[1]) : "none at this price"} · big-move profit ${tails} · est. margin ${usdD(p.margin)}</span>` +
+      `<table style="min-width:0"><tbody>${[["Sell call", l[0]], ["Buy call", l[1]], ["Sell put", l[2]], ["Buy put", l[3]]].map(([n, x]) => `<tr><td style="text-align:left">${n}</td><td>${f(x.K, 0)}</td><td>×${f(x.n, 0)}</td><td>${f(x.e)}</td></tr>`).join("")}</tbody></table>` +
+      `<button data-nbload="${i}" style="margin-top:4px">Load into table</button></div>`;
+  }).join("") + `<p class="note">Expiry ${esc(exp)}, spot ${f(spot, 0)}. This is the opposite of the Inverted Batman: you sell fewer inner options and buy more outer ones, so a big move in either direction pays and the loss sits in a pocket between the inner and outer strikes. The search tries every inner and outer strike pair (inner 0.5–6% from spot, outer up to 12%), outer lots at 100/75/50/25% of the lots entered, and inner lots at 20–90% of those. The call side and put side are combined exactly. Fees are included on every leg, sells at the bid and buys at the ask. Margin is a rough estimate. A high “profit if BTC stays” here is paid for by the loss pocket: if options are fairly priced the expected result stays near zero, so use it as a shape you want, not a free edge.</p>`;
+}
+$("nfind").onclick = async () => {
+  const exp = $("nexp").value.trim(), lots = Number($("nlots").value) || 0, lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1;
+  const funds = batFunds(), capPct = Number($("ncap").value) || 15, pmin = Number($("nmin").value) || 0;
+  const m = $("nmsg");
+  if (!/^\d{6}$/.test(exp)){ m.className = "note l"; m.textContent = "Pick an expiry."; return; }
+  if (lots < 4 || !lot){ m.className = "note l"; m.textContent = "Enter the outer bought lots."; return; }
+  if (!funds){ m.className = "note l"; m.textContent = "Enter your funds (Funds available in the Inverted Batman box, or Available balance) so the loss cap can be set."; return; }
+  m.className = "note"; m.textContent = "Loading the option chain…"; $("nbout").innerHTML = "";
+  try {
+    const chain = await fetchChain(exp);
+    if (!chain.calls.length || !chain.puts.length){ m.className = "note l"; m.textContent = "No options found for expiry " + exp + "."; return; }
+    const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, cap = capPct / 100 * funds;
+    const r = nbSearch(chain, spot, lot, {lots, cap, pmin, lev});
+    lastNB = r.plans;
+    m.textContent = `Worst loss allowed ${usdD(cap)} (${capPct}% of $${f(funds, 0)}), minimum profit ${usdD(pmin)}.`;
+    renderNB(r, spot, exp);
+  } catch (e){ m.className = "note l"; m.textContent = "Could not load the chain: " + e.message; }
+};
+$("nbout").addEventListener("click", e => {
+  const k = e.target.dataset.nbload; if (k === undefined) return;
+  const p = lastNB[Number(k)]; if (!p) return;
+  const x = p.x, add = (o, side, lots, px) => legs.push({s: o.symbol, side, lots, entry: px});
+  add(x.a.i, -1, x.a.s, x.a.i.bid); add(x.a.o, 1, x.a.b, x.a.o.ask); add(x.p.i, -1, x.p.s, x.p.i.bid); add(x.p.o, 1, x.p.b, x.p.o.ask);
+  save(); drawInputs(); tick();
+  $("nmsg").className = "note"; $("nmsg").textContent = `Loaded N${Number(k) + 1} (4 legs) into the table.`;
+});
+
 // ---------- Expiry dropdowns (the 5 nearest expiries listed on Delta) ----------
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const EXP_IDS = ["fexp", "vexp", "texp", "iexp", "wexp"];
+const EXP_IDS = ["fexp", "vexp", "texp", "iexp", "wexp", "nexp"];
 async function loadExpiries(){
   $("expmsg").className = "note";
   try {
