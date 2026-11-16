@@ -304,10 +304,10 @@ h1{padding-right:170px}
     <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
     <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
-    <label>Allowed worst loss (% of margin)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
+    <label>Allowed worst loss (% of total funds)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="icen" type="checkbox" style="width:auto"> Add center bulge (sell a strangle near spot)</label>
     <label>Center range (± % of spot)<input id="icpct" type="number" min="0.5" step="0.5" value="2"></label>
-    <label>Allowed worst loss with center (% of margin)<input id="icplim" type="number" min="0.5" step="0.5" value="20"></label>
+    <label>Allowed worst loss with center (% of total funds)<input id="icplim" type="number" min="0.5" step="0.5" value="20"></label>
     <label>Minimum profit if BTC stays ($)<input id="iprmin" type="number" step="1" value="0"></label>
     <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
     <button id="ifind">Find combinations</button>
@@ -1455,7 +1455,7 @@ function batCards(list, spot, labels, equi){
 // Delta options fee: GST x min(0.01% of notional, 3.5% of premium)
 const feeOpt = (lots, px, spot, lot) => 1.18 * Math.min(0.0001 * lots * lot * spot, 0.035 * px * lots * lot);
 function protectSearch(c, chain, spot, limitPct, lot, minProfit, cen){
-  const lim = limitPct / 100 * c.margin, pmin = Number(minProfit) || 0, grid = c.grid;
+  const capBase = c.capBase || c.margin, lim = limitPct / 100 * capBase, pmin = Number(minProfit) || 0, grid = c.grid;
   const u = Math.max(1, Math.round(c.sold / 20));
   const sideWings = isCall => {
     const opts = (isCall ? chain.calls : chain.puts).filter(o => o.ask > 0 && (isCall ? o.strike > c.callShort.strike && o.strike <= spot * 1.15 : o.strike < c.putShort.strike && o.strike >= spot * 0.85))
@@ -1526,7 +1526,7 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit, cen){
   const near = S => grid.reduce((bi, x, i) => Math.abs(x - S) < Math.abs(grid[bi] - S) ? i : bi, 0);
   const iS = near(spot);
   const hold = full(c.sold, c.bought, {ws: []}, {ws: []});
-  const limC = cen && cen.on ? (cen.lim / 100) * c.margin : lim;
+  const limC = cen && cen.on ? (cen.lim / 100) * capBase : lim;
   const groups = [["Keep lots", x => x.s === c.sold && x.b === c.bought, combos, lim], ["Batman-like", x => x.b >= 0.19 * x.s && x.b > 0, combos, lim], ["Max profit", () => true, combos, lim]];
   if (cen && cen.on) groups.push(["Batman + center", x => x.b >= 0.19 * x.s && x.b > 0, cenCombos, limC], ["Max + center", () => true, cenCombos, limC]);
   const plans = groups.map(([name, ok, src, lim]) => {
@@ -1573,7 +1573,7 @@ function protBlock(c, label){
       p.ws.map(w => `<tr><td style="text-align:left">Buy ${w.c ? "call" : "put"} (wing)</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("") + `</tbody></table>` +
       `<button data-iprot="${label}:${i}" style="margin-top:4px">Load this structure</button></div>`;
   };
-  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of margin${$("icen").checked ? "; center options use " + ($("icplim").value || 20) + "%" : ""})${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. The purple and red center options also sell a strangle near the current price (a profit bulge in the middle) and keep the wider cap. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
+  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of ${c.capBase && c.capBase !== c.margin ? "funds" : "margin, since no funds are entered"}${$("icen").checked ? "; center options use " + ($("icplim").value || 20) + "%" : ""})${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. The purple and red center options also sell a strangle near the current price (a profit bulge in the middle) and keep the wider cap. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
     protChart(c, pr) + pr.plans.map(card).join("") + `</div>`;
 }
 function renderBat(main, equi, spot, exp, tol){
@@ -1630,7 +1630,7 @@ $("ifind").onclick = async () => {
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
-    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0, cn = {on: $("icen").checked, pct: Number($("icpct").value) || 2, lim: Number($("icplim").value) || 20}; main.concat(equi).forEach(c => { c.prot = protectSearch(c, chain, spot, lim, lot, pm, cn); }); }
+    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0, cn = {on: $("icen").checked, pct: Number($("icpct").value) || 2, lim: Number($("icplim").value) || 20}; const fb = batFunds(); main.concat(equi).forEach(c => { c.capBase = fb || c.margin; c.prot = protectSearch(c, chain, spot, lim, lot, pm, cn); }); }
     lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
     $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
     renderBat(main, equi, spot, exp, tol);
