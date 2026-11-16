@@ -114,6 +114,20 @@ h1{padding-right:170px}
   <div>Nearest strike<b id="near">–</b></div>
 </div>
 
+<div class="card" id="impCard">
+  <b>Import from Delta order history</b>
+  <p class="note" style="margin:4px 0 8px">Paste the order history you copied from Delta (the CSV text or the table rows). The orders are replayed in time order, and your current position and the journal are built from them: open contracts become legs with their average entry price, and anything closed goes to the journal. Nothing is sent anywhere.</p>
+  <textarea id="impText" rows="5" style="width:100%;font:12px/1.4 ui-monospace,monospace;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)" placeholder="Time,Contract,Qty,Side,Filled/Remaining,Exec.Price,..."></textarea>
+  <div class="row" style="margin:8px 0">
+    <label>When loading<select id="impMode"><option value="replace">Replace my legs table</option><option value="add">Add to my legs (skip orders already loaded)</option></select></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="impAuto" type="checkbox" style="width:auto" checked> Load automatically on paste</label>
+    <button id="impGo">Load into current position</button>
+    <button id="impClear">Clear</button>
+  </div>
+  <div id="impMsg" class="note"></div>
+  <div id="impOut" class="wrap"></div>
+</div>
+
 <div class="card wrap" id="legsCard">
   <table>
     <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th></th></tr></thead>
@@ -2177,6 +2191,79 @@ function bsDelta(S, K, T, v, isCall){
   return isCall ? n : n - 1;
 }
 
+// ---------- Import from Delta order history ----------
+function csvSplit(line, sep){
+  const out = []; let cur = "", q = false;
+  for (let i = 0; i < line.length; i++){ const ch = line[i];
+    if (q){ if (ch === '"'){ if (line[i + 1] === '"'){ cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true; else if (ch === sep){ out.push(cur); cur = ""; } else cur += ch; }
+  out.push(cur); return out.map(x => x.trim());
+}
+function parseDeltaLog(text){
+  const lines = String(text).split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return {err: "Paste the header row and at least one order."};
+  const sep = lines[0].includes("\t") ? "\t" : ",";
+  const head = csvSplit(lines[0], sep).map(h => h.toLowerCase().replace(/[^a-z]/g, ""));
+  const ix = n => head.indexOf(n), iT = ix("time"), iC = ix("contract"), iQ = ix("qty"), iS = ix("side"), iF = ix("filledremaining"), iP = ix("execprice"), iFee = ix("tradingfees"), iId = ix("orderid");
+  if (iC < 0 || iS < 0 || iP < 0 || (iQ < 0 && iF < 0)) return {err: "I couldn't find the Contract, Side, Qty and Exec.Price columns. Paste the header row too."};
+  const fills = [];
+  lines.slice(1).forEach((ln, n) => {
+    const c = csvSplit(ln, sep), sym = (c[iC] || "").trim();
+    if (!/^[CP]-[A-Z]+-\d+-\d{6}$/.test(sym)) return;
+    const filled = iF >= 0 && c[iF] ? Number(String(c[iF]).split("/")[0]) : Number(c[iQ]);
+    const px = Number(c[iP]), side = /^b/i.test(c[iS] || "") ? 1 : /^s/i.test(c[iS] || "") ? -1 : 0;
+    if (!(filled > 0) || !(px > 0) || !side) return;
+    fills.push({s: sym, side, n: filled, px, time: iT >= 0 ? c[iT] : "", fee: iFee >= 0 ? Number(c[iFee]) || 0 : 0, id: iId >= 0 && c[iId] ? c[iId] : "r" + n + "-" + sym + "-" + px});
+  });
+  if (!fills.length) return {err: "No filled option orders found in that text."};
+  return {fills};
+}
+// Replay in time order: same-direction fills average in; opposite fills close and realise
+function replayFills(fills, seed){
+  const ord = fills.map((x, i) => Object.assign({i}, x)).sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : a.i - b.i));
+  const pos = {}, closed = []; let fees = 0;
+  (seed || []).forEach(L => { const q = (L.side === -1 ? -1 : 1) * Number(L.lots); if (q && L.s){ const P = pos[L.s] || (pos[L.s] = {q: 0, e: 0}); const cur = Math.abs(P.q); P.e = cur + Math.abs(q) ? (P.e * cur + (Number(L.entry) || 0) * Math.abs(q)) / (cur + Math.abs(q)) : 0; P.q += q; } });
+  ord.forEach(x => {
+    fees += x.fee; const P = pos[x.s] || (pos[x.s] = {q: 0, e: 0});
+    let n = x.n;
+    if (P.q !== 0 && Math.sign(P.q) !== x.side){
+      const m = Math.min(n, Math.abs(P.q));
+      closed.push({s: x.s, side: Math.sign(P.q), lots: m, entry: P.e, exit: x.px, time: x.time, id: x.id + ":" + x.s});
+      P.q += x.side * m; n -= m; if (P.q === 0) P.e = 0;
+    }
+    if (n > 0){ const cur = Math.abs(P.q); P.e = (P.e * cur + x.px * n) / (cur + n); P.q += x.side * n; }
+  });
+  const open = Object.keys(pos).filter(k => pos[k].q !== 0).map(k => ({s: k, side: pos[k].q > 0 ? 1 : -1, lots: Math.abs(pos[k].q), entry: pos[k].e}));
+  return {open, closed, fees};
+}
+function impIds(){ try { return new Set(JSON.parse(localStorage.getItem("impIds")) || []); } catch (e) { return new Set(); } }
+function importLog(){
+  const msg = $("impMsg"), out = $("impOut"); msg.className = "note"; out.innerHTML = "";
+  const r = parseDeltaLog($("impText").value);
+  if (r.err){ msg.className = "note l"; msg.textContent = r.err; return; }
+  const add = $("impMode").value === "add", seen = add ? impIds() : new Set();
+  const fills = r.fills.filter(x => !seen.has(x.id));
+  if (!fills.length){ msg.textContent = "Every order in that text was already loaded."; return; }
+  const lot = Number($("lot").value) || 0.001, rp = replayFills(fills, add ? legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)) : null);
+  const prevLegs = legs.map(L => Object.assign({}, L));
+  const newLegs = rp.open.map(o => ({s: o.s, side: o.side, lots: o.lots, entry: Math.round(o.entry * 1e6) / 1e6}));
+  journal = readJournal(); const jids = []; let realised = 0;
+  rp.closed.forEach(c => { const id = "imp-" + c.id + "-" + c.lots;
+    if (journal.some(j => j.id === id)) return;
+    const pnl = legPnl(c, c.exit, lot); realised += pnl;
+    journal.push({id, date: String(c.time).slice(0, 10) || todayStr(), type: "Closed", lot, pnl, legs: [{s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit}]}); jids.push(id); });
+  try { localStorage.setItem("legsPrev", JSON.stringify({legs: prevLegs, ids: jids, ts: Date.now()})); } catch (e) {}
+  try { const all = impIds(); r.fills.forEach(x => all.add(x.id)); localStorage.setItem("impIds", JSON.stringify([...all].slice(-2000))); } catch (e) {}
+  saveJournal(); legs = newLegs; save(); drawInputs(); renderJournal(); showUndo(); tick();
+  const nl = legs.filter(L => Number(L.lots) > 0).length;
+  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${jids.length} closed leg(s) saved to the journal (${money(realised)} realised). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
+  out.innerHTML = `<table><thead><tr><th style="text-align:left">Contract</th><th>Side</th><th>Lots</th><th>Avg entry</th></tr></thead><tbody>` +
+    rp.open.map(o => `<tr><td style="text-align:left">${esc(o.s)}</td><td>${o.side === -1 ? "Sell" : "Buy"}</td><td>${f(o.lots, 0)}</td><td>${f(o.entry, 2)}</td></tr>`).join("") + `</tbody></table>`;
+}
+$("impGo").onclick = importLog;
+$("impClear").onclick = () => { $("impText").value = ""; $("impMsg").textContent = ""; $("impOut").innerHTML = ""; };
+$("impText").addEventListener("paste", () => { if ($("impAuto").checked) setTimeout(importLog, 50); });
+
 // ---------- Apply what-if to the current position ----------
 function readPrev(){ try { return JSON.parse(localStorage.getItem("legsPrev")); } catch (e) { return null; } }
 function showUndo(){ const b = $("wundo"); if (b) b.style.display = readPrev() ? "" : "none"; }
@@ -2530,7 +2617,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["dfCard", "Delta filter"], ["summaryCard", "P&L summary"],
-  ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
