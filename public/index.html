@@ -305,6 +305,9 @@ h1{padding-right:170px}
     <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
     <label>Allowed worst loss (% of margin)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="icen" type="checkbox" style="width:auto"> Add center bulge (sell a strangle near spot)</label>
+    <label>Center range (± % of spot)<input id="icpct" type="number" min="0.5" step="0.5" value="2"></label>
+    <label>Allowed worst loss with center (% of margin)<input id="icplim" type="number" min="0.5" step="0.5" value="20"></label>
     <label>Minimum profit if BTC stays ($)<input id="iprmin" type="number" step="1" value="0"></label>
     <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
     <button id="ifind">Find combinations</button>
@@ -1437,7 +1440,7 @@ function batCards(list, spot, labels, equi){
 // ---------- Batman protection (outside wings) ----------
 // Delta options fee: GST x min(0.01% of notional, 3.5% of premium)
 const feeOpt = (lots, px, spot, lot) => 1.18 * Math.min(0.0001 * lots * lot * spot, 0.035 * px * lots * lot);
-function protectSearch(c, chain, spot, limitPct, lot, minProfit){
+function protectSearch(c, chain, spot, limitPct, lot, minProfit, cen){
   const lim = limitPct / 100 * c.margin, pmin = Number(minProfit) || 0, grid = c.grid;
   const u = Math.max(1, Math.round(c.sold / 20));
   const sideWings = isCall => {
@@ -1451,20 +1454,21 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit){
   };
   const W = {true: sideWings(true), false: sideWings(false)};
   const legPay = (l, S) => l.n * lot * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.side;
-  const sideOpts = (isCall, s, b) => {
+  const sideOpts = (isCall, s, b, cs) => {
     const sh = isCall ? c.callShort : c.putShort, lg = isCall ? c.callLong : c.putLong;
-    const base = [{c: isCall, K: sh.strike, side: -1, n: s, e: sh.bid}].concat(b > 0 ? [{c: isCall, K: lg.strike, side: 1, n: b, e: lg.ask}] : []);
+    const cl = cs ? [{c: isCall, K: cs.o.strike, side: -1, n: cs.n, e: cs.o.bid, o: cs.o}] : [], m = cs ? cs.n : 0;
+    const base = [{c: isCall, K: sh.strike, side: -1, n: s, e: sh.bid}].concat(b > 0 ? [{c: isCall, K: lg.strike, side: 1, n: b, e: lg.ask}] : []).concat(cl);
     const baseFee = base.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
     const out = [];
     W[isCall].forEach(({w, tot}) => {
-      if (b + tot < s) return;                                             // tail must be bounded
+      if (b + tot < s + m) return;                                             // tail must be bounded
       const ws = w.map(x => ({c: isCall, K: x.o.strike, side: 1, n: x.n, e: x.o.ask, o: x.o}));
       const all = base.concat(ws), ks = all.map(l => l.K);
       const pts = isCall ? [spot, ...ks.filter(k => k >= spot), Math.max(...ks) * 1.5] : [spot, ...ks.filter(k => k <= spot), 0];
       const fee = baseFee + ws.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
       const prem = all.reduce((t, l) => t - l.side * l.n * lot * l.e, 0);
       let worst = Infinity; pts.forEach(S => { const v = all.reduce((t, l) => t + legPay(l, S), 0); if (v < worst) worst = v; });
-      out.push({prof: prem - fee, w: worst - fee, ws});
+      out.push({prof: prem - fee, w: worst - fee, ws, cl});
     });
     out.sort((a, b2) => b2.prof - a.prof || b2.w - a.w);
     const keep = []; let bw = -Infinity; out.forEach(x => { if (x.w > bw + 1e-9){ keep.push(x); bw = x.w; } });
@@ -1480,8 +1484,26 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit){
       if (co.length && po.length) combos.push({s, b, co, po});
     });
   });
+  const cenCombos = [];
+  if (cen && cen.on){
+    const rng = o => o.bid > 0 && o.strike >= spot * (1 - cen.pct / 100) && o.strike <= spot * (1 + cen.pct / 100);
+    const pick3 = arr => { if (arr.length <= 3) return arr; return [arr[0], arr[Math.floor(arr.length / 2)], arr[arr.length - 1]]; };
+    const cC = pick3(chain.calls.filter(o => rng(o) && o.strike >= spot && o.strike < c.callLong.strike).sort((a, b) => a.strike - b.strike));
+    const cP = pick3(chain.puts.filter(o => rng(o) && o.strike <= spot && o.strike > c.putLong.strike).sort((a, b) => b.strike - a.strike));
+    const sS = new Set([c.sold]); [4, 8, 12, 16].forEach(k => sS.add(Math.min(c.sold, u * k)));
+    [...sS].sort((a, b) => a - b).forEach(s => {
+      const bS = new Set([0, Math.round(s * 0.2), Math.round(s * 0.3), Math.round(s * c.bought / c.sold)]);
+      [...bS].filter(b => b >= 0 && b < s).forEach(b => [0.2, 0.4, 0.6].forEach(fr => {
+        const m = Math.max(1, Math.round(s * fr));
+        cC.forEach(oc => cP.forEach(op => {
+          const co = sideOpts(true, s, b, {o: oc, n: m}), po = sideOpts(false, s, b, {o: op, n: m});
+          if (co.length && po.length) cenCombos.push({s, b, co, po});
+        }));
+      }));
+    });
+  }
   const full = (s, b, a, p) => {
-    const ws = a.ws.concat(p.ws);
+    const ws = a.ws.concat(p.ws).concat(a.cl || [], p.cl || []);
     const legs = [{c: true, K: c.callShort.strike, side: -1, n: s, e: c.callShort.bid}, {c: true, K: c.callLong.strike, side: 1, n: b, e: c.callLong.ask},
                   {c: false, K: c.putShort.strike, side: -1, n: s, e: c.putShort.bid}, {c: false, K: c.putLong.strike, side: 1, n: b, e: c.putLong.ask}].concat(ws).filter(l => l.n > 0);
     const fees = legs.reduce((t, l) => t + feeOpt(l.n, l.e, spot, lot), 0);
@@ -1490,10 +1512,12 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit){
   const near = S => grid.reduce((bi, x, i) => Math.abs(x - S) < Math.abs(grid[bi] - S) ? i : bi, 0);
   const iS = near(spot);
   const hold = full(c.sold, c.bought, {ws: []}, {ws: []});
-  const groups = [["Keep lots", x => x.s === c.sold && x.b === c.bought], ["Batman-like", x => x.b >= 0.19 * x.s && x.b > 0], ["Max profit", () => true]];
-  const plans = groups.map(([name, ok]) => {
+  const limC = cen && cen.on ? (cen.lim / 100) * c.margin : lim;
+  const groups = [["Keep lots", x => x.s === c.sold && x.b === c.bought, combos, lim], ["Batman-like", x => x.b >= 0.19 * x.s && x.b > 0, combos, lim], ["Max profit", () => true, combos, lim]];
+  if (cen && cen.on) groups.push(["Batman + center", x => x.b >= 0.19 * x.s && x.b > 0, cenCombos, limC], ["Max + center", () => true, cenCombos, limC]);
+  const plans = groups.map(([name, ok, src, lim]) => {
     let best = null;
-    combos.filter(ok).forEach(g => g.co.forEach(a => g.po.forEach(p => {
+    src.filter(ok).forEach(g => g.co.forEach(a => g.po.forEach(p => {
       const prof = a.prof + p.prof, wu = a.w + p.prof, wd = p.w + a.prof, worst = Math.min(wu, wd), met = worst >= -lim - 1e-9 && prof >= pmin - 1e-9;
       const capOK = worst >= -lim - 1e-9;
       const score = met ? 3 : capOK ? 2 : 1;
@@ -1501,17 +1525,17 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit){
       if (!best || score > best.score || (score === best.score && key > best.key + 1e-9)) best = {score, key, s: g.s, b: g.b, a, p, prof, wu, wd, worst, met, capOK};
     })));
     if (!best) return {name, none: true};
-    const tot = full(best.s, best.b, best.a, best.p), ws = best.a.ws.concat(best.p.ws);
-    const wcost = ws.reduce((t, w) => t + w.e * w.n * lot + feeOpt(w.n, w.e, spot, lot), 0);
+    const tot = full(best.s, best.b, best.a, best.p), ws = best.a.ws.concat(best.p.ws), cls = (best.a.cl || []).concat(best.p.cl || []);
+    const wcost = ws.reduce((t, w) => t + w.e * w.n * lot + feeOpt(w.n, w.e, spot, lot), 0) - cls.reduce((t, w) => t + w.e * w.n * lot - feeOpt(w.n, w.e, spot, lot), 0);
     let b1 = iS, b2 = iS; while (b1 > 0 && tot[b1 - 1] >= 0) b1--; while (b2 < grid.length - 1 && tot[b2 + 1] >= 0) b2++;
-    return {name, sold: best.s, bought: best.b, ws, cost: wcost, atSpot: tot[iS], profit: best.prof, worstUp: best.wu, worstDown: best.wd, worst: best.worst,
+    return {name, sold: best.s, bought: best.b, ws, cls, cost: wcost, atSpot: tot[iS], profit: best.prof, worstUp: best.wu, worstDown: best.wd, worst: best.worst,
             be: [grid[b1], grid[b2]], tot, met: best.met, capOK: best.capOK, limit: lim, margin: c.margin * best.s / c.sold};
   });
   return {plans, lim, pmin, hold, holdAt: hold[iS]};
 }
 const usdD = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 2);
 function protChart(c, pr){
-  const W = 320, H = 130, L = 6, R = 6, T = 6, B = 6, g = c.grid, cols = {"Keep lots": "var(--gain)", "Batman-like": "var(--acc)", "Max profit": "#d98c00"};
+  const W = 320, H = 130, L = 6, R = 6, T = 6, B = 6, g = c.grid, cols = {"Keep lots": "var(--gain)", "Batman-like": "var(--acc)", "Max profit": "#d98c00", "Batman + center": "#8e44ad", "Max + center": "#c0392b"};
   const series = [["Hold", pr.hold, "var(--mut)"]].concat(pr.plans.filter(p => !p.none).map(p => [p.name, p.tot, cols[p.name]]));
   const all = series.flatMap(x => x[1]), lo = Math.min(...all, 0), hi = Math.max(...all, 0), yy = v => T + (H - T - B) * (1 - (v - lo) / (hi - lo || 1));
   const xx = i => L + (W - L - R) * i / (g.length - 1);
@@ -1525,16 +1549,17 @@ function protBlock(c, label){
     if (p.none) return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> <span class="note l">no bounded structure exists with the listed strikes (no wings beyond a sold leg).</span></div>`;
     const resized = p.sold !== c.sold || p.bought !== c.bought;
     const verdict = p.met ? `<span class="g">meets the cap${pr.pmin ? " and the minimum profit" : ""}</span>` : p.capOK ? `<span class="l">cap met but profit below your minimum</span>` : `<span class="l">cap not reachable, this is the smallest loss found</span>`;
-    return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> · profit if BTC stays <b class="${sg(p.atSpot)}">${usdD(p.atSpot)}</b> after fees (hold ${usdD(pr.holdAt)}) · wings cost <b>${usdD(p.cost)}</b> · ${verdict}` +
+    return `<div style="border:1px solid var(--line);border-radius:6px;padding:6px;margin-bottom:6px"><b>${p.name}</b> · profit if BTC stays <b class="${sg(p.atSpot)}">${usdD(p.atSpot)}</b> after fees (hold ${usdD(pr.holdAt)}) · net cost of extras <b>${usdD(p.cost)}</b> · ${verdict}` +
       `<br><span class="note">Worst P&amp;L: up ${usdD(p.worstUp)} · down ${usdD(p.worstDown)} (cap ${usdD(-p.limit)}) · ${p.atSpot >= 0 ? "break-even " + beN(p.be[0]) + " to " + beN(p.be[1]) : "no profit zone at this price"}${resized ? " · est. margin " + usdD(p.margin) : ""}</span>` +
       `<table style="min-width:0"><tbody><tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(p.sold, 0)}</td><td>${f(c.callShort.bid)}</td></tr>` +
       (p.bought > 0 ? `<tr><td style="text-align:left">Buy call</td><td>${f(c.callLong.strike, 0)}</td><td>×${f(p.bought, 0)}</td><td>${f(c.callLong.ask)}</td></tr>` : "") +
       `<tr><td style="text-align:left">Sell put</td><td>${f(c.putShort.strike, 0)}</td><td>×${f(p.sold, 0)}</td><td>${f(c.putShort.bid)}</td></tr>` +
       (p.bought > 0 ? `<tr><td style="text-align:left">Buy put</td><td>${f(c.putLong.strike, 0)}</td><td>×${f(p.bought, 0)}</td><td>${f(c.putLong.ask)}</td></tr>` : "") +
+      (p.cls || []).map(w => `<tr><td style="text-align:left">Sell ${w.c ? "call" : "put"} (center)</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("") +
       p.ws.map(w => `<tr><td style="text-align:left">Buy ${w.c ? "call" : "put"} (wing)</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("") + `</tbody></table>` +
       `<button data-iprot="${label}:${i}" style="margin-top:4px">Load this structure</button></div>`;
   };
-  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of margin)${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
+  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of margin${$("icen").checked ? "; center options use " + ($("icplim").value || 20) + "%" : ""})${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. The purple and red center options also sell a strangle near the current price (a profit bulge in the middle) and keep the wider cap. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
     protChart(c, pr) + pr.plans.map(card).join("") + `</div>`;
 }
 function renderBat(main, equi, spot, exp, tol){
@@ -1572,6 +1597,7 @@ function batAutoPreview(){
 ["ifunds", "imsh", "irat", "iauto", "lev", "lot"].forEach(id => $(id).addEventListener("input", batAutoPreview));
 $("iauto").addEventListener("change", batAutoPreview);
 $("iprot").addEventListener("change", () => { if (lastBat && lastBat.length) $("ifind").click(); });
+$("icen").addEventListener("change", () => { if ($("iprot").checked && lastBat && lastBat.length) $("ifind").click(); });
 $("ifind").onclick = async () => {
   batNote = ""; batAutoPreview();
   if ($("iauto").checked && !batNote) return;
@@ -1590,7 +1616,7 @@ $("ifind").onclick = async () => {
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
-    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0; main.concat(equi).forEach(c => { c.prot = protectSearch(c, chain, spot, lim, lot, pm); }); }
+    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0, cn = {on: $("icen").checked, pct: Number($("icpct").value) || 2, lim: Number($("icplim").value) || 20}; main.concat(equi).forEach(c => { c.prot = protectSearch(c, chain, spot, lim, lot, pm, cn); }); }
     lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
     $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
     renderBat(main, equi, spot, exp, tol);
@@ -1604,6 +1630,7 @@ $("iout").addEventListener("click", e => {
     const add = (o, side, lots, px) => legs.push({s: o.symbol, side, lots, entry: px});
     if (pp.none) return;
     add(c.callShort, -1, pp.sold, c.callShort.bid); if (pp.bought > 0) add(c.callLong, 1, pp.bought, c.callLong.ask); add(c.putShort, -1, pp.sold, c.putShort.bid); if (pp.bought > 0) add(c.putLong, 1, pp.bought, c.putLong.ask);
+    (pp.cls || []).forEach(w => add(w.o, -1, w.n, w.e));
     pp.ws.forEach(w => add(w.o, 1, w.n, w.e));
     save(); drawInputs(); tick();
     $("imsg").className = "note"; $("imsg").textContent = `Loaded combination ${lab} with the ${pp.name} protection (${pp.ws.length} extra leg(s)) into the table.`;
