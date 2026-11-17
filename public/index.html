@@ -109,6 +109,9 @@ h1{padding-right:170px}
 <div class="kpi card" id="summaryCard">
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
+  <div title="Delta fee = 1.18 x the lower of 0.01% of notional and 3.5% of premium, charged on each order">Fees: entry + closing now (est.)<b id="feeTot">–</b></div>
+  <div>Net P&amp;L at mark, after entry fees<b id="netFee">–</b></div>
+  <div>Net P&amp;L if closed now, after all fees<b id="closeNet">–</b></div>
   <div>Closed legs, this expiry<b id="clsum">–</b></div>
   <div>Combined P&amp;L at mark<b id="comb">–</b></div>
   <div>Nearest strike<b id="near">–</b></div>
@@ -131,7 +134,7 @@ h1{padding-right:170px}
 
 <div class="card wrap" id="legsCard">
   <table>
-    <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th></th></tr></thead>
+    <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th title="Estimated Delta fees: entry + closing now">Fees</th><th></th></tr></thead>
     <tbody id="body"></tbody>
   </table>
   <p><button id="add">Add leg</button> <button id="closeBtn">Close position / record result</button></p>
@@ -441,7 +444,7 @@ function drawInputs(){
     <td><select data-k="side"><option value="-1" ${L.side == -1 ? "selected" : ""}>Sell</option><option value="1" ${L.side == 1 ? "selected" : ""}>Buy</option></select></td>
     <td><input type="number" value="${L.lots}" data-k="lots"></td>
     <td><input type="number" step="any" value="${L.entry}" data-k="entry"></td>
-    <td class="m">–</td><td class="b">–</td><td class="a">–</td><td class="pm">–</td><td class="pc">–</td>
+    <td class="m">–</td><td class="b">–</td><td class="a">–</td><td class="pm">–</td><td class="pc">–</td><td class="fe">–</td>
     <td><button data-del="${i}">✕</button></td></tr>`).join("");
 }
 $("body").addEventListener("change", e => {
@@ -476,7 +479,7 @@ async function tick(){
       const why = settled.find(x => x.status === "rejected");
       throw new Error(why.reason && why.reason.message ? why.reason.message : "all legs failed to load");
     }
-    let net = 0, close = 0, spot = null, nearest = null;
+    let net = 0, close = 0, spot = null, nearest = null, feeIn = 0, feeOut = 0;
     res.forEach((t, i) => {
       const L = legs[i], tr = $("body").children[i]; if (!tr) return;
       if (!t){
@@ -495,6 +498,9 @@ async function tick(){
       const cp = L.side === -1 ? ask : bid;
       const pc = cp === null ? null : L.side * (cp - L.entry) * qty;
       net += pm || 0; close += pc === null ? (pm || 0) : pc;
+      { const sp = num(t.spot_price) || spot || 0, lots = Number(L.lots) || 0, ex = cp === null ? mark : cp;
+        const fi = lots > 0 && sp ? feeOpt(lots, Number(L.entry) || 0, sp, lot) : 0, fo = lots > 0 && sp && ex ? feeOpt(lots, ex, sp, lot) : 0;
+        feeIn += fi; feeOut += fo; const fc = tr.querySelector(".fe"); if (fc) fc.textContent = lots > 0 ? f(fi + fo) : "–"; }
       if (num(t.spot_price)) spot = num(t.spot_price);
       tr.querySelector(".m").textContent = f(mark);
       tr.querySelector(".b").textContent = f(bid);
@@ -516,6 +522,9 @@ async function tick(){
     $("spotPnl").textContent = hasPos ? (net < 0 ? "-$" : "+$") + f(Math.abs(net)) : "enter lots to see P&L";
     $("spotPnl").className = cls;
     $("close").textContent = f(close); $("close").className = sg(close);
+    $("feeTot").textContent = f(feeIn + feeOut) + " (" + f(feeIn) + " in + " + f(feeOut) + " out)";
+    $("closeNet").textContent = f(close - feeIn - feeOut); $("closeNet").className = sg(close - feeIn - feeOut);
+    $("netFee").textContent = f(net - feeIn); $("netFee").className = sg(net - feeIn);
     const worst = Math.min(net, close);
     const al = $("alert");
     if (limit > 0 && worst <= -limit){
