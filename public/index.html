@@ -2881,17 +2881,19 @@ const SECTIONS = [
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
+const HIDE_DEFAULT = ["settingsCard"];
+const secHidden = id => secPref[id] === undefined ? HIDE_DEFAULT.includes(id) : secPref[id] === false;
 let secPref = {};
 try { secPref = JSON.parse(localStorage.getItem("sections")) || {}; } catch (e) {}
 function saveSections(){ try { localStorage.setItem("sections", JSON.stringify(secPref)); } catch (e) {} }
 function applySections(){
-  SECTIONS.forEach(([id]) => { const el = $(id); if (el && el.classList) el.classList.toggle("hidden-sec", secPref[id] === false); });
+  SECTIONS.forEach(([id]) => { const el = $(id); if (el && el.classList) el.classList.toggle("hidden-sec", secHidden(id)); });
   const cp = $("closePanel");                                                   // the close panel belongs to the legs table
   if (cp && cp.classList) cp.classList.toggle("hidden-sec", secPref.legsCard === false);
 }
 function renderSecList(){
   $("secList").innerHTML = SECTIONS.map(([id, name]) =>
-    `<label><input type="checkbox" data-sec="${id}" ${secPref[id] === false ? "" : "checked"}> ${esc(name)}</label>`).join("");
+    `<label><input type="checkbox" data-sec="${id}" ${secHidden(id) ? "" : "checked"}> ${esc(name)}</label>`).join("");
 }
 $("secList").addEventListener("change", e => {
   const id = e.target.dataset.sec; if (!id) return;
