@@ -70,8 +70,8 @@ h1{padding-right:170px}
   <div class="spotlbl">BTC SPOT</div>
   <div class="spotnum" id="spot">–</div>
   <div class="spotsub">Position P&amp;L at mark: <b id="spotPnl">–</b></div>
-  <div class="spotsub" id="spotChg" style="font-size:14px">Change: <span id="chg15">–</span> 15m · <span id="chg60">–</span> 1h · <span id="chg120">–</span> 2h</div>
-  <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h</div>
+  <div class="spotsub" id="spotChg" style="font-size:14px">Change: <span id="chg15">–</span> 15m · <span id="chg60">–</span> 1h · <span id="chg120">–</span> 2h · <span id="chg240">–</span> 4h · <span id="chg1440">–</span> 24h</div>
+  <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
 </div>
 
@@ -2924,7 +2924,7 @@ $("chartOn").onchange = () => {
 let chgRef = null;
 async function loadChgRef(){
   try {
-    const base = $("base").value.replace(/\/$/, ""), end = Math.floor(Date.now() / 1000), start = end - 2 * 3600 - 300;
+    const base = $("base").value.replace(/\/$/, ""), end = Math.floor(Date.now() / 1000), start = end - 24 * 3600 - 300;
     const u = new URL(base + "/v2/history/candles");
     u.searchParams.set("resolution", "1m"); u.searchParams.set("symbol", "BTCUSD"); u.searchParams.set("start", start); u.searchParams.set("end", end);
     const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
@@ -2935,7 +2935,7 @@ async function loadChgRef(){
 }
 function showChg(){
   const cur = typeof lastSpotVal === "number" ? lastSpotVal : null;
-  [[15, "chg15"], [60, "chg60"], [120, "chg120"]].forEach(([m, id]) => {
+  [[15, "chg15"], [60, "chg60"], [120, "chg120"], [240, "chg240"], [1440, "chg1440"]].forEach(([m, id]) => {
     const el = $(id); if (!el) return;
     let txt = "–", cls = "";
     if (cur && chgRef && chgRef.arr.length){
@@ -2946,9 +2946,9 @@ function showChg(){
     el.textContent = txt; el.className = cls; el.style.fontWeight = "700";
   });
   const lotV = Number($("lot").value) || 0.001, nowS = Math.floor(Date.now() / 1000), sums = {};
-  [15, 60, 120].forEach(m => { sums[m] = chgRef ? chgRef.arr.filter(x => x.t >= nowS - m * 60).reduce((a, x) => a + x.v, 0) : 0; });
-  const any = sums[120] > 0, fmtV = v => f(v * lotV, v * lotV >= 100 ? 0 : 2) + " BTC";
-  [15, 60, 120].forEach(m => { const el = $("vol" + m); if (el){ el.textContent = any ? fmtV(sums[m]) : "–"; el.style.fontWeight = "700"; el.title = "Traded volume of BTCUSD in the last " + m + " minutes (contracts × BTC per lot)"; } });
+  [15, 60, 120, 240, 1440].forEach(m => { sums[m] = chgRef ? chgRef.arr.filter(x => x.t >= nowS - m * 60).reduce((a, x) => a + x.v, 0) : 0; });
+  const any = sums[1440] > 0, fmtV = v => f(v * lotV, v * lotV >= 100 ? 0 : 2) + " BTC";
+  [15, 60, 120, 240, 1440].forEach(m => { const el = $("vol" + m); if (el){ el.textContent = any ? fmtV(sums[m]) : "–"; el.style.fontWeight = "700"; el.title = "Traded volume of BTCUSD in the last " + m + " minutes (contracts × BTC per lot)"; } });
 }
 loadChgRef(); setInterval(loadChgRef, 60000);
 loadSeries();
