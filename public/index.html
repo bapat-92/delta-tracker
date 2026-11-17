@@ -70,6 +70,7 @@ h1{padding-right:170px}
   <div class="spotlbl">BTC SPOT</div>
   <div class="spotnum" id="spot">–</div>
   <div class="spotsub">Position P&amp;L at mark: <b id="spotPnl">–</b></div>
+  <div class="spotsub" id="spotChg" style="font-size:14px">Change: <span id="chg15">–</span> 15m · <span id="chg60">–</span> 1h · <span id="chg120">–</span> 2h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
 </div>
 
@@ -540,6 +541,7 @@ async function tick(){
 }
 
 function showSpot(spot){
+  setTimeout(() => { if (typeof showChg === "function") showChg(); }, 0);
   lastSpotVal = spot;
   checkTrigger(spot);
   drawPosition();
@@ -2917,6 +2919,33 @@ $("chartOn").onchange = () => {
   try { localStorage.setItem("chartOn", $("chartOn").checked ? "1" : "0"); } catch (e) {}
   showChart();
 };
+// ---------- BTC change over the last 15 min, 1 h and 2 h (1-minute candles, refreshed every minute) ----------
+let chgRef = null;
+async function loadChgRef(){
+  try {
+    const base = $("base").value.replace(/\/$/, ""), end = Math.floor(Date.now() / 1000), start = end - 2 * 3600 - 300;
+    const u = new URL(base + "/v2/history/candles");
+    u.searchParams.set("resolution", "1m"); u.searchParams.set("symbol", "BTCUSD"); u.searchParams.set("start", start); u.searchParams.set("end", end);
+    const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
+    const arr = ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), o: Number(c.open)})).filter(c => c.o > 0).sort((a, b) => a.t - b.t);
+    chgRef = {at: end, arr};
+  } catch (e) { chgRef = null; }
+  showChg();
+}
+function showChg(){
+  const cur = typeof lastSpotVal === "number" ? lastSpotVal : null;
+  [[15, "chg15"], [60, "chg60"], [120, "chg120"]].forEach(([m, id]) => {
+    const el = $(id); if (!el) return;
+    let txt = "–", cls = "";
+    if (cur && chgRef && chgRef.arr.length){
+      const target = Math.floor(Date.now() / 1000) - m * 60;
+      const c = chgRef.arr.find(x => x.t >= target - 60) || null;      // candle opening nearest the target time
+      if (c && Math.abs(c.t - target) <= 300){ const pc = (cur / c.o - 1) * 100; txt = (pc >= 0 ? "+" : "") + pc.toFixed(2) + "%"; cls = pc >= 0 ? "g" : "l"; el.title = "BTC was about " + f(c.o, 0) + " " + m + " minutes ago"; }
+    }
+    el.textContent = txt; el.className = cls; el.style.fontWeight = "700";
+  });
+}
+loadChgRef(); setInterval(loadChgRef, 60000);
 loadSeries();
 drawInputs(); start();
 initSync();
