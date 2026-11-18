@@ -324,6 +324,17 @@ h1{padding-right:170px}
   <div id="iout"></div>
 </div>
 
+<div class="card" id="hvCard">
+  <b>Hourly move study</b>
+  <p class="note" style="margin:4px 0 8px">Loads Delta's hourly BTC candles and shows the biggest one-hour moves over the period, so you can judge how far BTC can travel in an hour.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Days back<input id="hvdays" type="number" min="2" max="80" value="30"></label>
+    <button id="hvgo">Run study</button>
+  </div>
+  <div id="hvmsg" class="note"></div>
+  <div id="hvout"></div>
+</div>
+
 <div class="card" id="nbCard">
   <b>Not-inverted Batman: back-ratio spreads</b>
   <p class="note" style="margin:4px 0 8px">The opposite shape to the Inverted Batman. On each side you sell fewer options close to the price and buy more further out, so a big move either way pays and the loss sits in a pocket between the strikes. It tries every strike pair and lot ratio and keeps the ones with the best profit if BTC stays that also keep the pocket loss inside your cap.</p>
@@ -2897,7 +2908,7 @@ trigButtons(); renderTrig();
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["dfCard", "Delta filter"], ["summaryCard", "P&L summary"],
   ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
-  ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["trigCard", "Move trigger"],
+  ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["hvCard", "Hourly move study"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
 const HIDE_DEFAULT = ["settingsCard"];
@@ -2927,6 +2938,38 @@ $("chartOn").onchange = () => {
   try { localStorage.setItem("chartOn", $("chartOn").checked ? "1" : "0"); } catch (e) {}
   showChart();
 };
+// ---------- Hourly move study (Delta 1h candles) ----------
+$("hvgo").onclick = async () => {
+  const days = Math.min(80, Math.max(2, Number($("hvdays").value) || 30)), m = $("hvmsg");
+  m.className = "note"; m.textContent = "Loading hourly candles from Delta…"; $("hvout").innerHTML = "";
+  try {
+    const base = $("base").value.replace(/\/$/, ""), end = Math.floor(Date.now() / 1000), start = end - days * 86400;
+    const u = new URL(base + "/v2/history/candles");
+    u.searchParams.set("resolution", "1h"); u.searchParams.set("symbol", "BTCUSD"); u.searchParams.set("start", start); u.searchParams.set("end", end);
+    const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
+    const c = ((await r.json()).result || []).map(x => ({t: Number(x.time) > 1e12 ? Math.floor(Number(x.time) / 1000) : Number(x.time), o: Number(x.open), h: Number(x.high), l: Number(x.low), c: Number(x.close)}))
+      .filter(x => x.o > 0 && x.h > 0 && x.l > 0).sort((a, b) => a.t - b.t);
+    if (c.length < 10) throw new Error("only " + c.length + " candles came back");
+    const rows = c.map(x => ({t: x.t, o: x.o, c: x.c, mv: (x.c / x.o - 1) * 100, rg: (x.h - x.l) / x.o * 100, hi: x.h, lo: x.l}));
+    const q = (arr, p) => { const a = arr.slice().sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; };
+    const abs = rows.map(x => Math.abs(x.mv)), rng = rows.map(x => x.rg);
+    const when = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST";
+    const top = (key, n) => rows.slice().sort((a, b) => Math.abs(b[key]) - Math.abs(a[key])).slice(0, n);
+    const tab = (title, key) => `<p style="margin:10px 0 4px"><b>${title}</b></p><div class="wrap"><table><thead><tr><th style="text-align:left">Hour starting</th><th>Open</th><th>Close</th><th>High</th><th>Low</th><th>${key === "mv" ? "Open to close" : "High to low"}</th></tr></thead><tbody>` +
+      top(key, 8).map(x => `<tr><td style="text-align:left">${when(x.t)}</td><td>${f(x.o, 0)}</td><td>${f(x.c, 0)}</td><td>${f(x.hi, 0)}</td><td>${f(x.lo, 0)}</td><td class="${key === "mv" ? sg(x.mv) : ""}"><b>${key === "mv" ? (x.mv >= 0 ? "+" : "") + f(x.mv, 2) : f(x.rg, 2)}%</b></td></tr>`).join("") + `</tbody></table></div>`;
+    const edges = [[0, 0.5, "under 0.5%"], [0.5, 1, "0.5 to 1%"], [1, 2, "1 to 2%"], [2, 3, "2 to 3%"], [3, 4, "3 to 4%"], [4, 5, "4 to 5%"], [5, Infinity, "over 5%"]];
+    const bk = (lo, hi, v) => v >= lo && v < hi, N = rows.length, pc = n => f(n / N * 100, 1) + "%";
+    const dist = `<p style="margin:10px 0 4px"><b>How many hours fall in each size band</b></p><div class="wrap"><table><thead><tr><th style="text-align:left">Size</th><th>Net move: hours</th><th>% of hours</th><th>of which up</th><th>of which down</th><th>High-to-low range: hours</th><th>% of hours</th><th>Net move at least this big: hours</th><th>% of hours</th><th>Range at least this big: hours</th><th>% of hours</th></tr></thead><tbody>` +
+      edges.map(([lo, hi, lab]) => { const a = rows.filter(x => bk(lo, hi, Math.abs(x.mv))), r2 = rows.filter(x => bk(lo, hi, x.rg)), ga = rows.filter(x => Math.abs(x.mv) >= lo), gr = rows.filter(x => x.rg >= lo); return `<tr><td style="text-align:left"><b>${lab}</b></td><td>${a.length}</td><td>${pc(a.length)}</td><td class="g">${a.filter(x => x.mv >= 0).length}</td><td class="l">${a.filter(x => x.mv < 0).length}</td><td>${r2.length}</td><td>${pc(r2.length)}</td>${lo === 0 ? '<td>–</td><td>–</td><td>–</td><td>–</td>' : `<td><b>${ga.length}</b></td><td>${pc(ga.length)}</td><td><b>${gr.length}</b></td><td>${pc(gr.length)}</td>`}</tr>`; }).join("") + `</tbody></table></div>`;
+    const up = rows.reduce((a, x) => x.mv > a.mv ? x : a, rows[0]), dn = rows.reduce((a, x) => x.mv < a.mv ? x : a, rows[0]);
+    $("hvout").innerHTML = `<div class="kpi" style="margin-top:6px"><div>Biggest hourly rise (open to close)<b class="g">+${f(up.mv, 2)}%</b></div><div>Biggest hourly fall (open to close)<b class="l">${f(dn.mv, 2)}%</b></div><div>Biggest high-to-low range in an hour<b>${f(Math.max(...rng), 2)}%</b></div>` +
+      `<div>Typical hour (median move)<b>${f(q(abs, 0.5), 2)}%</b></div><div>90% of hours move less than<b>${f(q(abs, 0.9), 2)}%</b></div><div>99% of hours move less than<b>${f(q(abs, 0.99), 2)}%</b></div></div>` +
+      dist + tab("Biggest one-hour moves (open to close)", "mv") + tab("Widest one-hour ranges (high to low)", "rg") +
+      `<p class="note">${rows.length} hourly candles from Delta's BTCUSD market, ${when(rows[0].t)} to ${when(rows[rows.length - 1].t)}. Open to close is the net move within the hour; high to low is how far price travelled inside it. Times are Indian time.</p>`;
+    m.textContent = `Done: ${rows.length} hours over ${days} days.`;
+  } catch (e) { m.className = "note l"; m.textContent = "Could not load the candles: " + e.message; }
+};
+
 // ---------- BTC change over the last 15 min, 1 h and 2 h (1-minute candles, refreshed every minute) ----------
 let chgRef = null;
 async function loadChgRef(){
