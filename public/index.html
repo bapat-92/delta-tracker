@@ -112,6 +112,7 @@ h1{padding-right:170px}
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
   <div title="Delta fee = 1.18 x the lower of 0.01% of notional and 3.5% of premium, charged on each order">Fees: entry + closing now (est.)<b id="feeTot">–</b></div>
+  <div style="grid-column:1/-1;font-size:13px;font-weight:400"><label style="flex-direction:row;align-items:center;gap:6px;display:flex"><input id="feeOn" type="checkbox" style="width:auto" checked> Include Delta fees in the P&amp;L, loss limit and position graph (entry fees + fees to close now)</label></div>
   <div>Net P&amp;L at mark, after entry fees<b id="netFee">–</b></div>
   <div>Net P&amp;L if closed now, after all fees<b id="closeNet">–</b></div>
   <div>Closed legs, this expiry<b id="clsum">–</b></div>
@@ -511,6 +512,9 @@ async function tick(){
       a.textContent = f(pm); a.className = "pm " + sg(pm);
       b.textContent = f(pc); b.className = "pc " + sg(pc);
     });
+    const rawNet = net, rawClose = close;
+    feeNow = {i: feeIn, o: feeOut};
+    if (feeOn()){ net = rawNet - feeIn; close = rawClose - feeIn - feeOut; }       // headline P&L after Delta fees
     updateChart(res);
     updateMargin(res, net);
     updateSL(res, net);
@@ -525,8 +529,8 @@ async function tick(){
     $("spotPnl").className = cls;
     $("close").textContent = f(close); $("close").className = sg(close);
     $("feeTot").textContent = f(feeIn + feeOut) + " (" + f(feeIn) + " in + " + f(feeOut) + " out)";
-    $("closeNet").textContent = f(close - feeIn - feeOut); $("closeNet").className = sg(close - feeIn - feeOut);
-    $("netFee").textContent = f(net - feeIn); $("netFee").className = sg(net - feeIn);
+    $("closeNet").textContent = f(rawClose - feeIn - feeOut); $("closeNet").className = sg(rawClose - feeIn - feeOut);
+    $("netFee").textContent = f(rawNet - feeIn); $("netFee").className = sg(rawNet - feeIn);
     const worst = Math.min(net, close);
     const al = $("alert");
     if (limit > 0 && worst <= -limit){
@@ -584,12 +588,15 @@ function payoffStats(lot){
     return {c: p[0] === "C", k: Number(p[2]), side: L.side === -1 ? -1 : 1, q: Number(L.lots) * lot, e: Number(L.entry) || 0};
   });
   if (!ls.length) return null;
-  const off = closedOff(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const off = closedOff() + feeOffset(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
   const vals = [0, ...ls.map(l => l.k)].map(pnl);
   const slope = ls.reduce((a, l) => a + (l.c ? l.side * l.q : 0), 0);   // P&L slope above the highest strike
   return {max: slope > 0 ? Infinity : Math.max(...vals), min: slope < 0 ? -Infinity : Math.min(...vals)};
 }
 
+let feeNow = {i: 0, o: 0};
+const feeOn = () => { const el = $("feeOn"); return !!(el && el.checked); };
+const feeOffset = () => feeOn() ? -(feeNow.i + feeNow.o) : 0;
 let lastRes = null, lastNet = 0;
 let lastMargin = 0;
 function updateSL(res, net){
@@ -1821,7 +1828,7 @@ function positionProfile(){
   if (!ls.length) return null;
   const ks = ls.map(l => l.k), spot = lastSpotVal || (Math.min(...ks) + Math.max(...ks)) / 2;
   const lo = Math.min(spot * 0.85, Math.min(...ks) * 0.97), hi = Math.max(spot * 1.15, Math.max(...ks) * 1.03);
-  const off = closedOff(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const off = closedOff() + feeOffset(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
   const n = 400, S = [], P = [];
   for (let i = 0; i <= n; i++){ const x = lo + (hi - lo) * i / n; S.push(x); P.push(pnl(x)); }
   const be = [];
@@ -1830,7 +1837,7 @@ function positionProfile(){
   }
   const credit = ls.reduce((a, l) => a + (l.side === -1 ? 1 : -1) * l.e * l.q, 0);
   const exps = [...new Set(ls.map(l => l.exp))];
-  return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, off, atSpot: pnl(spot)};
+  return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, off: closedOff(), atSpot: pnl(spot)};
 }
 
 let posGeom = null, posCur = null;
@@ -2951,6 +2958,8 @@ function showChg(){
   [15, 60, 120, 240, 1440].forEach(m => { const el = $("vol" + m); if (el){ el.textContent = any ? fmtV(sums[m]) : "–"; el.style.fontWeight = "700"; el.title = "Traded volume of BTCUSD in the last " + m + " minutes (contracts × BTC per lot)"; } });
 }
 loadChgRef(); setInterval(loadChgRef, 60000);
+try { if (localStorage.getItem("feeOn") === "0") $("feeOn").checked = false; } catch (e) {}
+$("feeOn").addEventListener("change", () => { try { localStorage.setItem("feeOn", $("feeOn").checked ? "1" : "0"); } catch (e) {} tick(); });
 loadSeries();
 drawInputs(); start();
 initSync();
