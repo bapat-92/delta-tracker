@@ -71,6 +71,7 @@ h1{padding-right:170px}
   <div class="spotnum" id="spot">–</div>
   <div class="spotsub">Position P&amp;L at mark: <b id="spotPnl">–</b></div>
   <div class="spotsub" id="spotChg" style="font-size:14px">Change: <span id="chg15">–</span> 15m · <span id="chg60">–</span> 1h · <span id="chg120">–</span> 2h · <span id="chg240">–</span> 4h · <span id="chg1440">–</span> 24h</div>
+  <div class="spotsub" id="spotTv" style="font-size:14px"></div>
   <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
 </div>
@@ -206,6 +207,8 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="aon" type="checkbox" style="width:auto"> Watch the triggers</label>
     <label>Trigger point (% of the way from bought to sold strike)<input id="afrac" type="number" min="10" max="100" step="5" value="50"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="asound" type="checkbox" style="width:auto" checked> Beep</label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="tv3" type="checkbox" style="width:auto"> Time-aware triggers (wider in busy hours, tighter in quiet ones; also widens the call-guard buffer)</label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="tv3b" type="checkbox" style="width:auto"> Busy-window alert on the BTC SPOT card</label>
   </div>
   <div id="astat" class="note">Off.</div>
   <div id="atab" class="wrap"></div>
@@ -309,6 +312,8 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iauto" type="checkbox" style="width:auto" checked> Auto-size lots from capital</label>
     <label>Sold lots per leg<input id="isold" type="number" min="1" value="5000"></label>
     <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="tv1" type="checkbox" style="width:auto"> Time-aware volatility (remaining expected move to expiry, hour-of-day pattern)</label>
+    <label>Sold strikes at least this many σ away (0 = only show)<input id="tvmin" type="number" min="0" step="0.1" value="1.5"></label>
     <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
     <label>Max loss in dollars (overrides the %)<input id="imaxd" type="number" min="1" step="10" placeholder="e.g. 900"></label>
@@ -330,6 +335,9 @@ h1{padding-right:170px}
   <div class="row" style="margin:8px 0">
     <label>Days back<input id="hvdays" type="number" min="2" max="80" value="30"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="hvwk" type="checkbox" style="width:auto"> Weekdays only</label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="tv2" type="checkbox" style="width:auto"> Entry-hour backtest</label>
+    <label>Sold strikes distance (±%)<input id="tvd" type="number" min="0.2" step="0.1" value="2.4"></label>
+    <label>Adjustment trigger (±%)<input id="tvt" type="number" min="0.1" step="0.1" value="1.2"></label>
     <button id="hvgo">Run study</button>
   </div>
   <div id="hvmsg" class="note"></div>
@@ -1184,7 +1192,7 @@ async function fetchChain(exp){
   const [cs, ps] = await Promise.all([get("call_options"), get("put_options")]);
   const norm = t => { const q = t.quotes || {};
     return {symbol: t.symbol, strike: Number(t.strike_price) || Number(t.symbol.split("-")[2]),
-      mark: num(t.mark_price), bid: num(q.best_bid), ask: num(q.best_ask), spot: num(t.spot_price), delta: num((t.greeks || {}).delta)}; };
+      mark: num(t.mark_price), bid: num(q.best_bid), ask: num(q.best_ask), spot: num(t.spot_price), delta: num((t.greeks || {}).delta), iv: num(q.mark_iv)}; };
   const keep = a => a.filter(t => t.symbol.endsWith("-" + exp) && num(t.mark_price) !== null).map(norm);
   return {calls: keep(cs), puts: keep(ps)};
 }
@@ -1393,7 +1401,7 @@ $("brun").onclick = async () => {
 
 
 // ---------- Inverted Batman search ----------
-let lastBat = [];
+let lastBat = [], batTvHtml = "";
 function strikeStep(chain){
   const ks = [...new Set(chain.calls.map(o => o.strike))].sort((a, b) => a - b);
   let step = Infinity;
@@ -1407,9 +1415,9 @@ function batmanSearch(chain, spot, p){
   for (let S = spot * 0.85; S <= spot * 1.15; S += gs) grid.push(S);
   let iS = 0; grid.forEach((S, i) => { if (Math.abs(S - spot) < Math.abs(grid[iS] - spot)) iS = i; });
   const lcs = chain.calls.filter(o => o.strike >= spot && o.strike <= spot * 1.03 && o.ask > 0);
-  const scs = chain.calls.filter(o => o.strike > spot && o.strike <= spot * 1.08 && o.bid > 0 && dOK(o.delta));
+  const scs = chain.calls.filter(o => o.strike > spot && o.strike <= spot * 1.08 && o.bid > 0 && dOK(o.delta) && (!p.minDist || o.strike / spot - 1 >= p.minDist));
   const lps = chain.puts.filter(o => o.strike <= spot && o.strike >= spot * 0.97 && o.ask > 0);
-  const sps = chain.puts.filter(o => o.strike < spot && o.strike >= spot * 0.92 && o.bid > 0 && dOK(o.delta));
+  const sps = chain.puts.filter(o => o.strike < spot && o.strike >= spot * 0.92 && o.bid > 0 && dOK(o.delta) && (!p.minDist || 1 - o.strike / spot >= p.minDist));
   const pair = (sh, lg, isCall) => {
     const credit = (sh.bid * p.sold - lg.ask * p.bought) * q;
     const arr = new Float64Array(grid.length);
@@ -1480,7 +1488,7 @@ function batCards(list, spot, labels, equi){
         <tr><td style="text-align:left">Sell put</td><td>${f(c.putShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.putShort.bid)} <span class="note">${dTxt(c.putShort.delta)}</span></td></tr>
         <tr><td style="text-align:left">Buy put</td><td>${f(c.putLong.strike, 0)}</td><td>×${f(c.bought, 0)}</td><td>${f(c.putLong.ask)}</td></tr>
       </tbody></table>
-      <div class="note" style="margin:6px 0">Net credit <b class="g">${usdB(c.credit)}</b> · est. margin ${usdB(c.margin)} · break-even ${beN(c.be[0])} to ${beN(c.be[1])}</div>
+      <div class="note" style="margin:6px 0">Net credit <b class="g">${usdB(c.credit)}</b>${c.tv ? ` · sold call ${f(c.tv.call, 1)}σ and sold put ${f(c.tv.put, 1)}σ from spot` : ""} · est. margin ${usdB(c.margin)} · break-even ${beN(c.be[0])} to ${beN(c.be[1])}</div>
       <div class="note l" style="margin-bottom:6px">Worst P&amp;L within ±15%: ${usdB(c.maxLoss)} at ${f(c.maxLossAt, 0)}. Losses are not capped above the sold call.</div>
       ${batChart(c)}
       <p style="margin:8px 0 0"><button data-iload="${labels[n]}">Load into table</button></p>${protBlock(c, labels[n])}</div>`).join("") + `</div>`;
@@ -1612,7 +1620,7 @@ function protBlock(c, label){
     protChart(c, pr) + pr.plans.map(card).join("") + `</div>`;
 }
 function renderBat(main, equi, spot, exp, tol){
-  let h = "";
+  let h = batTvHtml || "";
   if (main.length) h += batCards(main, spot, main.map((c, i) => "#" + (i + 1)), false);
   else h += `<p class="note l">No combination keeps profit at or above your minimum while BTC stays near ${f(spot, 0)}. Try a lower minimum, fewer bought lots, or a different expiry.${dfil.on ? " The delta filter (" + dfil.lo + "–" + dfil.hi + "Δ on the sold legs) is on and may be removing candidates." : ""}</p>`;
   h += `<p style="margin:14px 0 0"><b>Equidistant options</b> <span class="note">sold call and sold put the same distance from spot (within ±$${f(tol, 0)}), and the bought legs too</span></p>`;
@@ -1662,9 +1670,18 @@ $("ifind").onclick = async () => {
     if (!chain.calls.length || !chain.puts.length){ $("imsg").className = "note l"; $("imsg").textContent = "No options found for expiry " + exp + " (it may have expired)."; return; }
     const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot;
     const params = {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct};
+    batTvHtml = ""; let tvRem = null;
+    if ($("tv1").checked){
+      try {
+        await tvLoad(); tvRem = tvRemaining(exp);
+        if (!tvRem) batTvHtml = `<p class="note l">Time-aware volatility: this expiry (${esc(exp)}) has already passed.</p>`;
+        else { const ms = Number($("tvmin").value) || 0; params.minDist = ms > 0 ? ms * tvRem.sig : 0; batTvHtml = tvInfoHtml(tvRem, tvImplied(chain, spot, tvRem.hours), ms, spot); }
+      } catch (e){ batTvHtml = `<p class="note l">Time-aware volatility unavailable: ${esc(e.message)}. Showing the normal results.</p>`; }
+    }
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
+    if (tvRem) main.concat(equi).forEach(c => { c.tv = {call: (c.callShort.strike / spot - 1) / tvRem.sig, put: (1 - c.putShort.strike / spot) / tvRem.sig}; });
     if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0, cn = {on: $("icen").checked, pct: Number($("icpct").value) || 2, lim: Number($("icplim").value) || 20}; const fb = batFunds(); main.concat(equi).forEach(c => { c.capBase = fb || c.margin; c.capDollar = Number($("imaxd").value) || 0; c.prot = protectSearch(c, chain, spot, lim, lot, pm, cn); }); }
     lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
     $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
@@ -2495,7 +2512,7 @@ function parseDeltaLog(text){
   if (lines.length < 2) return {err: "Paste the header row and at least one order."};
   const sep = lines[0].includes("\t") ? "\t" : ",";
   const head = csvSplit(lines[0], sep).map(h => h.toLowerCase().replace(/[^a-z]/g, ""));
-  const ix = n => head.indexOf(n), iT = ix("time"), iC = ix("contract"), iQ = ix("qty"), iS = ix("side"), iF = ix("filledremaining"), iP = ix("execprice"), iFee = ix("tradingfees"), iId = ix("orderid");
+  const ix = n => head.indexOf(n), iT = ix("time"), iC = ix("contract"), iQ = ix("qty"), iS = ix("side"), iF = ix("filledremaining"), iP = ix("execprice"), iFee = ix("tradingfees"), iId = ix("orderid"), iR = ix("realisedpl");
   if (iC < 0 || iS < 0 || iP < 0 || (iQ < 0 && iF < 0)) return {err: "I couldn't find the Contract, Side, Qty and Exec.Price columns. Paste the header row too."};
   const fills = [];
   lines.slice(1).forEach((ln, n) => {
@@ -2504,23 +2521,33 @@ function parseDeltaLog(text){
     const filled = iF >= 0 && c[iF] ? Number(String(c[iF]).split("/")[0]) : Number(c[iQ]);
     const px = Number(c[iP]), side = /^b/i.test(c[iS] || "") ? 1 : /^s/i.test(c[iS] || "") ? -1 : 0;
     if (!(filled > 0) || !(px > 0) || !side) return;
-    fills.push({s: sym, side, n: filled, px, time: iT >= 0 ? c[iT] : "", fee: iFee >= 0 ? Number(c[iFee]) || 0 : 0, id: iId >= 0 && c[iId] ? c[iId] : "r" + n + "-" + sym + "-" + px});
+    fills.push({s: sym, side, n: filled, px, time: iT >= 0 ? c[iT] : "", fee: iFee >= 0 ? Number(c[iFee]) || 0 : 0, real: iR >= 0 ? Number(c[iR]) || 0 : 0, id: iId >= 0 && c[iId] ? c[iId] : "r" + n + "-" + sym + "-" + px});
   });
   if (!fills.length) return {err: "No filled option orders found in that text."};
   return {fills};
 }
 // Replay in time order: same-direction fills average in; opposite fills close and realise
-function replayFills(fills, seed){
+function replayFills(fills, seed, lot){
+  lot = lot || 0.001;
   const ord = fills.map((x, i) => Object.assign({i}, x)).sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : a.i - b.i));
   const pos = {}, closed = []; let fees = 0;
   (seed || []).forEach(L => { const q = (L.side === -1 ? -1 : 1) * Number(L.lots); if (q && L.s){ const P = pos[L.s] || (pos[L.s] = {q: 0, e: 0}); const cur = Math.abs(P.q); P.e = cur + Math.abs(q) ? (P.e * cur + (Number(L.entry) || 0) * Math.abs(q)) / (cur + Math.abs(q)) : 0; P.q += q; } });
   ord.forEach(x => {
     fees += x.fee; const P = pos[x.s] || (pos[x.s] = {q: 0, e: 0});
-    let n = x.n;
+    let n = x.n, matched = 0;
     if (P.q !== 0 && Math.sign(P.q) !== x.side){
-      const m = Math.min(n, Math.abs(P.q));
-      closed.push({s: x.s, side: Math.sign(P.q), lots: m, entry: P.e, exit: x.px, time: x.time, id: x.id + ":" + x.s});
+      const m = Math.min(n, Math.abs(P.q)), ps = Math.sign(P.q);
+      closed.push({s: x.s, side: ps, lots: m, entry: P.e, exit: x.px, time: x.time, id: x.id + ":" + x.s});
+      matched = (ps === -1 ? (P.e - x.px) : (x.px - P.e)) * m * lot;
       P.q += x.side * m; n -= m; if (P.q === 0) P.e = 0;
+    }
+    // Delta says this fill realised a profit or loss that the pasted orders don't explain: it closed a position opened before the paste began
+    if (n > 0 && P.q === 0 && Math.abs(x.real || 0) > 0.02){
+      const left = x.real - matched, E = x.side === 1 ? x.px + left / (n * lot) : x.px - left / (n * lot);
+      if (Math.abs(left) > 0.02 && E > 0){
+        closed.push({s: x.s, side: -x.side, lots: n, entry: Math.round(E * 1e6) / 1e6, exit: x.px, time: x.time, id: x.id + ":" + x.s, derived: true});
+        n = 0;
+      }
     }
     if (n > 0){ const cur = Math.abs(P.q); P.e = (P.e * cur + x.px * n) / (cur + n); P.q += x.side * n; }
   });
@@ -2535,7 +2562,7 @@ function importLog(){
   const add = $("impMode").value === "add", seen = add ? impIds() : new Set();
   const fills = r.fills.filter(x => !seen.has(x.id));
   if (!fills.length){ msg.textContent = "Every order in that text was already loaded."; return; }
-  const lot = Number($("lot").value) || 0.001, rp = replayFills(fills, add ? legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)) : null);
+  const lot = Number($("lot").value) || 0.001, rp = replayFills(fills, add ? legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)) : null, lot);
   const prevLegs = legs.map(L => Object.assign({}, L));
   const newLegs = rp.open.map(o => ({s: o.s, side: o.side, lots: o.lots, entry: Math.round(o.entry * 1e6) / 1e6}));
   journal = readJournal(); const jids = []; let realised = 0;
@@ -2547,7 +2574,7 @@ function importLog(){
   try { const all = impIds(); r.fills.forEach(x => all.add(x.id)); localStorage.setItem("impIds", JSON.stringify([...all].slice(-2000))); } catch (e) {}
   saveJournal(); legs = newLegs; save(); drawInputs(); renderJournal(); showUndo(); tick();
   const nl = legs.filter(L => Number(L.lots) > 0).length;
-  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${jids.length} closed leg(s) saved to the journal (${money(realised)} realised). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
+  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${jids.length} closed leg(s) saved to the journal (${money(realised)} realised${rp.closed.some(c => c.derived) ? "; " + rp.closed.filter(c => c.derived).length + " rebuilt from Delta's realised P&L because the opening order was not in the paste" : ""}). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
   out.innerHTML = `<table><thead><tr><th style="text-align:left">Contract</th><th>Side</th><th>Lots</th><th>Avg entry</th></tr></thead><tbody>` +
     rp.open.map(o => `<tr><td style="text-align:left">${esc(o.s)}</td><td>${o.side === -1 ? "Sell" : "Buy"}</td><td>${f(o.lots, 0)}</td><td>${f(o.entry, 2)}</td></tr>`).join("") + `</tbody></table>`;
 }
@@ -2671,7 +2698,7 @@ function adjEval(){
   if (!adj.on){ stat.textContent = "Off."; $("atab").innerHTML = ""; adjFired = {C: false, P: false}; return; }
   const spot = typeof lastSpotVal === "number" ? lastSpotVal : null;
   if (!spot){ stat.textContent = "Waiting for the BTC price…"; return; }
-  const lv = adjLevels(wifLegs(Number($("lot").value) || 0.001), spot, adj.frac / 100);
+  const lv = adjLevels(wifLegs(Number($("lot").value) || 0.001), spot, Math.min(0.95, adj.frac / 100 * tvTrigK()));
   if (!lv.C && !lv.P){ stat.textContent = "No bought strike inside a sold strike was found, so there is no climb to watch (needs a bought call below a sold call and/or a bought put above a sold put)."; $("atab").innerHTML = ""; return; }
   let pr = null; try { pr = positionProfile(); } catch (e) {}
   const hit = {C: lv.C && spot >= lv.C.trig, P: lv.P && spot <= lv.P.trig}, rows = [];
@@ -2689,7 +2716,7 @@ function adjEval(){
         if (adj.sound) guardBeep();
         try { if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("Batman adjustment trigger", {body: (sd === "C" ? "Call side" : "Put side") + " halfway trigger reached at BTC " + f(spot, 0)}); } catch (e) {} } });
   } else {
-    stat.textContent = `Watching. BTC ${f(spot, 0)}. Triggers: ${lv.P ? "down " + f(lv.P.trig, 0) : "no put side"} · ${lv.C ? "up " + f(lv.C.trig, 0) : "no call side"}.`;
+    stat.textContent = `Watching. BTC ${f(spot, 0)}. Triggers: ${lv.P ? "down " + f(lv.P.trig, 0) : "no put side"} · ${lv.C ? "up " + f(lv.C.trig, 0) : "no call side"}.` + (tvTrigK() !== 1 ? ` Scaled ×${tvTrigK().toFixed(2)} for the current hour's activity.` : "");
     if (adjFired.C || adjFired.P){ adjFired = {C: false, P: false}; if (!guardFired) document.title = "Delta India position tracker"; }
   }
 }
@@ -2721,7 +2748,7 @@ function guardCheck(calls, quotes, spot, cfg, lot){
     const awayPct = spot > 0 ? (c.k - spot) / spot * 100 : null;
     const why = [];
     if (Number(cfg.mult) > 0 && ratio !== null && ratio >= Number(cfg.mult)) why.push(`${c.s} worth ${ratio.toFixed(2)}× collected`);
-    if (awayPct !== null && Number(cfg.buf) > 0 && awayPct <= Number(cfg.buf)) why.push(awayPct < 0 ? `BTC is ${Math.abs(awayPct).toFixed(2)}% above ${c.s.split("-")[2]}` : `BTC within ${awayPct.toFixed(2)}% of ${c.s.split("-")[2]}`);
+    if (awayPct !== null && Number(cfg.buf) > 0 && awayPct <= Number(cfg.buf) * tvTrigK()) why.push(awayPct < 0 ? `BTC is ${Math.abs(awayPct).toFixed(2)}% above ${c.s.split("-")[2]}` : `BTC within ${awayPct.toFixed(2)}% of ${c.s.split("-")[2]}`);
     why.forEach(w => reasons.push(w));
     rows.push({s: c.s, k: c.k, lots: c.lots, entry: c.e, mark, bid: q.bid, ask, buyback, legPnl, ratio, awayPct, hit: why.length > 0});
   });
@@ -2939,6 +2966,99 @@ $("chartOn").onchange = () => {
   try { localStorage.setItem("chartOn", $("chartOn").checked ? "1" : "0"); } catch (e) {}
   showChart();
 };
+// ---------- Time-aware volatility (optional): hour-of-day pattern from Delta 1h candles ----------
+let tvP = null;
+async function tvLoad(force){
+  if (tvP && !force && Date.now() - tvP.at < 30 * 60000) return tvP;
+  const days = Math.min(80, Math.max(7, Number($("hvdays").value) || 30)), base = $("base").value.replace(/\/$/, ""), end = Math.floor(Date.now() / 1000);
+  const u = new URL(base + "/v2/history/candles");
+  u.searchParams.set("resolution", "1h"); u.searchParams.set("symbol", "BTCUSD"); u.searchParams.set("start", end - days * 86400); u.searchParams.set("end", end);
+  const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
+  const c = ((await r.json()).result || []).map(x => ({t: Number(x.time) > 1e12 ? Math.floor(Number(x.time) / 1000) : Number(x.time), o: Number(x.open), h: Number(x.high), l: Number(x.low), c: Number(x.close)})).filter(x => x.o > 0 && x.c > 0).sort((a, b) => a.t - b.t);
+  if (c.length < 48) throw new Error("only " + c.length + " hourly candles came back");
+  const sum = Array(24).fill(0), cnt = Array(24).fill(0);
+  c.forEach(x => { const h = new Date(x.t * 1000).getUTCHours(), v = Math.log(x.c / x.o); sum[h] += v * v; cnt[h]++; });
+  const all = sum.reduce((a, b) => a + b, 0) / cnt.reduce((a, b) => a + b, 0);
+  tvP = {s2: sum.map((v, h) => cnt[h] ? v / cnt[h] : all), avg: all, n: c.length, days, at: Date.now()};
+  return tvP;
+}
+function tvExpMs(code){
+  const m = /^(\d{2})(\d{2})(\d{2})$/.exec(String(code)), hm = /^(\d{1,2}):(\d{2})$/.exec($("bexp").value.trim()) || [0, 12, 0];
+  return m ? Date.UTC(2000 + Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(hm[1]), Number(hm[2])) : null;
+}
+// expected 1-sigma move from now to expiry, adding up the typical variance of each remaining hour
+function tvRemaining(code, nowMs){
+  const ex = tvExpMs(code); nowMs = nowMs || Date.now();
+  if (!tvP || !ex || ex <= nowMs) return null;
+  let t = nowMs, v = 0, flat = 0;
+  while (t < ex){ const nxt = Math.min(ex, (Math.floor(t / 3600000) + 1) * 3600000), fr = (nxt - t) / 3600000; v += tvP.s2[new Date(t).getUTCHours()] * fr; flat += tvP.avg * fr; t = nxt; }
+  return {hours: (ex - nowMs) / 3600000, sig: Math.sqrt(v), flat: Math.sqrt(flat)};
+}
+function tvImplied(chain, spot, hours){
+  const near = a => a.filter(o => o.iv > 0).sort((x, y) => Math.abs(x.strike - spot) - Math.abs(y.strike - spot))[0];
+  const a = near(chain.calls), b = near(chain.puts), ivs = [a, b].filter(Boolean).map(o => o.iv > 3 ? o.iv / 100 : o.iv);
+  if (!ivs.length) return null;
+  return (ivs.reduce((x, y) => x + y, 0) / ivs.length) * Math.sqrt(hours / 8760);
+}
+function tvInfoHtml(rem, impl, minSig, spot){
+  const p = x => "±" + f(x * 100, 2) + "%";
+  let h = `<div style="border:1px solid var(--line);border-radius:6px;padding:8px;margin:8px 0"><b>Time-aware volatility</b> <span class="note">from the last ${tvP.days} days of Delta hourly candles</span><br>` +
+    `Expected 1σ move from now to expiry (${f(rem.hours, 1)} h left): <b>${p(rem.sig)}</b> (about ±$${f(rem.sig * spot, 0)}). Treating every hour as average would give ${p(rem.flat)}.`;
+  if (impl){ const r = impl / rem.sig;
+    h += `<br>Option-implied 1σ move (at-the-money IV): <b>${p(impl)}</b>, ${f(r, 2)}x the pattern. ` + (r >= 1.15 ? `<span class="g">The options price in more movement than the recent pattern suggests, which favours selling.</span>` : r <= 0.87 ? `<span class="l">The options price in less movement than the recent pattern suggests. Consider a smaller size or skipping.</span>` : `Roughly in line with the pattern, so no clear edge either way.`); }
+  if (minSig > 0) h += `<br>Sold strikes must be at least <b>${f(minSig, 1)}σ</b> (${p(minSig * rem.sig)}, about $${f(minSig * rem.sig * spot, 0)}) from spot.`;
+  return h + `</div>`;
+}
+const tvAct = h => tvP ? tvP.s2[h] / tvP.avg : 1;
+function tvTrigK(){ const el = $("tv3"); if (!el || !el.checked || !tvP) return 1; return Math.min(1.25, Math.max(0.8, Math.sqrt(tvAct(new Date().getUTCHours())))); }
+function tvBanner(){
+  const el = $("spotTv"); if (!el) return;
+  if (!$("tv3b").checked || !tvP){ el.innerHTML = ""; return; }
+  const d = new Date(), h = d.getUTCHours(), left = 60 - d.getUTCMinutes(), cur = tvAct(h), nxt = tvAct((h + 1) % 24);
+  const loc = hh => { const x = new Date(); x.setUTCHours(hh, 0, 0, 0); return String(x.getHours()).padStart(2, "0") + ":00"; };
+  let t = `Activity now ${f(cur, 1)}x the average hour`, col = "";
+  if (nxt >= 1.5 && nxt > cur * 1.15){ t += ` · busy hour starts in ${left} min (${loc((h + 1) % 24)}, typically ${f(nxt, 1)}x)`; col = "#c0392b"; }
+  else if (cur >= 1.5){ t += " · busy hour now"; col = "#c0392b"; }
+  else if (cur <= 0.6){ t += " · quiet hour"; col = "var(--gain)"; }
+  el.innerHTML = `<span style="color:${col || "inherit"};font-weight:700">${t}</span>`;
+}
+// entry-hour backtest: for each hour you could open at, how often did BTC stay inside +/-d% until the next expiry?
+function tvSweepHtml(c, dPct, tPct){
+  const hm = /^(\d{1,2}):(\d{2})$/.exec($("bexp").value.trim()) || [0, 12, 0], expSec = (+hm[1]) * 3600 + (+hm[2]) * 60, d = dPct / 100, tr = tPct / 100;
+  const rows = Array.from({length: 24}, () => ({n: 0, stay: 0, trig: 0, hrs: 0, ex: 0})), lastEnd = c[c.length - 1].t + 3600;
+  c.forEach((x, i) => {
+    const day = Math.floor(x.t / 86400) * 86400, tx = day + expSec > x.t ? day + expSec : day + expSec + 86400;
+    if (tx > lastEnd) return;
+    let mh = x.h, ml = x.l, k = i, got = 0;
+    while (k < c.length && c[k].t < tx){ mh = Math.max(mh, c[k].h); ml = Math.min(ml, c[k].l); got++; k++; }
+    const need = (tx - x.t) / 3600; if (got < need * 0.9) return;
+    const up = mh / x.o - 1, dn = 1 - ml / x.o, R = rows[new Date(x.t * 1000).getUTCHours()];
+    R.n++; R.hrs += need; R.ex += Math.max(up, dn); if (up < d && dn < d) R.stay++; if (up >= tr || dn >= tr) R.trig++;
+  });
+  const lab = e => { const x = new Date(); x.setUTCHours(e, 0, 0, 0); return x.getHours(); };
+  const list = rows.map((r, e) => ({e, loc: lab(e), n: r.n, stay: r.n ? r.stay / r.n : null, trig: r.n ? r.trig / r.n : null, hrs: r.n ? r.hrs / r.n : 0, ex: r.n ? r.ex / r.n : 0})).filter(r => r.n >= 3).sort((a, b) => a.loc - b.loc);
+  if (!list.length) return `<p class="note l">Entry-hour backtest: not enough complete days.</p>`;
+  const W = 480, H = 170, L = 34, R = 8, T = 10, B = 26, bw = (W - L - R) / list.length, yv = v => T + (H - T - B) * (1 - v), best = list.reduce((a, b) => b.stay > a.stay ? b : a), worst = list.reduce((a, b) => b.stay < a.stay ? b : a);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:560px;height:auto;display:block">`;
+  [0, 0.25, 0.5, 0.75, 1].forEach(v => { svg += `<line x1="${L}" x2="${W - R}" y1="${yv(v).toFixed(1)}" y2="${yv(v).toFixed(1)}" stroke="var(--line)"/><text x="${L - 4}" y="${(yv(v) + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="var(--mut)">${Math.round(v * 100)}%</text>`; });
+  list.forEach((r, i) => { const bx = L + i * bw, col = r.stay >= 0.8 ? "var(--gain)" : r.stay >= 0.6 ? "var(--acc)" : "#c0392b";
+    svg += `<rect x="${(bx + 1.5).toFixed(1)}" y="${yv(r.stay).toFixed(1)}" width="${Math.max(2, bw - 3).toFixed(1)}" height="${(H - B - yv(r.stay)).toFixed(1)}" fill="${col}" opacity="0.85"><title>Entry ${String(r.loc).padStart(2, "0")}:00 local: stayed inside ±${dPct}% in ${f(r.stay * 100, 0)}% of ${r.n} days; reached ±${tPct}% in ${f(r.trig * 100, 0)}%; ${f(r.hrs, 1)} h to expiry</title></rect>` + (i % 2 === 0 ? `<text x="${(bx + bw / 2).toFixed(1)}" y="${H - 10}" font-size="9" text-anchor="middle" fill="var(--mut)">${r.loc}</text>` : ""); });
+  svg += `</svg>`;
+  return `<p style="margin:12px 0 4px"><b>Entry-hour backtest</b> <span class="note">if you opened at each hour (your local time) and held to the next ${esc($("bexp").value)} UTC expiry, how often did BTC stay inside ±${dPct}%?</span></p>` + svg +
+    `<div class="wrap"><table><thead><tr><th style="text-align:left">Entry (local)</th><th>Days</th><th>Hours to expiry</th><th>Stayed inside ±${dPct}%</th><th>Reached ±${tPct}% (trigger)</th><th>Avg biggest move</th></tr></thead><tbody>` +
+    list.map(r => `<tr><td style="text-align:left">${String(r.loc).padStart(2, "0")}:00</td><td>${r.n}</td><td>${f(r.hrs, 1)}</td><td class="${r.stay >= 0.8 ? "g" : r.stay < 0.6 ? "l" : ""}"><b>${f(r.stay * 100, 0)}%</b></td><td>${f(r.trig * 100, 0)}%</td><td>${f(r.ex * 100, 2)}%</td></tr>`).join("") + `</tbody></table></div>` +
+    `<p class="note">Best entry hour here: ${String(best.loc).padStart(2, "0")}:00 (${f(best.stay * 100, 0)}% stayed inside); weakest: ${String(worst.loc).padStart(2, "0")}:00 (${f(worst.stay * 100, 0)}%). This looks at BTC's path only, not option prices or premium, and hours closer to expiry naturally look safer because there is less time left, so compare entry hours with similar time to expiry. About ${Math.round(list.reduce((a, r) => a + r.n, 0) / list.length)} days per hour is a thin sample.</p>`;
+}
+// remember the tick boxes
+const TV_IDS = ["tv1", "tvmin", "tv2", "tvd", "tvt", "tv3", "tv3b"];
+try { const sv = JSON.parse(localStorage.getItem("tv") || "{}"); TV_IDS.forEach(id => { const el = $(id); if (el && sv[id] !== undefined){ if (el.type === "checkbox") el.checked = !!sv[id]; else el.value = sv[id]; } }); } catch (e) {}
+TV_IDS.forEach(id => $(id).addEventListener("change", () => {
+  try { const o = {}; TV_IDS.forEach(k => { o[k] = $(k).type === "checkbox" ? $(k).checked : $(k).value; }); localStorage.setItem("tv", JSON.stringify(o)); } catch (e) {}
+  if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adjEval(); }).catch(() => {}); else { tvBanner(); adjEval(); }
+}));
+setInterval(() => { if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adjEval(); }).catch(() => {}); else tvBanner(); }, 60000);
+if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adjEval(); }).catch(() => {});
+
 // ---------- Hourly move study (Delta 1h candles) ----------
 $("hvgo").onclick = async () => {
   const days = Math.min(80, Math.max(2, Number($("hvdays").value) || 30)), m = $("hvmsg");
@@ -2981,10 +3101,11 @@ $("hvgo").onclick = async () => {
       `<div class="note" style="margin:2px 0 6px"><span style="color:var(--gain);font-weight:700">■ quietest 3 hours</span> · <span style="color:#c0392b;font-weight:700">■ busiest 3 hours</span> · <span style="font-weight:700">●</span> median hour (less distorted by single big days). Hover a bar for the numbers.</div>` +
       `<div class="kpi"><div>Quietest 3-hour stretch<b class="g">${pad(wq.h)} to ${pad(wq.h + 3)}</b><span class="note">avg range ${f(wq.avg, 2)}% per hour</span></div><div>Busiest 3-hour stretch<b class="l">${pad(wb.h)} to ${pad(wb.h + 3)}</b><span class="note">avg range ${f(wb.avg, 2)}% per hour</span></div><div>Busiest vs quietest hour<b>${f(ranked[23].mean / (ranked[0].mean || 1), 1)}x</b></div></div>` +
       `<p class="note">Each hour of the day has about ${Math.round(prof.length / 24)} samples, so the pattern is rough: one big news day can lift a bar, which is why the median dots are shown too. Quiet hours say when price tends to sit still; they are not a promise. Weekends are usually calmer, so tick “weekdays only” to see the working-week pattern.</p>`;
+    const tvSweep = $("tv2").checked ? tvSweepHtml(c, Number($("tvd").value) || 2.4, Number($("tvt").value) || 1.2) : "";
     const up = rows.reduce((a, x) => x.mv > a.mv ? x : a, rows[0]), dn = rows.reduce((a, x) => x.mv < a.mv ? x : a, rows[0]);
     $("hvout").innerHTML = `<div class="kpi" style="margin-top:6px"><div>Biggest hourly rise (open to close)<b class="g">+${f(up.mv, 2)}%</b></div><div>Biggest hourly fall (open to close)<b class="l">${f(dn.mv, 2)}%</b></div><div>Biggest high-to-low range in an hour<b>${f(Math.max(...rng), 2)}%</b></div>` +
       `<div>Typical hour (median move)<b>${f(q(abs, 0.5), 2)}%</b></div><div>90% of hours move less than<b>${f(q(abs, 0.9), 2)}%</b></div><div>99% of hours move less than<b>${f(q(abs, 0.99), 2)}%</b></div></div>` +
-      dist + profile + tab("Biggest one-hour moves (open to close)", "mv") + tab("Widest one-hour ranges (high to low)", "rg") +
+      dist + profile + tvSweep + tab("Biggest one-hour moves (open to close)", "mv") + tab("Widest one-hour ranges (high to low)", "rg") +
       `<p class="note">${rows.length} hourly candles from Delta's BTCUSD market, ${when(rows[0].t)} to ${when(rows[rows.length - 1].t)}. Open to close is the net move within the hour; high to low is how far price travelled inside it. Times are in your browser's local time (${esc(tzName)}).</p>`;
     m.textContent = `Done: ${rows.length} hours over ${days} days.`;
   } catch (e) { m.className = "note l"; m.textContent = "Could not load the candles: " + e.message; }
