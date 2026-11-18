@@ -138,7 +138,7 @@ h1{padding-right:170px}
 
 <div class="card wrap" id="legsCard">
   <table>
-    <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th title="Estimated Delta fees: entry + closing now">Fees</th><th></th></tr></thead>
+    <thead><tr><th>Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>Mark</th><th>Bid</th><th>Ask</th><th>P&amp;L (mark)</th><th>P&amp;L (close)</th><th title="Estimated Delta fees: entry + closing now">Fees</th><th></th></tr></thead>
     <tbody id="body"></tbody>
   </table>
   <p><button id="add">Add leg</button> <button id="closeBtn">Close position / record result</button></p>
@@ -467,8 +467,19 @@ function drawInputs(){
     <td><select data-k="side"><option value="-1" ${L.side == -1 ? "selected" : ""}>Sell</option><option value="1" ${L.side == 1 ? "selected" : ""}>Buy</option></select></td>
     <td><input type="number" value="${L.lots}" data-k="lots"></td>
     <td><input type="number" step="any" value="${L.entry}" data-k="entry"></td>
-    <td class="m">–</td><td class="b">–</td><td class="a">–</td><td class="pm">–</td><td class="pc">–</td><td class="fe">–</td>
+    <td class="ex">–</td><td class="m">–</td><td class="b">–</td><td class="a">–</td><td class="pm">–</td><td class="pc">–</td><td class="fe">–</td>
     <td><button data-del="${i}">✕</button></td></tr>`).join("");
+  drawClosedRows();
+}
+// closed positions (from the journal) listed under the open legs, with their exit price
+function drawClosedRows(){
+  const body = $("body"); if (!body) return;
+  body.querySelectorAll("tr.closedrow").forEach(r => r.remove());
+  if (!incClosed) return;
+  const list = closedLegs(); if (!list.length) return;
+  const tot = list.reduce((a, c) => a + c.pnl, 0), dash = "<td>–</td>";
+  const rows = list.map(c => `<tr class="closedrow" style="background:rgba(128,128,128,.08)"><td style="text-align:left">${esc(c.s)} <span class="note">closed ${esc(c.date)}</span></td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry, 2)}</td><td><b>${f(c.exit, 2)}</b></td>${dash}${dash}${dash}<td class="${sg(c.pnl)}">${f(c.pnl)}</td><td class="${sg(c.pnl)}">${f(c.pnl)}</td>${dash}<td><span class="note">closed</span></td></tr>`).join("");
+  body.insertAdjacentHTML("beforeend", rows + `<tr class="closedrow"><td colspan="8" style="text-align:left"><b>Closed legs, realised</b> <span class="note">(included in the combined P&amp;L above)</span></td><td class="${sg(tot)}"><b>${f(tot)}</b></td><td class="${sg(tot)}"><b>${f(tot)}</b></td><td></td><td></td></tr>`);
 }
 $("body").addEventListener("change", e => {
   const tr = e.target.closest("tr"); if (!tr || !e.target.dataset.k) return;
@@ -898,6 +909,7 @@ function legPnl(L, exit, lot){
 }
 
 function renderJournal(){
+  try { drawClosedRows(); } catch (e) {}
   $("jwarn").textContent = storageOk() ? "" : "Browser storage is blocked here, so this journal will be lost when you reload.";
   const total = journal.reduce((a, j) => a + j.pnl, 0);
   $("cumVal").textContent = journal.length ? money(total) : "$0";
@@ -2479,7 +2491,7 @@ $("plout").addEventListener("click", e => {
 
 
 $("cinc").checked = incClosed;
-$("cinc").onchange = () => { incClosed = $("cinc").checked; try { localStorage.setItem("cinc", incClosed ? "1" : "0"); } catch (e) {} drawPosition(); if (lastRes) updateMargin(lastRes, lastNet); };
+$("cinc").onchange = () => { incClosed = $("cinc").checked; try { localStorage.setItem("cinc", incClosed ? "1" : "0"); } catch (e) {} drawClosedRows(); drawPosition(); if (lastRes) updateMargin(lastRes, lastNet); };
 // ---------- Delta filter ----------
 let dfil = {on: false, lo: 15, hi: 25};
 try { Object.assign(dfil, JSON.parse(localStorage.getItem("dfil")) || {}); } catch (e) {}
