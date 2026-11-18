@@ -329,6 +329,7 @@ h1{padding-right:170px}
   <p class="note" style="margin:4px 0 8px">Loads Delta's hourly BTC candles and shows the biggest one-hour moves over the period, so you can judge how far BTC can travel in an hour.</p>
   <div class="row" style="margin:8px 0">
     <label>Days back<input id="hvdays" type="number" min="2" max="80" value="30"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="hvwk" type="checkbox" style="width:auto"> Weekdays only</label>
     <button id="hvgo">Run study</button>
   </div>
   <div id="hvmsg" class="note"></div>
@@ -2953,19 +2954,38 @@ $("hvgo").onclick = async () => {
     const rows = c.map(x => ({t: x.t, o: x.o, c: x.c, mv: (x.c / x.o - 1) * 100, rg: (x.h - x.l) / x.o * 100, hi: x.h, lo: x.l}));
     const q = (arr, p) => { const a = arr.slice().sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; };
     const abs = rows.map(x => Math.abs(x.mv)), rng = rows.map(x => x.rg);
-    const when = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST";
+    const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+    const when = t => new Date(t * 1000).toLocaleString("en-GB", {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
     const top = (key, n) => rows.slice().sort((a, b) => Math.abs(b[key]) - Math.abs(a[key])).slice(0, n);
-    const tab = (title, key) => `<p style="margin:10px 0 4px"><b>${title}</b></p><div class="wrap"><table><thead><tr><th style="text-align:left">Hour starting</th><th>Open</th><th>Close</th><th>High</th><th>Low</th><th>${key === "mv" ? "Open to close" : "High to low"}</th></tr></thead><tbody>` +
+    const tab = (title, key) => `<p style="margin:10px 0 4px"><b>${title}</b></p><div class="wrap"><table><thead><tr><th style="text-align:left">Hour starting (local)</th><th>Open</th><th>Close</th><th>High</th><th>Low</th><th>${key === "mv" ? "Open to close" : "High to low"}</th></tr></thead><tbody>` +
       top(key, 8).map(x => `<tr><td style="text-align:left">${when(x.t)}</td><td>${f(x.o, 0)}</td><td>${f(x.c, 0)}</td><td>${f(x.hi, 0)}</td><td>${f(x.lo, 0)}</td><td class="${key === "mv" ? sg(x.mv) : ""}"><b>${key === "mv" ? (x.mv >= 0 ? "+" : "") + f(x.mv, 2) : f(x.rg, 2)}%</b></td></tr>`).join("") + `</tbody></table></div>`;
     const edges = [[0, 0.5, "under 0.5%"], [0.5, 1, "0.5 to 1%"], [1, 2, "1 to 2%"], [2, 3, "2 to 3%"], [3, 4, "3 to 4%"], [4, 5, "4 to 5%"], [5, Infinity, "over 5%"]];
     const bk = (lo, hi, v) => v >= lo && v < hi, N = rows.length, pc = n => f(n / N * 100, 1) + "%";
     const dist = `<p style="margin:10px 0 4px"><b>How many hours fall in each size band</b></p><div class="wrap"><table><thead><tr><th style="text-align:left">Size</th><th>Net move: hours</th><th>% of hours</th><th>of which up</th><th>of which down</th><th>High-to-low range: hours</th><th>% of hours</th><th>Net move at least this big: hours</th><th>% of hours</th><th>Range at least this big: hours</th><th>% of hours</th></tr></thead><tbody>` +
       edges.map(([lo, hi, lab]) => { const a = rows.filter(x => bk(lo, hi, Math.abs(x.mv))), r2 = rows.filter(x => bk(lo, hi, x.rg)), ga = rows.filter(x => Math.abs(x.mv) >= lo), gr = rows.filter(x => x.rg >= lo); return `<tr><td style="text-align:left"><b>${lab}</b></td><td>${a.length}</td><td>${pc(a.length)}</td><td class="g">${a.filter(x => x.mv >= 0).length}</td><td class="l">${a.filter(x => x.mv < 0).length}</td><td>${r2.length}</td><td>${pc(r2.length)}</td>${lo === 0 ? '<td>–</td><td>–</td><td>–</td><td>–</td>' : `<td><b>${ga.length}</b></td><td>${pc(ga.length)}</td><td><b>${gr.length}</b></td><td>${pc(gr.length)}</td>`}</tr>`; }).join("") + `</tbody></table></div>`;
+    const wkOnly = $("hvwk").checked;
+    const prof = rows.filter(x => { const d = new Date(x.t * 1000).getDay(); return !wkOnly || (d !== 0 && d !== 6); });
+    const hrs = Array.from({length: 24}, (_, h) => { const a = prof.filter(x => new Date(x.t * 1000).getHours() === h), r = a.map(x => x.rg), m2 = a.map(x => Math.abs(x.mv)); return {h, n: a.length, rs: r.reduce((t, v) => t + v, 0), mean: r.length ? r.reduce((t, v) => t + v, 0) / r.length : 0, med: r.length ? q(r, 0.5) : 0, mv: m2.length ? m2.reduce((t, v) => t + v, 0) / m2.length : 0}; });
+    const ranked = hrs.slice().sort((a, b) => a.mean - b.mean), quiet = new Set(ranked.slice(0, 3).map(x => x.h)), busy = new Set(ranked.slice(-3).map(x => x.h));
+    const win = hrs.map((x, i) => { const w = [0, 1, 2].map(k => hrs[(i + k) % 24]), n = w.reduce((t, y) => t + y.n, 0); return {h: x.h, avg: n ? w.reduce((t, y) => t + y.rs, 0) / n : 0}; });
+    const wq = win.reduce((a, b) => b.avg < a.avg ? b : a), wb = win.reduce((a, b) => b.avg > a.avg ? b : a), pad = h => String(h % 24).padStart(2, "0") + ":00";
+    const W = 480, H = 190, L = 34, R = 8, T = 10, B = 26, mx = Math.max(...hrs.map(x => x.mean), 0.01) * 1.1, bw = (W - L - R) / 24;
+    const yv = v => T + (H - T - B) * (1 - v / mx);
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:560px;height:auto;display:block">`;
+    for (let k = 0; k <= 4; k++){ const v = mx * k / 4; svg += `<line x1="${L}" x2="${W - R}" y1="${yv(v).toFixed(1)}" y2="${yv(v).toFixed(1)}" stroke="var(--line)"/><text x="${L - 4}" y="${(yv(v) + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="var(--mut)">${f(v, 2)}%</text>`; }
+    hrs.forEach(x => { const col = busy.has(x.h) ? "#c0392b" : quiet.has(x.h) ? "var(--gain)" : "var(--acc)", bx = L + x.h * bw;
+      svg += `<rect x="${(bx + 1.5).toFixed(1)}" y="${yv(x.mean).toFixed(1)}" width="${(bw - 3).toFixed(1)}" height="${(H - B - yv(x.mean)).toFixed(1)}" fill="${col}" opacity="0.85"><title>${pad(x.h)} to ${pad(x.h + 1)}: average range ${f(x.mean, 2)}%, median ${f(x.med, 2)}%, average net move ${f(x.mv, 2)}% (${x.n} hours)</title></rect>` +
+        `<circle cx="${(bx + bw / 2).toFixed(1)}" cy="${yv(x.med).toFixed(1)}" r="2.2" fill="var(--fg)"/>` + (x.h % 2 === 0 ? `<text x="${(bx + bw / 2).toFixed(1)}" y="${H - 10}" font-size="9" text-anchor="middle" fill="var(--mut)">${x.h}</text>` : ""); });
+    svg += `</svg>`;
+    const profile = `<p style="margin:12px 0 4px"><b>Quiet and busy times of day</b> <span class="note">average high-to-low range of each hour, by hour of day in your local time (${esc(tzName)})${wkOnly ? ", weekdays only" : ""}</span></p>` + svg +
+      `<div class="note" style="margin:2px 0 6px"><span style="color:var(--gain);font-weight:700">■ quietest 3 hours</span> · <span style="color:#c0392b;font-weight:700">■ busiest 3 hours</span> · <span style="font-weight:700">●</span> median hour (less distorted by single big days). Hover a bar for the numbers.</div>` +
+      `<div class="kpi"><div>Quietest 3-hour stretch<b class="g">${pad(wq.h)} to ${pad(wq.h + 3)}</b><span class="note">avg range ${f(wq.avg, 2)}% per hour</span></div><div>Busiest 3-hour stretch<b class="l">${pad(wb.h)} to ${pad(wb.h + 3)}</b><span class="note">avg range ${f(wb.avg, 2)}% per hour</span></div><div>Busiest vs quietest hour<b>${f(ranked[23].mean / (ranked[0].mean || 1), 1)}x</b></div></div>` +
+      `<p class="note">Each hour of the day has about ${Math.round(prof.length / 24)} samples, so the pattern is rough: one big news day can lift a bar, which is why the median dots are shown too. Quiet hours say when price tends to sit still; they are not a promise. Weekends are usually calmer, so tick “weekdays only” to see the working-week pattern.</p>`;
     const up = rows.reduce((a, x) => x.mv > a.mv ? x : a, rows[0]), dn = rows.reduce((a, x) => x.mv < a.mv ? x : a, rows[0]);
     $("hvout").innerHTML = `<div class="kpi" style="margin-top:6px"><div>Biggest hourly rise (open to close)<b class="g">+${f(up.mv, 2)}%</b></div><div>Biggest hourly fall (open to close)<b class="l">${f(dn.mv, 2)}%</b></div><div>Biggest high-to-low range in an hour<b>${f(Math.max(...rng), 2)}%</b></div>` +
       `<div>Typical hour (median move)<b>${f(q(abs, 0.5), 2)}%</b></div><div>90% of hours move less than<b>${f(q(abs, 0.9), 2)}%</b></div><div>99% of hours move less than<b>${f(q(abs, 0.99), 2)}%</b></div></div>` +
-      dist + tab("Biggest one-hour moves (open to close)", "mv") + tab("Widest one-hour ranges (high to low)", "rg") +
-      `<p class="note">${rows.length} hourly candles from Delta's BTCUSD market, ${when(rows[0].t)} to ${when(rows[rows.length - 1].t)}. Open to close is the net move within the hour; high to low is how far price travelled inside it. Times are Indian time.</p>`;
+      dist + profile + tab("Biggest one-hour moves (open to close)", "mv") + tab("Widest one-hour ranges (high to low)", "rg") +
+      `<p class="note">${rows.length} hourly candles from Delta's BTCUSD market, ${when(rows[0].t)} to ${when(rows[rows.length - 1].t)}. Open to close is the net move within the hour; high to low is how far price travelled inside it. Times are in your browser's local time (${esc(tzName)}).</p>`;
     m.textContent = `Done: ${rows.length} hours over ${days} days.`;
   } catch (e) { m.className = "note l"; m.textContent = "Could not load the candles: " + e.message; }
 };
