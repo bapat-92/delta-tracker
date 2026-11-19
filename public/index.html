@@ -165,6 +165,13 @@ h1{padding-right:170px}
 <div class="card" id="posCard">
   <b>Current position payoff at expiry</b>
   <div id="posNote" class="note" style="margin:4px 0">Add legs with lots to see the payoff.</div>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:6px 0">
+    <label style="flex-direction:row;align-items:center;gap:6px;display:flex"><input id="ralarm" type="checkbox" style="width:auto"> Sound an alarm when BTC leaves the profit range</label>
+    <label style="display:flex;flex-direction:row;align-items:center;gap:6px">Early warning within <input id="rwarn" type="number" min="0" max="50" step="1" value="10" style="width:64px"> % of the range width (0 = off)</label>
+    <label style="display:flex;flex-direction:row;align-items:center;gap:6px">Volume <input id="rvol" type="range" min="5" max="100" step="5" value="50" style="width:110px"> <span id="rvolv" class="note">50%</span></label>
+    <button id="rtest" type="button">Test alarm</button> <button id="rtest2" type="button">Test early warning</button> <button id="rtest3" type="button">Test back-in-range tone</button>
+  </div>
+  <div id="rbanner" style="margin:4px 0;font-size:15px"></div>
   <div id="posTip" style="min-height:44px;margin:4px 0"></div>
   <div id="posChart"></div>
   <div id="posStats" class="note"></div>
@@ -1933,6 +1940,7 @@ function drawPosition(){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
     $("posClosed").innerHTML = ""; posGeom = null; posCur = null; $("posTip").textContent = "";
     renderWhatIf();
+    rngCheck(null);
     return;
   }
   const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
@@ -1994,9 +2002,55 @@ function drawPosition(){
     `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(beN).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
     (pr.off ? `<br>Includes closed legs of this expiry: <b class="${sg(pr.off)}">${money(pr.off)}</b> realised. ` : " ") +
     `Green is profit and red is loss. The dashed line is spot, and the dot on it is your P&amp;L now at mark prices. Fees and the bid-ask spread are not included, and losses can continue beyond the edges of the chart.`;
+  try { rngCheck(pr); } catch (e) {}
   renderWhatIf();
 }
 
+
+// ---------- Profit-range alarm: sounds when BTC leaves the profit range of the position graph ----------
+let rngState = null, rngLast = 0;
+function rngTone(seq){
+  try { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; const ctx = new A(); let t = ctx.currentTime;
+    seq.forEach(([fr, d]) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = "square"; o.frequency.value = fr; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(Math.max(0.01, 0.5 * (Number($("rvol").value) || 50) / 100), t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d); o.start(t); o.stop(t + d + 0.02); t += d + 0.08; });
+    setTimeout(() => ctx.close(), (t - ctx.currentTime) * 1000 + 300); } catch (e) {}
+}
+const rngSiren = () => rngTone([[880, 0.25], [660, 0.25], [880, 0.25], [660, 0.25], [880, 0.25], [660, 0.25]]);
+function rngCheck(pr){
+  const on = $("ralarm") && $("ralarm").checked, bn = $("rbanner"); if (!bn) return;
+  if (!on || !pr){ bn.innerHTML = ""; rngState = null; return; }
+  const be = pr.be, spot = pr.spot, hiP = pr.P[pr.P.length - 1];
+  let lo = -Infinity, hi = Infinity;
+  if (be.length >= 2){ lo = be[0]; hi = be[be.length - 1]; }
+  else if (be.length === 1){ if (hiP >= 0) lo = be[0]; else hi = be[0]; }
+  else { bn.innerHTML = `<span class="note">No profit range to watch on this chart.</span>`; rngState = null; return; }
+  const warnPct = Math.max(0, Number($("rwarn").value) || 0), width = hi - lo, margin = isFinite(width) ? width * warnPct / 100 : 0;
+  const out = spot < lo || spot > hi, near = !out && margin > 0 && (spot - lo < margin || hi - spot < margin);
+  const state = out ? "out" : near ? "warn" : "in", now = Date.now();
+  const rangeTxt = (isFinite(lo) ? f(lo, 0) : "…") + " to " + (isFinite(hi) ? f(hi, 0) : "…");
+  if (state === "out"){
+    const away = spot < lo ? lo - spot : spot - hi;
+    bn.innerHTML = `<b style="color:#c0392b;font-size:1.15em">⚠ OUTSIDE the profit range:</b> BTC ${f(spot, 0)} is ${f(away, 0)} ${spot < lo ? "below" : "above"} the edge (range ${rangeTxt}).`;
+    if (rngState !== "out" || now - rngLast > 60000){ rngSiren(); rngLast = now; }
+  } else if (state === "warn"){
+    bn.innerHTML = `<b style="color:#d98c00">Near the edge:</b> BTC ${f(spot, 0)}, ${f(Math.min(spot - lo, hi - spot), 0)} from the edge of the range ${rangeTxt}.`;
+    if (rngState === "in" || rngState === null){ rngTone([[660, 0.2], [660, 0.2]]); }
+  } else {
+    bn.innerHTML = `<span style="color:var(--gain);font-weight:700">Inside the profit range</span> <span class="note">${rangeTxt}, BTC ${f(spot, 0)}</span>`;
+    if (rngState === "out"){ rngTone([[523, 0.2], [659, 0.2]]); }
+  }
+  rngState = state;
+}
+try { const sv = JSON.parse(localStorage.getItem("rng") || "{}"); if (sv.on) $("ralarm").checked = true; if (sv.warn !== undefined) $("rwarn").value = sv.warn; if (sv.vol !== undefined) $("rvol").value = sv.vol; } catch (e) {}
+$("rvolv").textContent = $("rvol").value + "%";
+const rngSave = () => { try { localStorage.setItem("rng", JSON.stringify({on: $("ralarm").checked, warn: $("rwarn").value, vol: $("rvol").value})); } catch (e) {} };
+$("ralarm").addEventListener("change", () => { rngSave(); rngState = null; if ($("ralarm").checked) rngTone([[880, 0.15]]); rngCheck(positionProfile()); });
+$("rwarn").addEventListener("change", () => { rngSave(); rngState = null; rngCheck(positionProfile()); });
+$("rtest").onclick = () => rngSiren();
+$("rtest2").onclick = () => rngTone([[660, 0.2], [660, 0.2]]);
+$("rtest3").onclick = () => rngTone([[523, 0.2], [659, 0.2]]);
+$("rvol").addEventListener("input", () => { $("rvolv").textContent = $("rvol").value + "%"; });
+$("rvol").addEventListener("change", () => { rngSave(); rngTone([[880, 0.2]]); });
 
 // ---------- What-if adjustments ----------
 let wif = {acts: []}, wifChain = null, wifGeom = null, wifCur = null, wifSig = "";
