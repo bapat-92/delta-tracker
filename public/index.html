@@ -69,7 +69,7 @@ h1{padding-right:170px}
 <div class="card spotcard" id="spotCard">
   <div class="spotlbl">BTC SPOT</div>
   <div class="spotnum" id="spot">–</div>
-  <div class="spotsub">Position P&amp;L at mark: <b id="spotPnl">–</b></div>
+  <div class="spotsub">Position P&amp;L at mark, open + closed legs: <b id="spotPnl">–</b> <span id="spotPnlSub" class="note"></span></div>
   <div class="spotsub" id="spotChg" style="font-size:14px">Change: <span id="chg15">–</span> 15m · <span id="chg60">–</span> 1h · <span id="chg120">–</span> 2h · <span id="chg240">–</span> 4h · <span id="chg1440">–</span> 24h</div>
   <div class="spotsub" id="spotTv" style="font-size:14px"></div>
   <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
@@ -554,10 +554,11 @@ async function tick(){
     if (spot) showSpot(spot);
     $("net").textContent = f(net); $("net").className = sg(net);
     const hasPos = legs.some(L => Number(L.lots) > 0);
-    const cls = hasPos ? sg(net) : "";
+    const clOff = closedOff(), comb = net + clOff, cls = hasPos ? sg(comb) : "";
     $("spotCard").className = "card spotcard " + cls;
-    $("spotPnl").textContent = hasPos ? (net < 0 ? "-$" : "+$") + f(Math.abs(net)) : "enter lots to see P&L";
+    $("spotPnl").textContent = hasPos ? (comb < 0 ? "-$" : "+$") + f(Math.abs(comb)) : "enter lots to see P&L";
     $("spotPnl").className = cls;
+    $("spotPnlSub").textContent = hasPos && clOff ? "(open " + money(net) + ", closed " + money(clOff) + ")" : "";
     $("close").textContent = f(close); $("close").className = sg(close);
     $("feeTot").textContent = f(feeIn + feeOut) + " (" + f(feeIn) + " in + " + f(feeOut) + " out)";
     $("closeNet").textContent = f(rawClose - feeIn - feeOut); $("closeNet").className = sg(rawClose - feeIn - feeOut);
