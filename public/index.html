@@ -595,6 +595,7 @@ function showSpot(spot){
   lastSpotVal = spot;
   checkTrigger(spot);
   drawPosition();
+  try { document.title = (typeof rngState !== "undefined" && rngState === "out" ? "⚠ " : "") + "BTC " + f(spot, 0) + " · Delta tracker"; } catch (e) {}
   if (typeof guardEval === "function") guardEval();
   if (typeof adjEval === "function") adjEval();
   $("spot").textContent = f(spot, 0);
