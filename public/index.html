@@ -621,11 +621,28 @@ async function spotTick(){
   } finally { spotBusy = false; }
 }
 
+// Browsers slow down ordinary timers in a tab you are not looking at, so the refresh is driven by a small background worker that ticks every second instead
+let beatW = null, lastSpotAt = 0, lastLegsAt = 0;
+function beat(){
+  const now = Date.now(), ss = Math.max(2, Number($("ssec").value) || 5) * 1000, ls = Math.max(2, Number($("sec").value) || 300) * 1000;
+  if (now - lastSpotAt >= ss - 300){ lastSpotAt = now; spotTick(); }
+  if (now - lastLegsAt >= ls - 300){ lastLegsAt = now; tick(); }
+}
+function startBeat(){
+  try {
+    if (beatW) beatW.terminate();
+    beatW = new Worker(URL.createObjectURL(new Blob(["setInterval(function(){postMessage(1)},1000)"], {type: "text/javascript"})));
+    beatW.onmessage = beat; return true;
+  } catch (e) { beatW = null; return false; }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden){ lastSpotAt = Date.now(); spotTick(); } });
 function start(){
-  clearInterval(timer); tick();
-  timer = setInterval(tick, Math.max(2, Number($("sec").value) || 300) * 1000);
-  clearInterval(stimer); spotTick();
-  stimer = setInterval(spotTick, Math.max(2, Number($("ssec").value) || 5) * 1000);
+  clearInterval(timer); clearInterval(stimer); tick(); spotTick();
+  lastSpotAt = lastLegsAt = Date.now();
+  if (!startBeat()){
+    timer = setInterval(tick, Math.max(2, Number($("sec").value) || 300) * 1000);
+    stimer = setInterval(spotTick, Math.max(2, Number($("ssec").value) || 5) * 1000);
+  }
 }
 $("start").onclick = start;
 function payoffStats(lot){
