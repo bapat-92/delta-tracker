@@ -115,7 +115,6 @@ h1{padding-right:170px}
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
   <div title="Delta fee = 1.18 x the lower of 0.01% of notional and 3.5% of premium, charged on each order">Fees: entry + closing now (est.)<b id="feeTot">–</b></div>
-  <div style="grid-column:1/-1;font-size:13px;font-weight:400"><label style="flex-direction:row;align-items:center;gap:6px;display:flex"><input id="feeOn" type="checkbox" style="width:auto" checked> Include Delta fees in the P&amp;L and position graph (headline: entry fees + fees to close now; graph: entry fees + settlement fee on in-the-money legs at expiry)</label></div>
   <div>Net P&amp;L at mark, after entry fees<b id="netFee">–</b></div>
   <div>Net P&amp;L if closed now, after all fees<b id="closeNet">–</b></div>
   <div title="No closing order: in-the-money legs pay Delta's settlement fee, worthless legs pay nothing">If held to expiry at today's price, after fees<b id="expNet">–</b></div>
@@ -631,7 +630,7 @@ function payoffStats(lot){
 }
 
 let feeNow = {i: 0, o: 0};
-const feeOn = () => { const el = $("feeOn"); return !!(el && el.checked); };
+const feeOn = () => true;          // Delta fees are always included in the P&L and the position graph
 // Delta settlement fee when an option expires in the money (none if it expires worthless): lower of 0.015% of notional and 5% of the settled value, plus 18% GST (the GST part is an assumption)
 const settleFee = (qBtc, iv, S) => 1.18 * Math.min(0.00015 * qBtc * S, 0.05 * iv * qBtc);
 function legsExpiryPnl(S, lot){
@@ -1984,12 +1983,12 @@ function drawPosition(){
   if (posCur !== null) showCursor(posCur); else hideCursor(true);
   const st = payoffStats(Number($("lot").value) || 0);
   const mx = st ? (st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0)) : "–", mn = st ? (st.min === -Infinity ? "Unlimited" : (st.min < 0 ? "-$" : "$") + f(Math.abs(st.min), 0)) : "–";
-  { const be = pr.be, hiP = pr.P[pr.P.length - 1], curPnl = (lastNet !== null && lastNet !== undefined && lastRes) ? lastNet + pr.off : null;
+  { const netPrem = pr.credit - feeNow.i, be = pr.be, hiP = pr.P[pr.P.length - 1], curPnl = (lastNet !== null && lastNet !== undefined && lastRes) ? lastNet + pr.off : null;
     const rng = be.length >= 2 ? `Profit range: <span class="prng">${f(be[0], 0)}</span> to <span class="prng">${f(be[be.length - 1], 0)}</span>${be.length > 2 ? ` <span class="note">(not continuous: ${be.length} break-evens)</span>` : ""}`
       : be.length === 1 ? (hiP >= 0 ? `Profit range: above <span class="prng">${f(be[0], 0)}</span>` : `Profit range: below <span class="prng">${f(be[0], 0)}</span>`)
       : (pr.P.some(v => v >= 0) ? "Profit range: the whole chart" : "Profit range: none in the chart");
     $("posNote").className = "";
-    $("posNote").innerHTML = `<div style="font-size:15px;line-height:1.8">${rng}<br>Net premium: <b class="prem ${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b><br>Current P&amp;L: <b class="prem ${curPnl === null ? "" : sg(curPnl)}">${curPnl === null ? "–" : money(curPnl)}</b></div>` +
+    $("posNote").innerHTML = `<div style="font-size:15px;line-height:1.8">${rng}<br>Net premium after entry fees: <b class="prem ${netPrem >= 0 ? "g" : "l"}">${netPrem >= 0 ? "credit " : "debit "}$${f(Math.abs(netPrem), 0)}</b> <span class="note">(before fees ${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}, fees $${f(feeNow.i, 2)})</span><br>Current P&amp;L: <b class="prem ${curPnl === null ? "" : sg(curPnl)}">${curPnl === null ? "–" : money(curPnl)}</b></div>` +
       (pr.exps.length > 1 ? `<div class="note">Your legs have different expiries (${pr.exps.join(", ")}). The chart treats them all as expiring together, so read it with care.</div>` : `<div class="note">Expiry ${pr.exps[0]}.</div>`); }
   $("posStats").innerHTML = `Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
     `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(beN).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
@@ -3171,8 +3170,6 @@ function showChg(){
   [15, 60, 120, 240, 1440].forEach(m => { const el = $("vol" + m); if (el){ el.textContent = any ? fmtV(sums[m]) : "–"; el.style.fontWeight = "700"; el.title = "Traded volume of BTCUSD in the last " + m + " minutes (contracts × BTC per lot)"; } });
 }
 loadChgRef(); setInterval(loadChgRef, 60000);
-try { if (localStorage.getItem("feeOn") === "0") $("feeOn").checked = false; } catch (e) {}
-$("feeOn").addEventListener("change", () => { try { localStorage.setItem("feeOn", $("feeOn").checked ? "1" : "0"); } catch (e) {} tick(); });
 loadSeries();
 drawInputs(); start();
 initSync();
