@@ -169,6 +169,8 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px;display:flex"><input id="ralarm" type="checkbox" style="width:auto"> Sound an alarm when BTC leaves the profit range</label>
     <label style="display:flex;flex-direction:row;align-items:center;gap:6px">Early warning within <input id="rwarn" type="number" min="0" max="50" step="1" value="10" style="width:64px"> % of the range width (0 = off)</label>
     <label style="display:flex;flex-direction:row;align-items:center;gap:6px">Volume <input id="rvol" type="range" min="5" max="100" step="5" value="50" style="width:110px"> <span id="rvolv" class="note">50%</span></label>
+    <label style="display:flex;flex-direction:row;align-items:center;gap:6px">Repeat the alarm every <input id="rrep" type="number" min="0" max="600" step="1" value="3" style="width:64px"> seconds while outside (0 = once)</label>
+    <button id="rsil" type="button">Silence until back in range</button>
     <button id="rtest" type="button">Test alarm</button> <button id="rtest2" type="button">Test early warning</button> <button id="rtest3" type="button">Test back-in-range tone</button>
   </div>
   <div id="rbanner" style="margin:4px 0;font-size:15px"></div>
@@ -2008,7 +2010,7 @@ function drawPosition(){
 
 
 // ---------- Profit-range alarm: sounds when BTC leaves the profit range of the position graph ----------
-let rngState = null, rngLast = 0;
+let rngState = null, rngLast = 0, rngSilent = false;
 function rngTone(seq){
   try { const A = window.AudioContext || window.webkitAudioContext; if (!A) return; const ctx = new A(); let t = ctx.currentTime;
     seq.forEach(([fr, d]) => { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = "square"; o.frequency.value = fr; o.connect(g); g.connect(ctx.destination);
@@ -2031,22 +2033,29 @@ function rngCheck(pr){
   if (state === "out"){
     const away = spot < lo ? lo - spot : spot - hi;
     bn.innerHTML = `<b style="color:#c0392b;font-size:1.15em">⚠ OUTSIDE the profit range:</b> BTC ${f(spot, 0)} is ${f(away, 0)} ${spot < lo ? "below" : "above"} the edge (range ${rangeTxt}).`;
-    if (rngState !== "out" || now - rngLast > 60000){ rngSiren(); rngLast = now; }
+    if (rngState !== "out"){ rngSilent = false; rngSiren(); rngLast = now; }
   } else if (state === "warn"){
     bn.innerHTML = `<b style="color:#d98c00">Near the edge:</b> BTC ${f(spot, 0)}, ${f(Math.min(spot - lo, hi - spot), 0)} from the edge of the range ${rangeTxt}.`;
     if (rngState === "in" || rngState === null){ rngTone([[660, 0.2], [660, 0.2]]); }
   } else {
     bn.innerHTML = `<span style="color:var(--gain);font-weight:700">Inside the profit range</span> <span class="note">${rangeTxt}, BTC ${f(spot, 0)}</span>`;
     if (rngState === "out"){ rngTone([[523, 0.2], [659, 0.2]]); }
+    rngSilent = false;
   }
   rngState = state;
 }
-try { const sv = JSON.parse(localStorage.getItem("rng") || "{}"); if (sv.on) $("ralarm").checked = true; if (sv.warn !== undefined) $("rwarn").value = sv.warn; if (sv.vol !== undefined) $("rvol").value = sv.vol; } catch (e) {}
+try { const sv = JSON.parse(localStorage.getItem("rng") || "{}"); if (sv.on) $("ralarm").checked = true; if (sv.warn !== undefined) $("rwarn").value = sv.warn; if (sv.vol !== undefined) $("rvol").value = sv.vol; if (sv.rep !== undefined) $("rrep").value = sv.rep; } catch (e) {}
 $("rvolv").textContent = $("rvol").value + "%";
-const rngSave = () => { try { localStorage.setItem("rng", JSON.stringify({on: $("ralarm").checked, warn: $("rwarn").value, vol: $("rvol").value})); } catch (e) {} };
+const rngSave = () => { try { localStorage.setItem("rng", JSON.stringify({on: $("ralarm").checked, warn: $("rwarn").value, vol: $("rvol").value, rep: $("rrep").value})); } catch (e) {} };
 $("ralarm").addEventListener("change", () => { rngSave(); rngState = null; if ($("ralarm").checked) rngTone([[880, 0.15]]); rngCheck(positionProfile()); });
 $("rwarn").addEventListener("change", () => { rngSave(); rngState = null; rngCheck(positionProfile()); });
 $("rtest").onclick = () => rngSiren();
+$("rrep").addEventListener("change", rngSave);
+$("rsil").onclick = () => { rngSilent = true; };
+setInterval(() => {                       // keeps sounding while BTC stays outside the range, until it comes back or you silence it
+  const gap = Math.max(0, Number($("rrep").value) || 0) * 1000, now = Date.now();
+  if ($("ralarm").checked && rngState === "out" && !rngSilent && gap > 0 && now - rngLast >= gap){ rngSiren(); rngLast = now; }
+}, 1000);
 $("rtest2").onclick = () => rngTone([[660, 0.2], [660, 0.2]]);
 $("rtest3").onclick = () => rngTone([[523, 0.2], [659, 0.2]]);
 $("rvol").addEventListener("input", () => { $("rvolv").textContent = $("rvol").value + "%"; });
