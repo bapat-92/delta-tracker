@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Delta India position tracker</title>
 <style>
-:root{--be:#7a2fd0;--bg:#f6f7f9;--fg:#15181d;--mut:#5d6572;--card:#fff;--line:#dde1e7;--gain:#0a7d4f;--loss:#b3261e;--acc:#1f4fd8;--warn:#fdecea}
-@media (prefers-color-scheme:dark){:root{--be:#e0a3ff;--bg:#101318;--fg:#e8ebf0;--mut:#98a1af;--card:#181c23;--line:#2a303a;--gain:#4cd08f;--loss:#ff7b72;--acc:#7aa2ff;--warn:#3a1e1c}}
+:root{--rng:#0b7285;--be:#7a2fd0;--bg:#f6f7f9;--fg:#15181d;--mut:#5d6572;--card:#fff;--line:#dde1e7;--gain:#0a7d4f;--loss:#b3261e;--acc:#1f4fd8;--warn:#fdecea}
+@media (prefers-color-scheme:dark){:root{--rng:#4dd4e8;--be:#e0a3ff;--bg:#101318;--fg:#e8ebf0;--mut:#98a1af;--card:#181c23;--line:#2a303a;--gain:#4cd08f;--loss:#ff7b72;--acc:#7aa2ff;--warn:#3a1e1c}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;padding:16px;max-width:980px;margin-inline:auto}
 h1{font-size:20px;margin:0 0 4px}
@@ -50,6 +50,8 @@ h1{padding-right:170px}
 #cum.l{border-color:var(--loss)}#cum.l .cv{color:var(--loss)}
 .note{font-size:12px;color:var(--mut)}
 .be{color:var(--be);font-weight:800;font-size:1.3em;white-space:nowrap}
+.prng{color:var(--rng);font-weight:800;font-size:1.6em;white-space:nowrap}
+.prem{font-weight:800;font-size:1.3em}
 </style>
 </head>
 <body>
@@ -113,9 +115,10 @@ h1{padding-right:170px}
   <div>Net P&amp;L at mark<b id="net">–</b></div>
   <div>Net P&amp;L if closed now<b id="close">–</b></div>
   <div title="Delta fee = 1.18 x the lower of 0.01% of notional and 3.5% of premium, charged on each order">Fees: entry + closing now (est.)<b id="feeTot">–</b></div>
-  <div style="grid-column:1/-1;font-size:13px;font-weight:400"><label style="flex-direction:row;align-items:center;gap:6px;display:flex"><input id="feeOn" type="checkbox" style="width:auto" checked> Include Delta fees in the P&amp;L, loss limit and position graph (entry fees + fees to close now)</label></div>
+  <div style="grid-column:1/-1;font-size:13px;font-weight:400"><label style="flex-direction:row;align-items:center;gap:6px;display:flex"><input id="feeOn" type="checkbox" style="width:auto" checked> Include Delta fees in the P&amp;L and position graph (headline: entry fees + fees to close now; graph: entry fees + settlement fee on in-the-money legs at expiry)</label></div>
   <div>Net P&amp;L at mark, after entry fees<b id="netFee">–</b></div>
   <div>Net P&amp;L if closed now, after all fees<b id="closeNet">–</b></div>
+  <div title="No closing order: in-the-money legs pay Delta's settlement fee, worthless legs pay nothing">If held to expiry at today's price, after fees<b id="expNet">–</b></div>
   <div>Closed legs, this expiry<b id="clsum">–</b></div>
   <div>Combined P&amp;L at mark<b id="comb">–</b></div>
   <div>Nearest strike<b id="near">–</b></div>
@@ -163,7 +166,7 @@ h1{padding-right:170px}
 <div class="card" id="posCard">
   <b>Current position payoff at expiry</b>
   <div id="posNote" class="note" style="margin:4px 0">Add legs with lots to see the payoff.</div>
-  <div id="posTip" style="min-height:44px;margin:4px 0">Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.</div>
+  <div id="posTip" style="min-height:44px;margin:4px 0"></div>
   <div id="posChart"></div>
   <div id="posStats" class="note"></div>
   <label style="flex-direction:row;align-items:center;gap:6px;margin-top:8px"><input id="cinc" type="checkbox" style="width:auto" checked> Include closed legs of this expiry (combined result)</label>
@@ -561,6 +564,7 @@ async function tick(){
     $("spotPnlSub").textContent = hasPos && clOff ? "(open " + money(net) + ", closed " + money(clOff) + ")" : "";
     $("close").textContent = f(close); $("close").className = sg(close);
     $("feeTot").textContent = f(feeIn + feeOut) + " (" + f(feeIn) + " in + " + f(feeOut) + " out)";
+    if (spot){ const ex = legsExpiryPnl(spot, lot), v = closedOff() + ex.gross - feeIn - ex.fee; $("expNet").textContent = f(v); $("expNet").className = sg(v); $("expNet").title = "Settlement fee on in-the-money legs: " + f(ex.fee); }
     $("closeNet").textContent = f(rawClose - feeIn - feeOut); $("closeNet").className = sg(rawClose - feeIn - feeOut);
     $("netFee").textContent = f(rawNet - feeIn); $("netFee").className = sg(rawNet - feeIn);
     const worst = Math.min(net, close);
@@ -620,7 +624,7 @@ function payoffStats(lot){
     return {c: p[0] === "C", k: Number(p[2]), side: L.side === -1 ? -1 : 1, q: Number(L.lots) * lot, e: Number(L.entry) || 0};
   });
   if (!ls.length) return null;
-  const off = closedOff() + feeOffset(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const off = closedOff() + (feeOn() ? -feeNow.i : 0), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0) - (feeOn() ? ls.reduce((a, l) => { const iv = l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0); return a + (iv > 0 ? settleFee(l.q, iv, S) : 0); }, 0) : 0);
   const vals = [0, ...ls.map(l => l.k)].map(pnl);
   const slope = ls.reduce((a, l) => a + (l.c ? l.side * l.q : 0), 0);   // P&L slope above the highest strike
   return {max: slope > 0 ? Infinity : Math.max(...vals), min: slope < 0 ? -Infinity : Math.min(...vals)};
@@ -628,7 +632,15 @@ function payoffStats(lot){
 
 let feeNow = {i: 0, o: 0};
 const feeOn = () => { const el = $("feeOn"); return !!(el && el.checked); };
-const feeOffset = () => feeOn() ? -(feeNow.i + feeNow.o) : 0;
+// Delta settlement fee when an option expires in the money (none if it expires worthless): lower of 0.015% of notional and 5% of the settled value, plus 18% GST (the GST part is an assumption)
+const settleFee = (qBtc, iv, S) => 1.18 * Math.min(0.00015 * qBtc * S, 0.05 * iv * qBtc);
+function legsExpiryPnl(S, lot){
+  let tot = 0, fee = 0;
+  legs.forEach(L => { if (!(Number(L.lots) > 0) || !/^[CP]-/.test(L.s)) return;
+    const p = L.s.split("-"), c = p[0] === "C", k = Number(p[2]), side = L.side === -1 ? -1 : 1, q = Number(L.lots) * lot, iv = c ? Math.max(S - k, 0) : Math.max(k - S, 0);
+    tot += side * (iv - (Number(L.entry) || 0)) * q; if (iv > 0) fee += settleFee(q, iv, S); });
+  return {gross: tot, fee};
+}
 let lastRes = null, lastNet = 0;
 let lastMargin = 0;
 function updateSL(res, net){
@@ -1870,7 +1882,7 @@ function positionProfile(){
   if (!ls.length) return null;
   const ks = ls.map(l => l.k), spot = lastSpotVal || (Math.min(...ks) + Math.max(...ks)) / 2;
   const lo = Math.min(spot * 0.85, Math.min(...ks) * 0.97), hi = Math.max(spot * 1.15, Math.max(...ks) * 1.03);
-  const off = closedOff() + feeOffset(), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0);
+  const off = closedOff() + (feeOn() ? -feeNow.i : 0), pnl = S => off + ls.reduce((a, l) => a + l.side * ((l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0)) - l.e) * l.q, 0) - (feeOn() ? ls.reduce((a, l) => { const iv = l.c ? Math.max(S - l.k, 0) : Math.max(l.k - S, 0); return a + (iv > 0 ? settleFee(l.q, iv, S) : 0); }, 0) : 0);
   const n = 400, S = [], P = [];
   for (let i = 0; i <= n; i++){ const x = lo + (hi - lo) * i / n; S.push(x); P.push(pnl(x)); }
   const be = [];
@@ -1883,7 +1895,7 @@ function positionProfile(){
 }
 
 let posGeom = null, posCur = null;
-const POS_HINT = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
+const POS_HINT = "";
 function hideCursor(keepTip){
   posCur = null;
   ["posCur", "posCurDot", "posCurTxt"].forEach(id => { const el = $(id); if (el && el.setAttribute) el.setAttribute("visibility", "hidden"); });
@@ -1920,7 +1932,7 @@ function drawPosition(){
   const pr = positionProfile();
   if (!pr){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
-    $("posClosed").innerHTML = ""; posGeom = null; posCur = null; $("posTip").textContent = "Move the cursor (or drag a finger) over the chart to read the profit or loss at a BTC price.";
+    $("posClosed").innerHTML = ""; posGeom = null; posCur = null; $("posTip").textContent = "";
     renderWhatIf();
     return;
   }
@@ -1972,10 +1984,14 @@ function drawPosition(){
   if (posCur !== null) showCursor(posCur); else hideCursor(true);
   const st = payoffStats(Number($("lot").value) || 0);
   const mx = st ? (st.max === Infinity ? "Unlimited" : "$" + f(st.max, 0)) : "–", mn = st ? (st.min === -Infinity ? "Unlimited" : (st.min < 0 ? "-$" : "$") + f(Math.abs(st.min), 0)) : "–";
-  $("posNote").textContent = pr.exps.length > 1
-    ? "Your legs have different expiries (" + pr.exps.join(", ") + "). The chart treats them all as expiring together, so read it with care."
-    : "P&L at expiry " + pr.exps[0] + " from your lots and entry prices, per leg price × lots × BTC per lot.";
-  $("posStats").innerHTML = `Net premium: <b class="${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b> · Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
+  { const be = pr.be, hiP = pr.P[pr.P.length - 1], curPnl = (lastNet !== null && lastNet !== undefined && lastRes) ? lastNet + pr.off : null;
+    const rng = be.length >= 2 ? `Profit range: <span class="prng">${f(be[0], 0)}</span> to <span class="prng">${f(be[be.length - 1], 0)}</span>${be.length > 2 ? ` <span class="note">(not continuous: ${be.length} break-evens)</span>` : ""}`
+      : be.length === 1 ? (hiP >= 0 ? `Profit range: above <span class="prng">${f(be[0], 0)}</span>` : `Profit range: below <span class="prng">${f(be[0], 0)}</span>`)
+      : (pr.P.some(v => v >= 0) ? "Profit range: the whole chart" : "Profit range: none in the chart");
+    $("posNote").className = "";
+    $("posNote").innerHTML = `<div style="font-size:15px;line-height:1.8">${rng}<br>Net premium: <b class="prem ${pr.credit >= 0 ? "g" : "l"}">${pr.credit >= 0 ? "credit " : "debit "}$${f(Math.abs(pr.credit), 0)}</b><br>Current P&amp;L: <b class="prem ${curPnl === null ? "" : sg(curPnl)}">${curPnl === null ? "–" : money(curPnl)}</b></div>` +
+      (pr.exps.length > 1 ? `<div class="note">Your legs have different expiries (${pr.exps.join(", ")}). The chart treats them all as expiring together, so read it with care.</div>` : `<div class="note">Expiry ${pr.exps[0]}.</div>`); }
+  $("posStats").innerHTML = `Max profit: <b class="g">${mx}</b> · Max loss: <b class="l">${mn}</b> · ` +
     `Break-even${pr.be.length === 1 ? "" : "s"}: <b>${pr.be.length ? pr.be.map(beN).join(" and ") : "none in range"}</b> · P&amp;L at expiry if BTC stays at ${f(pr.spot, 0)}: <b class="${pr.atSpot >= 0 ? "g" : "l"}">${money(pr.atSpot)}</b>. ` +
     (pr.off ? `<br>Includes closed legs of this expiry: <b class="${sg(pr.off)}">${money(pr.off)}</b> realised. ` : " ") +
     `Green is profit and red is loss. The dashed line is spot, and the dot on it is your P&amp;L now at mark prices. Fees and the bid-ask spread are not included, and losses can continue beyond the edges of the chart.`;
