@@ -330,6 +330,23 @@ h1{padding-right:170px}
   <div id="bout"></div>
 </div>
 
+<div class="card" id="dbtCard">
+  <b>Daily Inverted Batman backtest (last days, two entry times)</b>
+  <p class="note" style="margin:4px 0 8px">For each past expiry it builds the best Inverted Batman at your entry times (default 15:00 CET the day before, and 06:00 CET on expiry day), using Delta's historical mark prices for those strikes, then follows the position every 15 minutes to expiry. It reports the final result and whether, at any time before expiry, the open loss reached 20% or 30% of the capital used (estimated margin). Lots come from Initial capital in the Inverted Batman card (or its sold/bought boxes); the minimum profit, expiry time and strike step come from the boxes above. Prices are mark prices with an assumed spread, because Delta keeps no historical bid and ask, so treat the result as an estimate. Planning only: it places no orders.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Days back<input id="dbdays" type="number" min="3" max="45" value="30"></label>
+    <label>Assumed half-spread on each fill (%)<input id="dbspr" type="number" min="0" step="0.5" value="2"></label>
+    <label>Loss level 1 (% of capital used)<input id="dbd0" type="number" min="1" value="10"></label>
+    <label>Loss level 2 (% of capital used)<input id="dbd1" type="number" min="1" value="20"></label>
+    <label>Loss level 3 (% of capital used)<input id="dbd2" type="number" min="1" value="30"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbA" type="checkbox" style="width:auto" checked> 15:00 CET day before</label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
+    <button id="dbgo">Run the backtest</button>
+  </div>
+  <div id="dbprog" class="note"></div>
+  <div id="dbout"></div>
+</div>
+
 <div class="card" id="batCard">
   <b>Inverted Batman: best strike combinations</b>
   <p class="note" style="margin:4px 0 8px">Sell more of the outer call and put, buy fewer of the inner ones (your 5,000 sold / 1,500 bought structure). It tries many strike combinations from the live chain and ranks them by the BTC price range at expiry where profit stays at or above your minimum share of margin. A second group below shows three more options where the call and put are the same distance from spot.</p>
@@ -2747,6 +2764,117 @@ $("rcout").addEventListener("click", e => {
   renderWhatIf();
   const card = $("wifCard"); if (card && card.scrollIntoView) card.scrollIntoView({behavior: "smooth", block: "start"});
 });
+
+// ---------- Daily Inverted Batman backtest ----------
+function berlinUtc(y, mo, d, h){            // seconds (UTC) of Europe/Berlin local time y-mo-d h:00
+  const want = Date.UTC(y, mo, d, h); let t = want;
+  const fmt = new Intl.DateTimeFormat("en-GB", {timeZone: "Europe/Berlin", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
+  for (let i = 0; i < 3; i++){
+    const P = fmt.formatToParts(new Date(t)), g = k => Number(P.find(p => p.type === k).value);
+    t += want - Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute"));
+  }
+  return t / 1000;
+}
+async function candles15(base, sym, a, b){
+  const get = async s => {
+    const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", "15m"); u.searchParams.set("symbol", s); u.searchParams.set("start", a); u.searchParams.set("end", b);
+    const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
+    return ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), o: Number(c.open), c: Number(c.close)})).filter(c => c.c > 0 || c.o > 0).sort((x, y) => x.t - y.t);
+  };
+  let r = []; try { r = await get("MARK:" + sym); } catch (e) {}
+  if (r.length < 3){ try { r = await get(sym); } catch (e) {} }
+  return r;
+}
+const dbMark = (arr, t, useOpen) => {        // price at time t: candle starting at t (open) or the candle that ended at t (close); carries forward
+  if (!arr || !arr.length) return null;
+  let lo = 0, hi = arr.length - 1, k = -1;
+  const want = useOpen ? t : t - 900;
+  while (lo <= hi){ const mid = (lo + hi) >> 1; if (arr[mid].t <= want){ k = mid; lo = mid + 1; } else hi = mid - 1; }
+  if (k < 0) return null;
+  const c = arr[k]; const v = useOpen && c.t === want ? c.o : c.c;
+  return v > 0 ? v : null;
+};
+let dbRunning = false;
+$("dbgo").onclick = async () => {
+  if (dbRunning) return; dbRunning = true;
+  const prog = $("dbprog"), out = $("dbout"), savedDf = dfil.on; prog.className = "note"; out.innerHTML = "";
+  try {
+    dfil.on = false;                                   // no historical delta, so the delta filter can't apply here
+    const days = Math.min(45, Math.max(3, Number($("dbdays").value) || 30)), spr = Math.max(0, Number($("dbspr").value) || 0) / 100;
+    const lv0 = Number($("dbd0").value) || 10, lv1 = Number($("dbd1").value) || 20, lv2 = Number($("dbd2").value) || 30;
+    const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, step = Number($("bstep").value) || 200, expSec = hmSec($("bexp").value);
+    const minPct = isNaN(Number($("ipct").value)) ? 2 : Number($("ipct").value);
+    if (!lot || expSec === null){ prog.className = "note l"; prog.textContent = "Check the BTC-per-lot box and the expiry time (HH:MM UTC)."; return; }
+    let sold = Number($("isold").value) || 0, bought = Number($("ibought").value) || 0;
+    const funds = batFunds();
+    if ($("iauto").checked && funds){ const r = autoLots(funds, Number($("imsh").value) || 25, lastSpotVal || 60000, lot, lev, (Number($("irat").value) || 30) / 100); if (r && r.sold >= 10){ sold = r.sold; bought = r.bought; } }
+    if (sold < 1 || bought < 1 || bought >= sold){ prog.className = "note l"; prog.textContent = "Set sold and bought lots in the Inverted Batman card (sold must be higher than bought)."; return; }
+    const slots = []; if ($("dbA").checked) slots.push("A"); if ($("dbB").checked) slots.push("B");
+    if (!slots.length){ prog.className = "note l"; prog.textContent = "Tick at least one entry time."; return; }
+    const base = $("base").value.replace(/\/$/, ""), now = Math.floor(Date.now() / 1000);
+    prog.textContent = "Loading BTC candles…";
+    const btc = await fetchCandles(base, "BTCUSD", days + 3), byT = new Map(btc.map(c => [c.time, c]));
+    const today = Math.floor(now / 86400) * 86400, exps = [];
+    for (let d = days; d >= 0; d--){
+      const D = today - d * 86400, tx = D + expSec; if (tx > now - 1800) continue;
+      const dd = new Date(D * 1000), pd = new Date((D - 86400) * 1000);
+      const ent = {A: berlinUtc(pd.getUTCFullYear(), pd.getUTCMonth(), pd.getUTCDate(), 15), B: berlinUtc(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate(), 6)};
+      const rows = slots.map(sl => ({sl, t0: ent[sl]})).filter(r => r.t0 < tx && byT.get(r.t0) && byT.get(tx - 300)).map(r => Object.assign(r, {spot: byT.get(r.t0).open}));
+      if (rows.length) exps.push({D, tx, code: ddmmyy(D * 1000), rows, settle: byT.get(tx - 300).close});
+    }
+    if (!exps.length){ prog.className = "note l"; prog.textContent = "No completed expiries with BTC data for those times."; return; }
+    const results = []; let done = 0;
+    for (const E of exps){
+      done++; prog.textContent = `Expiry ${E.code} (${done}/${exps.length}): loading option prices…`;
+      const sp = E.rows.map(r => r.spot), loK = Math.floor(Math.min(...sp) * 0.9 / step) * step, hiK = Math.ceil(Math.max(...sp) * 1.1 / step) * step, tmin = Math.min(...E.rows.map(r => r.t0));
+      const syms = []; for (let K = loK; K <= hiK; K += step){ syms.push({K, c: true, sym: `C-BTC-${K}-${E.code}`}); syms.push({K, c: false, sym: `P-BTC-${K}-${E.code}`}); }
+      const ser = new Map();
+      await runPool(syms, 5, async x => { ser.set(x.sym, await candles15(base, x.sym, tmin - 900, E.tx + 900)); });
+      E.rows.forEach(r => {
+        const mk = (isCall, K, t, o) => dbMark(ser.get(`${isCall ? "C" : "P"}-BTC-${K}-${E.code}`), t, o);
+        const calls = [], puts = [];
+        syms.forEach(x => { const m = mk(x.c, x.K, r.t0, true); if (!(m > 0)) return; const o = {strike: x.K, bid: m * (1 - spr), ask: m * (1 + spr), mark: m, delta: null, spot: r.spot, symbol: x.sym}; (x.c ? calls : puts).push(o); });
+        const row = {day: new Date(E.D * 1000).toISOString().slice(0, 10), sl: r.sl, t0: r.t0, spot: r.spot, settle: E.settle, n: calls.length + puts.length};
+        const best = calls.length > 2 && puts.length > 2 ? batmanSearch({calls, puts}, r.spot, {sold, bought, lot, lev, minPct})[0] : null;
+        if (!best){ row.none = true; results.push(row); return; }
+        const L = [{c: true, K: best.callShort.strike, side: -1, n: sold, e: best.callShort.bid}, {c: true, K: best.callLong.strike, side: 1, n: bought, e: best.callLong.ask},
+                   {c: false, K: best.putShort.strike, side: -1, n: sold, e: best.putShort.bid}, {c: false, K: best.putLong.strike, side: 1, n: bought, e: best.putLong.ask}];
+        const fees = L.reduce((t, l) => t + feeOpt(l.n, l.e, r.spot, lot), 0), margin = best.margin;
+        const pnlAt = t => { let v = 0; for (const l of L){ const m = mk(l.c, l.K, t, false); if (m === null) return null; v += l.side * (m - l.e) * l.n * lot; } return v - fees; };
+        let minV = Infinity, minT = null, b0 = null, b1 = null, b2 = null;
+        for (let t = r.t0 + 900; t < E.tx; t += 900){
+          const v = pnlAt(t); if (v === null) continue;
+          if (v < minV){ minV = v; minT = t; }
+          if (b0 === null && v <= -lv0 / 100 * margin) b0 = t;
+          if (b1 === null && v <= -lv1 / 100 * margin) b1 = t;
+          if (b2 === null && v <= -lv2 / 100 * margin) b2 = t;
+        }
+        let fin = -fees; L.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); fin += l.side * (intr - l.e) * l.n * lot; if (intr > 0) fin -= settleFee(l.n * lot, intr, E.settle); });
+        Object.assign(row, {best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
+          strikes: `${best.putShort.strike}/${best.putLong.strike} · ${best.callLong.strike}/${best.callShort.strike}`});
+        results.push(row);
+      });
+    }
+    window.dbLast = results;
+    const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0), tz = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
+    let h = `<p class="note">${f(sold, 0)} sold / ${f(bought, 0)} bought lots per leg, leverage ${f(lev, 0)}x, minimum profit ${f(minPct, 1)}% of margin, assumed half-spread ${f(spr * 100, 1)}%, fees included (entry fees and settlement fees). Times in CET. Capital used = estimated margin of the sold lots.</p>`;
+    slots.forEach(sl => {
+      const R = results.filter(r => r.sl === sl), ok = R.filter(r => !r.none), name = sl === "A" ? "15:00 CET, the day before expiry" : "06:00 CET, expiry day";
+      h += `<p style="margin:14px 0 4px"><b>Entry ${name}</b></p>`;
+      if (!ok.length){ h += `<p class="note l">No day had a combination meeting your minimum profit (or prices were missing).</p>`; return; }
+      const wins = ok.filter(r => r.fin > 0), tot = ok.reduce((t, r) => t + r.fin, 0), h0 = ok.filter(r => r.b0 !== null), h1 = ok.filter(r => r.b1 !== null), h2 = ok.filter(r => r.b2 !== null);
+      const rec = a => a.filter(r => r.fin > 0).length;
+      h += `<div class="kpi" style="margin:6px 0"><div>Days with a setup<b>${ok.length}/${R.length}</b></div><div>Finished in profit<b class="${wins.length >= ok.length / 2 ? "g" : "l"}">${wins.length} (${f(wins.length / ok.length * 100, 0)}%)</b></div><div>Total P&amp;L<b class="${sg(tot)}">${usd(tot)}</b></div><div>Average per day<b class="${sg(tot)}">${usd(tot / ok.length)}</b></div><div>Best / worst day<b>${usd(Math.max(...ok.map(r => r.fin)))} / <span class="l">${usd(Math.min(...ok.map(r => r.fin)))}</span></b></div>` +
+        `<div>Open loss reached ${lv0}% of capital<b class="${h0.length ? "l" : "g"}">${h0.length} of ${ok.length}</b><span class="note">${h0.length ? rec(h0) + " still finished in profit" : ""}</span></div><div>Open loss reached ${lv1}%<b class="${h1.length ? "l" : "g"}">${h1.length} of ${ok.length}</b><span class="note">${h1.length ? rec(h1) + " still finished in profit" : ""}</span></div><div>Open loss reached ${lv2}%<b class="${h2.length ? "l" : "g"}">${h2.length} of ${ok.length}</b><span class="note">${h2.length ? rec(h2) + " still finished in profit" : ""}</span></div></div>`;
+      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th></tr></thead><tbody>` +
+        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="8" class="note">no combination met the minimum (${r.n} priced strikes)</td></tr>` :
+          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td></tr>`).join("") + `</tbody></table></div>`;
+    });
+    h += `<p class="note">How to read this: "Open loss" is the mark-to-market loss of the four legs at any 15-minute step before expiry (before any closing costs), compared with the estimated margin. Delta's history has no bid and ask, so fills are the mark price plus or minus the assumed half-spread, and the delta filter is switched off for this test. Strikes without a historical price at the entry time are skipped. The result at expiry uses BTC's price at the expiry time from Delta's index candles.</p>`;
+    out.innerHTML = h; prog.className = "note"; prog.textContent = `Done: ${results.filter(r => !r.none).length} setups from ${exps.length} expiries.`;
+  } catch (e){ prog.className = "note l"; prog.textContent = "Backtest failed: " + e.message; }
+  finally { dfil.on = savedDf; dbRunning = false; }
+};
 $("plout").addEventListener("click", e => {
   const v = e.target.dataset.pl; if (!v || !lastPlan) return;
   const [dir, n] = v.split(":"), c = (lastPlan[dir] || [])[Number(n)]; if (!c) return;
