@@ -17,7 +17,7 @@ async function sameSecret(a, b) {
   return d === 0;
 }
 
-async function handleState(request, env, url) {
+async function authorize(request, env) {
   const missing = [!env.STORE && "KV binding STORE", !env.APP_PASSPHRASE && "secret APP_PASSPHRASE"].filter(Boolean);
   if (missing.length) return json({ error: "Worker is missing: " + missing.join(" and ") }, 503);
   const auth = request.headers.get("Authorization") || "";
@@ -26,6 +26,32 @@ async function handleState(request, env, url) {
     await new Promise((r) => setTimeout(r, 400));   // slow down guessing
     return json({ error: "unauthorized" }, 401);
   }
+  return null;
+}
+
+// Saved option-price history, one KV key per expiry (public Delta prices; same passphrase as the rest).
+async function handleCandles(request, env, url) {
+  const bad = await authorize(request, env);
+  if (bad) return bad;
+  const code = url.pathname.slice("/api/candles/".length);
+  if (!/^\d{6}$/.test(code)) return json({ error: "bad expiry code" }, 400);
+  if (request.method === "GET") {
+    const v = await env.STORE.get("candles:" + code);
+    return json(v === null ? null : JSON.parse(v));
+  }
+  if (request.method === "PUT") {
+    const text = await request.text();
+    if (text.length > 8000000) return json({ error: "too large" }, 413);
+    try { JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
+    await env.STORE.put("candles:" + code, text);
+    return json({ ok: true });
+  }
+  return json({ error: "method not allowed" }, 405);
+}
+
+async function handleState(request, env, url) {
+  const bad = await authorize(request, env);
+  if (bad) return bad;
   if (request.method === "GET" && url.pathname === "/api/state") {
     const out = {};
     await Promise.all([...KEYS].map(async (k) => {
@@ -55,6 +81,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/api/state" || url.pathname.startsWith("/api/state/")) {
       return handleState(request, env, url);
+    }
+    if (url.pathname.startsWith("/api/candles/")) {
+      return handleCandles(request, env, url);
     }
     if (url.pathname.startsWith("/api/")) {
       const path = url.pathname.slice(5);
