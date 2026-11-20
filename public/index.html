@@ -341,6 +341,17 @@ h1{padding-right:170px}
   <div id="iout"></div>
 </div>
 
+<div class="card" id="h24Card">
+  <b>Position P&amp;L over the last 24 hours</b>
+  <p class="note" style="margin:4px 0 8px">Takes the legs you hold now and marks them to Delta's mark prices for the past 24 hours, by the minute if you like, so you can see how this position would have moved. It is not a record of what you actually held: before you opened the position, the line shows what it would have been worth.</p>
+  <div class="row" style="margin:8px 0">
+    <button id="h24go">Load last 24 hours, by the minute</button>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="h24auto" type="checkbox" style="width:auto"> Refresh every minute</label>
+  </div>
+  <div id="h24msg" class="note"></div>
+  <div id="h24out"></div>
+</div>
+
 <div class="card" id="hvCard">
   <b>Hourly move study</b>
   <p class="note" style="margin:4px 0 8px">Loads Delta's hourly BTC candles and shows the biggest one-hour moves over the period, so you can judge how far BTC can travel in an hour.</p>
@@ -3068,7 +3079,7 @@ trigButtons(); renderTrig();
 // ---------- Show / hide sections ----------
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["dfCard", "Delta filter"], ["summaryCard", "P&L summary"],
-  ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["h24Card", "P&L, last 24 hours"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["hvCard", "Hourly move study"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
@@ -3191,6 +3202,71 @@ TV_IDS.forEach(id => $(id).addEventListener("change", () => {
 }));
 setInterval(() => { if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adjEval(); }).catch(() => {}); else tvBanner(); }, 60000);
 if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adjEval(); }).catch(() => {});
+
+// ---------- Position P&L over the last 24 hours (current legs marked to Delta mark prices, by the minute or hour) ----------
+let h24Busy = false;
+async function h24Load(){
+  if (h24Busy) return; h24Busy = true;
+  const m = $("h24msg"), out = $("h24out");
+  try {
+    const lot = Number($("lot").value) || 0.001, base = $("base").value.replace(/\/$/, ""), res = "1m", st = 60;
+    const open = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s));
+    if (!open.length){ m.className = "note l"; m.textContent = "Add legs with lots first."; return; }
+    m.className = "note"; m.textContent = "Loading " + res + " prices for " + open.length + " legs…";
+    const end = Math.floor(Date.now() / 1000), start = Math.floor((end - 24 * 3600) / st) * st - 2 * st;
+    const get = async sym => {
+      const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", res); u.searchParams.set("symbol", sym); u.searchParams.set("start", start); u.searchParams.set("end", end);
+      const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
+      return ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), c: Number(c.close)})).filter(c => c.c > 0).sort((a, b) => a.t - b.t);
+    };
+    const series = await Promise.all(open.map(async L => { let c = []; try { c = await get("MARK:" + L.s); } catch (e) {} if (c.length < 3){ try { c = await get(L.s); } catch (e) {} } return {L, c}; }));
+    let btc = []; try { btc = await get("BTCUSD"); } catch (e) {}
+    const usable = series.filter(x => x.c.length >= 3), missing = series.filter(x => x.c.length < 3).map(x => x.L.s);
+    if (!usable.length) throw new Error("Delta returned no " + res + " history for these legs");
+    const times = []; for (let t = Math.floor(end / st) * st; t > end - 24 * 3600; t -= st) times.unshift(t);
+    // price of each series at time t = close of the last candle that had ended by t (carried forward through gaps); times only increase, so one pass per series
+    const mk = c => { let i = -1, px = null; return t => { while (i + 1 < c.length && c[i + 1].t + st <= t){ i++; px = c[i].c; } return px; }; };
+    const fns = usable.map(x => ({L: x.L, at: mk(x.c)})), bAt = mk(btc);
+    const pts = times.map(t => {
+      let pnl = 0, ok = true;
+      fns.forEach(({L, at}) => { const px = at(t); if (px === null){ ok = false; return; } pnl += (L.side === -1 ? -1 : 1) * (px - (Number(L.entry) || 0)) * Number(L.lots) * lot; });
+      return {t, pnl: ok ? pnl - feeNow.i : null, btc: bAt(t)};
+    }).filter(p => p.pnl !== null);
+    if (typeof lastNet === "number" && lastRes) pts.push({t: end, pnl: lastNet, btc: typeof lastSpotVal === "number" ? lastSpotVal : null, live: true});
+    if (pts.length < 3) throw new Error("not enough points");
+    const W = 900, H = 260, L0 = 56, R = 12, T = 12, B = 30, vals = pts.map(p => p.pnl), lo = Math.min(...vals, 0), hi = Math.max(...vals, 0), span = (hi - lo) || 1;
+    const xx = i => L0 + (W - L0 - R) * i / (pts.length - 1), yy = v => T + (H - T - B) * (1 - (v - lo) / span), tm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
+    const dots = pts.length <= 120;
+    let svg = `<svg id="h24svg" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;touch-action:none">`;
+    for (let k = 0; k <= 4; k++){ const v = lo + span * k / 4; svg += `<line x1="${L0}" x2="${W - R}" y1="${yy(v).toFixed(1)}" y2="${yy(v).toFixed(1)}" stroke="var(--line)"/><text x="${L0 - 6}" y="${(yy(v) + 3).toFixed(1)}" font-size="11" text-anchor="end" fill="var(--mut)">${f(v, 0)}</text>`; }
+    svg += `<line x1="${L0}" x2="${W - R}" y1="${yy(0).toFixed(1)}" y2="${yy(0).toFixed(1)}" stroke="var(--fg)" stroke-dasharray="4 3" opacity=".6"/>`;
+    svg += `<polyline points="${pts.map((p, i) => xx(i).toFixed(1) + "," + yy(p.pnl).toFixed(1)).join(" ")}" fill="none" stroke="var(--acc)" stroke-width="${dots ? 2.5 : 1.6}"/>`;
+    pts.forEach((p, i) => {
+      const d = new Date(p.t * 1000), lab = dots ? (i % 3 === 0 || p.live) : (d.getMinutes() === 0 && d.getHours() % 3 === 0);
+      if (dots) svg += `<circle cx="${xx(i).toFixed(1)}" cy="${yy(p.pnl).toFixed(1)}" r="${p.live ? 5 : 3.5}" fill="${p.pnl >= 0 ? "var(--gain)" : "var(--loss, #c0392b)"}"><title>${tm(p.t)}${p.live ? " (now)" : ""}: P&L ${money(p.pnl)}${p.btc ? " · BTC " + f(p.btc, 0) : ""}</title></circle>`;
+      if (lab) svg += `<text x="${xx(i).toFixed(1)}" y="${H - 10}" font-size="11" text-anchor="middle" fill="var(--mut)">${tm(p.t)}</text>`;
+    });
+    const lp = pts[pts.length - 1];
+    svg += `<circle cx="${xx(pts.length - 1).toFixed(1)}" cy="${yy(lp.pnl).toFixed(1)}" r="5" fill="${lp.pnl >= 0 ? "var(--gain)" : "var(--loss, #c0392b)"}"/><line id="h24cur" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--fg)" opacity="0" /></svg>`;
+    const mx = pts.reduce((a, p) => p.pnl > a.pnl ? p : a, pts[0]), mn = pts.reduce((a, p) => p.pnl < a.pnl ? p : a, pts[0]), first = pts[0];
+    const hourly = pts.filter(p => new Date(p.t * 1000).getMinutes() === 0 || p.live);
+    out.innerHTML = `<div class="kpi" style="margin:6px 0"><div>P&amp;L now<b class="${sg(lp.pnl)}">${money(lp.pnl)}</b></div><div>24 h high<b class="g">${money(mx.pnl)}</b><span class="note">${tm(mx.t)}</span></div><div>24 h low<b class="l">${money(mn.pnl)}</b><span class="note">${tm(mn.t)}</span></div><div>Change over the period<b class="${sg(lp.pnl - first.pnl)}">${money(lp.pnl - first.pnl)}</b></div></div>` +
+      `<div id="h24tip" style="min-height:22px;margin:2px 0">Move the cursor or a finger over the chart to read a point.</div>` + svg +
+      `<details style="margin-top:6px"><summary>Hourly summary</summary><div class="wrap"><table><thead><tr><th style="text-align:left">Time (local)</th><th>BTC</th><th>P&amp;L</th><th>Change vs previous row</th></tr></thead><tbody>` +
+      hourly.slice().reverse().map((p, i, a) => { const prev = a[i + 1]; return `<tr><td style="text-align:left">${tm(p.t)}${p.live ? " (now)" : ""}</td><td>${p.btc ? f(p.btc, 0) : "–"}</td><td class="${sg(p.pnl)}">${money(p.pnl)}</td><td class="${prev ? sg(p.pnl - prev.pnl) : ""}">${prev ? money(p.pnl - prev.pnl) : "–"}</td></tr>`; }).join("") + `</tbody></table></div></details>` +
+      `<p class="note">${pts.length} points, one per minute. Each point values your current ${usable.length} leg(s) at Delta's mark price at that time (the last point uses live prices), after the entry fees you would pay. Closed legs are not included, and fees to close are not subtracted. Quiet options can have flat mark prices for a few minutes. Times are in your local time (${esc(Intl.DateTimeFormat().resolvedOptions().timeZone || "local")}).${missing.length ? " No history was found for " + esc(missing.join(", ")) + ", so " + (missing.length > 1 ? "they are" : "it is") + " left out." : ""}</p>`;
+    const sv = $("h24svg"), tip = $("h24tip"), cur = $("h24cur");
+    const show = ev => { const r = sv.getBoundingClientRect(), px = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * W, i = Math.max(0, Math.min(pts.length - 1, Math.round((px - L0) / (W - L0 - R) * (pts.length - 1)))), p = pts[i];
+      tip.innerHTML = `<b>${tm(p.t)}${p.live ? " (now)" : ""}</b> · P&amp;L <b class="${sg(p.pnl)}">${money(p.pnl)}</b>${p.btc ? " · BTC " + f(p.btc, 0) : ""}`; cur.setAttribute("x1", xx(i)); cur.setAttribute("x2", xx(i)); cur.setAttribute("opacity", ".5"); };
+    sv.addEventListener("mousemove", show); sv.addEventListener("touchmove", show); sv.addEventListener("touchstart", show);
+    m.className = "note"; m.textContent = "Updated " + new Date().toLocaleTimeString() + ".";
+  } catch (e) { m.className = "note l"; m.textContent = "Could not load the history: " + e.message; }
+  finally { h24Busy = false; }
+}
+$("h24go").onclick = h24Load;
+setInterval(() => { if ($("h24auto").checked) h24Load(); }, 60000);
+$("h24auto").addEventListener("change", () => { try { localStorage.setItem("h24auto", $("h24auto").checked ? "1" : "0"); } catch (e) {} if ($("h24auto").checked) h24Load(); });
+try { if (localStorage.getItem("h24auto") === "1"){ $("h24auto").checked = true; setTimeout(h24Load, 4000); } } catch (e) {}
 
 // ---------- Hourly move study (Delta 1h candles) ----------
 $("hvgo").onclick = async () => {
