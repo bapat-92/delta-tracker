@@ -1967,8 +1967,10 @@ $("posChart").addEventListener("pointermove", e => {
   const hi = $("posTrHi"); if (hi) hi.setAttribute("visibility", "hidden");
   if (posTrail.length){
     const yv = (e.clientY - r.top) / r.height * g.H; let best = null, bd = 1e9;
-    posTrail.forEach(p => { const d = Math.hypot(g.x(p.btc) - xv, g.y(p.v) - yv); if (d < bd){ bd = d; best = p; } });
-    if (best && bd < 26){
+    // snap along the vertical cursor: take the points closest in BTC price (x), and among those the one nearest the pointer's height
+    const dx = p => Math.abs(g.x(p.btc) - xv), mdx = Math.min(...posTrail.map(dx)), tol = mdx + 4;
+    posTrail.forEach(p => { if (dx(p) <= tol){ const d = Math.abs(g.y(p.v) - yv); if (d < bd){ bd = d; best = p; } } });
+    if (best && mdx < 40){
       hi.setAttribute("cx", g.x(best.btc).toFixed(1)); hi.setAttribute("cy", g.y(best.v).toFixed(1)); hi.setAttribute("visibility", "visible");
       const tm = new Date(best.t * 1000).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
       $("posTip").innerHTML += `<div style="margin-top:4px;color:#8e44ad"><b>Trail point ${tm}${best.live ? " (now)" : ""}</b>: BTC was <b>${f(best.btc, 0)}</b> · P&amp;L at mark <b class="${best.v >= 0 ? "g" : "l"}">${money(best.v)}</b></div>`;
