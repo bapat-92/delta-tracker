@@ -247,6 +247,22 @@ h1{padding-right:170px}
   <div id="plout"></div>
 </div>
 
+<div class="card" id="recCard">
+  <b>Re-center planner (when BTC reaches the middle of a shoulder)</b>
+  <p class="note" style="margin:4px 0 8px">Suppose BTC climbs (or falls) to the trigger point on one side, the middle of the climb between your bought and sold strike there. This tries many ways to re-build the <i>opposite</i> side around that new price, so the profit zone is centred on it again and there is a chance of profit from there. It closes the old opposite legs, tries new strikes, lot sizes and bought-to-sold ratios (and optionally rolls the sold leg on the side that was hit), then throws out every combination that fails your thresholds and ranks the rest. Planning only: it places no orders. Prices at the new level are model estimates.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Trigger point (% of the way from bought to sold strike)<input id="rcfrac" type="number" min="10" max="95" step="5" value="50"></label>
+    <label>Min profit at the new centre ($)<input id="rcmin" type="number" step="1" value="0"></label>
+    <label>Max worst loss ($, blank = Batman cap above, else none)<input id="rcloss" type="number" min="1" step="10" placeholder="auto"></label>
+    <label>Min cushion each side of the new centre (%)<input id="rccush" type="number" min="0" step="0.1" value="1"></label>
+    <label>Max net cost of the trades ($, blank = no limit)<input id="rccost" type="number" min="0" step="5" placeholder="no limit"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="rcroll" type="checkbox" style="width:auto" checked> Also try rolling the sold leg on the side that was hit</label>
+    <button id="rcrun">Find re-center combinations</button>
+  </div>
+  <div id="rcmsg" class="note">Uses your current legs, the live chain for their expiry and the expiry time in the strike backtest card (UTC). The delta filter in Settings applies to new sold strikes.</div>
+  <div id="rcout"></div>
+</div>
+
 <div class="card" id="guardCard">
   <b>Call-side guard (alert only)</b>
   <p class="note" style="margin:4px 0 8px">Watches the calls you sold. Fires when BTC reaches your trigger price, when a sold call is worth a set multiple of what you collected, or when BTC gets close to a sold strike. It shows what buying the calls back costs right now (at the ask). It never places orders.</p>
@@ -333,9 +349,6 @@ h1{padding-right:170px}
     <label>Allowed worst loss (% of total funds)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
     <label>Minimum profit if BTC stays ($)<input id="iprmin" type="number" step="1" value="0"></label>
     <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="iws" type="checkbox" style="width:auto"> Wide shoulders (longer gap between each bought and sold strike, for more cushion)</label>
-    <label>Shoulder multiples of the best option's gap<input id="iwm" type="text" value="1.5,2,3" style="width:110px"></label>
-    <label>Widen<select id="iwside"><option value="both">Both sides</option><option value="call">Call side only</option><option value="put">Put side only</option></select></label>
     <button id="ifind">Find combinations</button>
   </div>
   <div id="imsg" class="note">Uses the leverage and BTC-per-lot boxes above. Buys are priced at the ask and sells at the bid.</div>
@@ -1493,9 +1506,8 @@ function batmanSearch(chain, spot, p){
     return {sh, lg, credit, arr};
   };
   const cps = [], pps = [];
-  const wc = p.shoulder ? p.shoulder.c : 0, wp = p.shoulder ? p.shoulder.p : 0;
-  lcs.forEach(lg => scs.forEach(sh => { if (sh.strike > lg.strike && sh.strike - lg.strike >= wc) cps.push(pair(sh, lg, true)); }));
-  lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike && lg.strike - sh.strike >= wp) pps.push(pair(sh, lg, false)); }));
+  lcs.forEach(lg => scs.forEach(sh => { if (sh.strike > lg.strike) cps.push(pair(sh, lg, true)); }));
+  lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike) pps.push(pair(sh, lg, false)); }));
   const margin = p.sold * 2 * q * spot / p.lev, thr = margin * p.minPct / 100;
   const excl = p.exclude || new Set(), best = new Map();
   cps.forEach(c => pps.forEach(pp => {
@@ -1520,7 +1532,6 @@ function batmanSearch(chain, spot, p){
     while (be2 < grid.length - 1 && tot[be2 + 1] >= 0) be2++;
     let mi = 0; tot.forEach((v, i) => { if (v < tot[mi]) mi = i; });
     return {callShort: t.c.sh, callLong: t.c.lg, putShort: t.pp.sh, putLong: t.pp.lg, credit: t.credit,
-      shC: t.c.sh.strike - t.c.lg.strike, shP: t.pp.lg.strike - t.pp.sh.strike, atSpot: tot[iS],
       margin, thr, lo: grid[t.l], hi: grid[t.r], width: t.width, be: [grid[be1], grid[be2]],
       maxLoss: tot[mi], maxLossAt: grid[mi], grid, tot, atEdgeLo: t.l === 0, atEdgeHi: t.r === grid.length - 1, sold: p.sold, bought: p.bought, spot,
       dSc: t.c.sh.strike - spot, dSp: spot - t.pp.sh.strike, dLc: t.c.lg.strike - spot, dLp: spot - t.pp.lg.strike};
@@ -1547,7 +1558,6 @@ function batCards(list, spot, labels, equi){
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
       <b style="font-size:16px">${labels[n]} · range ${f(c.width, 0)} (${pct(c.width)})</b>
       <div class="note" style="margin:4px 0">Profit stays above ${usdB(c.thr)} from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdgeLo || c.atEdgeHi ? " (at least; hits the edge of the tested range)" : ""}</div>
-      ${c.wide ? `<div class="note" style="margin:0 0 4px"><b>Shoulders</b>: call ${f(c.shC, 0)} wide (${f(c.shC / spot * 100, 2)}% of spot), put ${f(c.shP, 0)} wide (${f(c.shP / spot * 100, 2)}%) · target ×${c.wide} of the best option's ${f(c.wref.c, 0)} / ${f(c.wref.p, 0)}${c.wside !== "both" ? "; only the " + c.wside + " side could be widened" : ""}${c.relaxed ? "; <span class='l'>the minimum profit had to be relaxed to break-even at spot</span>" : ""}.</div>` : ""}
       ${equi ? `<div class="note" style="margin:0 0 4px">Sold: call +${f(c.dSc, 0)} / put −${f(c.dSp, 0)} from spot. Bought: call +${f(c.dLc, 0)} / put −${f(c.dLp, 0)}.</div>` : ""}
       <table style="min-width:0"><tbody>
         <tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.callShort.bid)} <span class="note">${dTxt(c.callShort.delta)}</span></td></tr>
@@ -1666,22 +1676,13 @@ function protBlock(c, label){
   return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of ${c.capDollar ? "a fixed dollar cap" : c.capBase && c.capBase !== c.margin ? "funds $" + f(c.capBase, 0) : "margin, since no funds are entered"})${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. The purple and red center options also sell a strangle near the current price (a profit bulge in the middle) and keep the wider cap. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
     protChart(c, pr) + pr.plans.map(card).join("") + `</div>`;
 }
-function renderBat(main, equi, spot, exp, tol, wide, wideNote){
+function renderBat(main, equi, spot, exp, tol){
   let h = batTvHtml || "";
   if (main.length) h += batCards(main, spot, main.map((c, i) => "#" + (i + 1)), false);
   else h += `<p class="note l">No combination keeps profit at or above your minimum while BTC stays near ${f(spot, 0)}. Try a lower minimum, fewer bought lots, or a different expiry.${dfil.on ? " The delta filter (" + dfil.lo + "–" + dfil.hi + "Δ on the sold legs) is on and may be removing candidates." : ""}</p>`;
   h += `<p style="margin:14px 0 0"><b>Equidistant options</b> <span class="note">sold call and sold put the same distance from spot (within ±$${f(tol, 0)}), and the bought legs too</span></p>`;
   if (equi.length) h += batCards(equi, spot, equi.map((c, i) => "E" + (i + 1)), true);
   else h += `<p class="note l">No equidistant combination meets your minimum. Try a larger tolerance or a lower minimum profit.</p>`;
-  if (wide){
-    h += `<p style="margin:14px 0 0"><b>Wide shoulders</b> <span class="note">${esc(wideNote || "")}</span></p>`;
-    if (wide.length){
-      const ref = main[0], pc = v => (v >= 0 ? "+" : "") + f(v / spot * 100, 2) + "%", row = (lab, c) => `<tr><td style="text-align:left"><b>${lab}</b></td><td>${f(c.shC, 0)} / ${f(c.shP, 0)}</td><td>${f(c.lo, 0)} to ${f(c.hi, 0)}</td><td>${f(c.width, 0)} (${f(c.width / spot * 100, 2)}%)</td><td>${beN(c.be[0])} (${pc(c.be[0] - spot)})</td><td>${beN(c.be[1])} (${pc(c.be[1] - spot)})</td><td>${usdB(c.atSpot)}</td><td class="l">${usdB(c.maxLoss)}</td></tr>`;
-      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Option</th><th>Shoulders call / put</th><th>Profit range</th><th>Range width</th><th>Lower break-even</th><th>Upper break-even</th><th>Profit at spot</th><th>Worst in ±15%</th></tr></thead><tbody>` +
-        (ref ? row("#1 (reference)", ref) : "") + wide.map((c, i) => row("W" + (i + 1) + " ×" + c.wide + (c.wside !== "both" ? " (" + c.wside + " only)" : "") + (c.relaxed ? " *" : ""), c)).join("") + `</tbody></table></div>`;
-      h += batCards(wide, spot, wide.map((c, i) => "W" + (i + 1)), false);
-    } else h += `<p class="note l">No combination with those wider shoulders keeps your minimum profit at spot. Try a lower minimum profit, smaller multiples or fewer bought lots.</p>`;
-  }
   h += `<p class="note">Expiry ${esc(exp)}, spot ${f(spot, 0)}. Chart: P&amp;L at expiry from -15% to +15% of spot; the shaded band is the profit-above-minimum range and the dashed line is your minimum. Margin is a rough estimate (sold lots × BTC per lot × spot ÷ leverage) and ignores any offset from the bought legs, so check Delta's order preview. P&amp;L is at expiry using today's bid and ask prices, without fees. The search tries bought strikes within 3% of spot and sold strikes within 8%. The equidistant options never repeat a combination from the first group.</p>`;
   $("iout").innerHTML = h;
 }
@@ -1736,30 +1737,11 @@ $("ifind").onclick = async () => {
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
-    let wide = null, wideNote = "";
-    if ($("iws").checked){
-      wide = [];
-      const step = strikeStep(chain), ref = main[0] ? {c: main[0].shC, p: main[0].shP} : {c: 2 * step, p: 2 * step}, side = $("iwside").value;
-      const mults = String($("iwm").value).split(",").map(x => Number(x.trim())).filter(x => x > 0).slice(0, 5);
-      const ex = new Set(main.map(key4));
-      mults.forEach(m => {
-        // try the chosen side(s) first; if nothing meets the minimum profit, try each single side, then relax the minimum to break-even at spot
-        const tries = [];
-        [params.minPct, 0].forEach((mp, k) => (side === "both" ? ["both", "put", "call"] : [side]).forEach(sd => { if (k === 0 || params.minPct > 0) tries.push([sd, mp, k === 1]); }));
-        for (const [sd, mp, relaxed] of tries){
-          const sh = {c: sd === "put" ? 0 : ref.c * m, p: sd === "call" ? 0 : ref.p * m};
-          const r = batmanSearch(chain, spot, Object.assign({}, params, {minPct: mp, shoulder: sh, exclude: ex}))[0];
-          if (r){ r.wide = m; r.wref = ref; r.wside = sd; r.relaxed = relaxed; wide.push(r); ex.add(key4(r)); break; }
-        }
-      });
-      wideNote = `gap between bought and sold strike widened to ${mults.map(m => "×" + m).join(", ")} of the best option's ${f(ref.c, 0)} (call) / ${f(ref.p, 0)} (put)${side === "both" ? "" : ", " + side + " side only"}; each row is the widest profit range found with at least that gap. If both sides together can't keep your minimum profit, it tries one side at a time, then (marked *) relaxes the minimum to break-even at spot.`;
-    }
-    const wl = wide || [];
-    if (tvRem) main.concat(equi, wl).forEach(c => { c.tv = {call: (c.callShort.strike / spot - 1) / tvRem.sig, put: (1 - c.putShort.strike / spot) / tvRem.sig}; });
-    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0; const fb = batFunds(); main.concat(equi, wl).forEach(c => { c.capBase = fb || c.margin; c.capDollar = Number($("imaxd").value) || 0; c.prot = protectSearch(c, chain, spot, lim, lot, pm); }); }
-    lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})), wl.map((c, i) => ({c, exp, label: "W" + (i + 1)})));
-    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant${wide ? ", " + wide.length + " wide-shoulder" : ""}.` + (batNote ? " " + batNote : "");
-    renderBat(main, equi, spot, exp, tol, wide, wideNote);
+    if (tvRem) main.concat(equi).forEach(c => { c.tv = {call: (c.callShort.strike / spot - 1) / tvRem.sig, put: (1 - c.putShort.strike / spot) / tvRem.sig}; });
+    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0; const fb = batFunds(); main.concat(equi).forEach(c => { c.capBase = fb || c.margin; c.capDollar = Number($("imaxd").value) || 0; c.prot = protectSearch(c, chain, spot, lim, lot, pm); }); }
+    lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
+    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
+    renderBat(main, equi, spot, exp, tol);
   } catch (e){ $("imsg").className = "note l"; $("imsg").textContent = "Could not load the chain: " + e.message; }
 };
 $("iout").addEventListener("click", e => {
@@ -2653,6 +2635,116 @@ $("plrun").onclick = async () => {
     renderPlan(info);
   } catch (e){ msg.className = "note l"; msg.textContent = "Planner failed: " + e.message; }
 };
+
+// ---------- Re-center planner ----------
+let lastRec = null;
+function recScenario(base, model, dir, trig, ctx){
+  const Ss = trig, sigma = model.sm.ivAt(Ss), gT = dir > 0 ? "C" : "P", gO = dir > 0 ? "P" : "C";
+  const m = {S0: ctx.S0, step: 0, T: ctx.T, lot: ctx.lot, lev: ctx.lev, minPct: 0, hist: null, extras: [], Ss, dir, sigma, grid: planGrid(Ss, ctx.T, sigma)};
+  const opp = base.filter(l => l.c === (gO === "C")), hit = base.filter(l => l.c === (gT === "C"));
+  const fees = acts => acts.reduce((t, a) => t + feeOpt(a.lots, a.px, Ss, ctx.lot), 0);
+  const baseline = evalPlan(base, [], m);
+  const rej = {delta: 0, profit: 0, loss: 0, cushion: 0, cost: 0, none: 0}; let tried = 0;
+  if (!opp.length) return {Ss, sigma, baseline, top: [], tried, rej, note: "There are no " + (gO === "C" ? "call" : "put") + " legs on the opposite side to re-build."};
+  const oSold = opp.filter(l => l.side === -1), oLong = opp.filter(l => l.side === 1);
+  const soldLots = oSold.reduce((a, l) => a + l.lots, 0) || 1, longLots = oLong.reduce((a, l) => a + l.lots, 0);
+  const ratio0 = soldLots ? longLots / soldLots : 0;
+  const origGap = oSold.length && oLong.length ? Math.abs(oSold[0].k - oLong[0].k) : 0;
+  const closeAll = opp.map(l => ({kind: "close", sym: l.s, side: l.side, lots: l.lots, px: model.trade(gO, l.k, Ss, -l.side)}));
+  const hitOpts = [{label: "keep", acts: []}];
+  if (ctx.roll){
+    const hs = hit.filter(l => l.side === -1), hl = hit.filter(l => l.side === 1);
+    [0.015, 0.025].forEach(d => {
+      if (!hs.length) return;
+      const K = model.nearest(gT, Ss * (1 + (gT === "C" ? 1 : -1) * d)); if (!K) return;
+      const far = hs.every(l => gT === "C" ? K.strike > l.k : K.strike < l.k);
+      if (!far || hl.some(l => gT === "C" ? K.strike <= l.k : K.strike >= l.k)) return;
+      const acts = hs.map(l => ({kind: "close", sym: l.s, side: -1, lots: l.lots, px: model.trade(gT, l.k, Ss, 1)})).concat(hs.map(l => ({kind: "add", sym: K.symbol, side: -1, lots: l.lots, px: model.trade(gT, K.strike, Ss, -1)})));
+      hitOpts.push({label: "roll the sold " + (gT === "C" ? "call" : "put") + " out to " + K.strike, acts});
+    });
+  }
+  const A = [0, 0.0025, 0.005, 0.01], G = [0.01, 0.015, 0.02, 0.03].concat(origGap ? [origGap / Ss] : []);
+  const kLots = [1, 0.75, 0.5], rats = [...new Set([ratio0, 0.2, 0.3, 0.4, 0.5].filter(r => r > 0 && r < 1).map(r => Math.round(r * 100) / 100))];
+  const seen = new Set(), cands = [];
+  // build candidate re-builds of the opposite side
+  const dirO = gO === "C" ? 1 : -1;     // calls sit above the new centre, puts below
+  A.forEach(a => G.forEach(g => kLots.forEach(k => rats.forEach(r => {
+    const Kb = model.nearest(gO, Ss * (1 + dirO * a)), Ks = model.nearest(gO, Ss * (1 + dirO * (a + g)));
+    if (!Kb || !Ks || (gO === "C" ? Ks.strike <= Kb.strike : Ks.strike >= Kb.strike)) return;
+    const sl = Math.max(1, Math.round(soldLots * k)), bl = Math.max(1, Math.round(sl * r)); if (bl >= sl) return;
+    const key = [Kb.strike, Ks.strike, sl, bl].join("|"); if (seen.has(key)) return; seen.add(key);
+    const acts = closeAll.concat([{kind: "add", sym: Ks.symbol, side: -1, lots: sl, px: model.trade(gO, Ks.strike, Ss, -1)}, {kind: "add", sym: Kb.symbol, side: 1, lots: bl, px: model.trade(gO, Kb.strike, Ss, 1)}]);
+    cands.push({label: `new ${gO === "C" ? "call" : "put"} side: buy ${Kb.strike} ×${f(bl, 0)}, sell ${Ks.strike} ×${f(sl, 0)}`, acts, Kb, Ks, sl, bl});
+  }))));
+  const good = [];
+  hitOpts.forEach(h => cands.forEach(c => {
+    tried++;
+    const acts = h.acts.concat(c.acts);
+    if (acts.some(a => a.kind === "add" && a.side < 0)){      // delta filter on new sold strikes
+      const bad = acts.some(a => { if (!(a.kind === "add" && a.side < 0)) return false; const pp = a.sym.split("-"), K = Number(pp[2]); return !dOK(bsDelta(Ss, K, ctx.T, model.sm.ivAt(K), pp[0] === "C")); });
+      if (bad){ rej.delta++; return; }
+    }
+    const r = evalPlan(base, acts, m), fee = fees(acts), at = r.atSpot - fee, worst = r.worst - fee, cost = -(r.cash - fee);
+    if (!(r.width > 0)){ rej.none++; return; }
+    if (at < ctx.minProfit){ rej.profit++; return; }
+    if (ctx.maxLoss && worst < -ctx.maxLoss){ rej.loss++; return; }
+    if ((Ss - r.lo) / Ss * 100 < ctx.cush || (r.hi - Ss) / Ss * 100 < ctx.cush){ rej.cushion++; return; }
+    if (ctx.maxCost !== null && cost > ctx.maxCost){ rej.cost++; return; }
+    good.push(Object.assign(r, {acts, label: (h.label === "keep" ? "" : h.label + "; ") + c.label, fee, at, worst, cost}));
+  }));
+  good.sort((a, b) => b.width - a.width || b.at - a.at || b.eI - a.eI);
+  return {Ss, sigma, baseline, top: good.slice(0, 3), tried, passed: good.length, rej};
+}
+function recCards(list, dir, Ss){
+  if (!list.length) return `<p class="note l">No combination passes all your thresholds for this scenario. Loosen the minimum cushion, the minimum profit or the cost limit, or allow a higher worst loss.</p>`;
+  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  return `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:8px">` + list.map((c, n) => `
+    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
+      <b style="font-size:16px">R${n + 1} · range ${f(c.width, 0)} (${f(c.width / Ss * 100, 1)}%)</b>
+      <div class="note" style="margin:2px 0 4px">${esc(c.label)}</div>
+      <div class="note" style="margin-bottom:4px">Break-evens: ${beN(c.lo)} to ${beN(c.hi)} · cushion ${f((Ss - c.lo) / Ss * 100, 1)}% below / ${f((c.hi - Ss) / Ss * 100, 1)}% above the new centre${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>
+      <div style="font-size:13px;margin-bottom:6px">${planActLines(c.acts)}</div>
+      <div class="note">Net cost of these trades ${usd(c.cost)} (fees ${usd(c.fee)} included in the figures below)<br>Total P&amp;L at expiry if BTC stays at ${f(Ss, 0)}: <b class="${c.at >= 0 ? "g" : "l"}">${usd(c.at)}</b> · worst in ±30%: <span class="l">${usd(c.worst)}</span>${c.unlimited ? " (unlimited above the highest sold call)" : ""}<br>
+        Chance of profit (implied): <b>${pct1(c.pI)}</b> · expected P&amp;L (model) ${usd(c.eI - c.fee)}<br>If BTC then moves −5%: ${usd(c.atDn5 - c.fee)} · +5%: ${usd(c.atUp5 - c.fee)}</div>
+      <p style="margin:8px 0 0"><button data-rc="${dir}:${n}">Show in what-if</button></p></div>`).join("") + `</div>`;
+}
+$("rcrun").onclick = async () => {
+  const msg = $("rcmsg"); msg.className = "note";
+  const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, base = wifLegs(lot);
+  if (!base.length){ msg.className = "note l"; msg.textContent = "Add legs with lots first."; return; }
+  const exps = [...new Set(base.map(l => l.s.split("-")[3]))];
+  if (exps.length > 1){ msg.className = "note l"; msg.textContent = "Your legs have different expiries (" + exps.join(", ") + "). This planner needs one expiry."; return; }
+  const exp = exps[0], Tdays = (expiryMs(exp, $("bexp").value) - Date.now()) / 86400000;
+  if (!(Tdays > 0.01)){ msg.className = "note l"; msg.textContent = "Expiry " + exp + " has passed or is about to."; return; }
+  const T = Tdays / 365; msg.textContent = "Loading the chain…"; $("rcout").innerHTML = "";
+  try {
+    const chain = await fetchChain(exp);
+    if (!chain.calls.length || !chain.puts.length){ msg.className = "note l"; msg.textContent = "No options found for expiry " + exp + "."; return; }
+    const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, frac = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
+    const lv = adjLevels(base, spot, frac);
+    if (!lv.C && !lv.P){ msg.className = "note l"; msg.textContent = "No bought strike inside a sold strike on either side, so there is no shoulder to take the middle of."; return; }
+    const model = planModel(chain, spot, T), fb = batFunds();
+    let maxLoss = Number($("rcloss").value) || Number($("imaxd").value) || 0;
+    if (!maxLoss && fb) maxLoss = fb * (Number($("iplim").value) || 15) / 100;
+    const ctx = {S0: spot, T, lot, lev, roll: $("rcroll").checked, minProfit: Number($("rcmin").value) || 0, maxLoss, cush: Math.max(0, Number($("rccush").value) || 0), maxCost: $("rccost").value === "" ? null : Number($("rccost").value)};
+    const res = {}; let h = `<p class="note">Spot ${f(spot, 0)} · expiry ${esc(exp)} in ${f(Tdays, 2)} days · thresholds: profit at the new centre ≥ ${usdP(ctx.minProfit)}, worst loss ${ctx.maxLoss ? "≤ " + usdP(ctx.maxLoss) : "no cap"}, cushion ≥ ${f(ctx.cush, 1)}% each side${ctx.maxCost !== null ? ", net cost ≤ " + usdP(ctx.maxCost) : ""}${dfil.on ? ", sold delta " + dfil.lo + "–" + dfil.hi : ""}.</p>`;
+    [["up", lv.C, 1], ["down", lv.P, -1]].forEach(([k, L, d]) => {
+      if (!L){ h += `<p class="note">No ${d > 0 ? "call" : "put"}-side shoulder, so no ${k} scenario.</p>`; return; }
+      const r = recScenario(base, model, d, L.trig, ctx); res[k] = r.top;
+      h += `<p style="margin:14px 0 0"><b>If BTC ${d > 0 ? "rises" : "falls"} to ${f(L.trig, 0)}</b> <span class="note">(${f(frac * 100, 0)}% of the way from your bought ${f(L.bought, 0)} to your sold ${f(L.sold, 0)} ${d > 0 ? "call" : "put"}) and the ${d > 0 ? "put" : "call"} side is re-built around it</span></p>`;
+      h += r.note ? `<p class="note l">${esc(r.note)}</p>` : `<div class="note">Without any change you'd have ${usdP(r.baseline.atSpot)} at expiry if BTC stays there, chance of profit (implied) ${pct1(r.baseline.pI)}.<br>Threshold check: ${f(r.tried, 0)} combinations tried, ${f(r.passed || 0, 0)} passed. Rejected for: no profit zone around the new centre ${r.rej.none}, profit at centre too low ${r.rej.profit}, worst loss too big ${r.rej.loss}, cushion too small ${r.rej.cushion}, cost too high ${r.rej.cost}, sold delta outside filter ${r.rej.delta}.</div>` + recCards(r.top, k, L.trig);
+    });
+    lastRec = res; msg.textContent = "Done."; $("rcout").innerHTML = h;
+  } catch (e){ msg.className = "note l"; msg.textContent = "Re-center planner failed: " + e.message; }
+};
+$("rcout").addEventListener("click", e => {
+  const v = e.target.dataset.rc; if (!v || !lastRec) return;
+  const [dir, n] = v.split(":"), c = (lastRec[dir] || [])[Number(n)]; if (!c) return;
+  wif.acts = c.acts.map(a => Object.assign({}, a));
+  $("wmsg").textContent = "Loaded re-center option R" + (Number(n) + 1) + " (" + dir + " scenario). Its prices at the new BTC level are model estimates.";
+  renderWhatIf();
+  const card = $("wifCard"); if (card && card.scrollIntoView) card.scrollIntoView({behavior: "smooth", block: "start"});
+});
 $("plout").addEventListener("click", e => {
   const v = e.target.dataset.pl; if (!v || !lastPlan) return;
   const [dir, n] = v.split(":"), c = (lastPlan[dir] || [])[Number(n)]; if (!c) return;
