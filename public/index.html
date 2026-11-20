@@ -331,11 +331,11 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
     <label>Max loss in dollars (overrides the %)<input id="imaxd" type="number" min="1" step="10" placeholder="e.g. 900"></label>
     <label>Allowed worst loss (% of total funds)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="icen" type="checkbox" style="width:auto"> Add center bulge (sell a strangle near spot)</label>
-    <label>Center range (± % of spot)<input id="icpct" type="number" min="0.5" step="0.5" value="2"></label>
-    <label>Allowed worst loss with center (% of total funds)<input id="icplim" type="number" min="0.5" step="0.5" value="20"></label>
     <label>Minimum profit if BTC stays ($)<input id="iprmin" type="number" step="1" value="0"></label>
     <label>Equidistant tolerance (USD)<input id="itol" type="number" min="0" placeholder="auto: one strike step"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="iws" type="checkbox" style="width:auto"> Wide shoulders (longer gap between each bought and sold strike, for more cushion)</label>
+    <label>Shoulder multiples of the best option's gap<input id="iwm" type="text" value="1.5,2,3" style="width:110px"></label>
+    <label>Widen<select id="iwside"><option value="both">Both sides</option><option value="call">Call side only</option><option value="put">Put side only</option></select></label>
     <button id="ifind">Find combinations</button>
   </div>
   <div id="imsg" class="note">Uses the leverage and BTC-per-lot boxes above. Buys are priced at the ask and sells at the bid.</div>
@@ -1493,8 +1493,9 @@ function batmanSearch(chain, spot, p){
     return {sh, lg, credit, arr};
   };
   const cps = [], pps = [];
-  lcs.forEach(lg => scs.forEach(sh => { if (sh.strike > lg.strike) cps.push(pair(sh, lg, true)); }));
-  lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike) pps.push(pair(sh, lg, false)); }));
+  const wc = p.shoulder ? p.shoulder.c : 0, wp = p.shoulder ? p.shoulder.p : 0;
+  lcs.forEach(lg => scs.forEach(sh => { if (sh.strike > lg.strike && sh.strike - lg.strike >= wc) cps.push(pair(sh, lg, true)); }));
+  lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike && lg.strike - sh.strike >= wp) pps.push(pair(sh, lg, false)); }));
   const margin = p.sold * 2 * q * spot / p.lev, thr = margin * p.minPct / 100;
   const excl = p.exclude || new Set(), best = new Map();
   cps.forEach(c => pps.forEach(pp => {
@@ -1519,6 +1520,7 @@ function batmanSearch(chain, spot, p){
     while (be2 < grid.length - 1 && tot[be2 + 1] >= 0) be2++;
     let mi = 0; tot.forEach((v, i) => { if (v < tot[mi]) mi = i; });
     return {callShort: t.c.sh, callLong: t.c.lg, putShort: t.pp.sh, putLong: t.pp.lg, credit: t.credit,
+      shC: t.c.sh.strike - t.c.lg.strike, shP: t.pp.lg.strike - t.pp.sh.strike, atSpot: tot[iS],
       margin, thr, lo: grid[t.l], hi: grid[t.r], width: t.width, be: [grid[be1], grid[be2]],
       maxLoss: tot[mi], maxLossAt: grid[mi], grid, tot, atEdgeLo: t.l === 0, atEdgeHi: t.r === grid.length - 1, sold: p.sold, bought: p.bought, spot,
       dSc: t.c.sh.strike - spot, dSp: spot - t.pp.sh.strike, dLc: t.c.lg.strike - spot, dLp: spot - t.pp.lg.strike};
@@ -1545,6 +1547,7 @@ function batCards(list, spot, labels, equi){
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
       <b style="font-size:16px">${labels[n]} · range ${f(c.width, 0)} (${pct(c.width)})</b>
       <div class="note" style="margin:4px 0">Profit stays above ${usdB(c.thr)} from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdgeLo || c.atEdgeHi ? " (at least; hits the edge of the tested range)" : ""}</div>
+      ${c.wide ? `<div class="note" style="margin:0 0 4px"><b>Shoulders</b>: call ${f(c.shC, 0)} wide (${f(c.shC / spot * 100, 2)}% of spot), put ${f(c.shP, 0)} wide (${f(c.shP / spot * 100, 2)}%) · target ×${c.wide} of the best option's ${f(c.wref.c, 0)} / ${f(c.wref.p, 0)}.</div>` : ""}
       ${equi ? `<div class="note" style="margin:0 0 4px">Sold: call +${f(c.dSc, 0)} / put −${f(c.dSp, 0)} from spot. Bought: call +${f(c.dLc, 0)} / put −${f(c.dLp, 0)}.</div>` : ""}
       <table style="min-width:0"><tbody>
         <tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.callShort.bid)} <span class="note">${dTxt(c.callShort.delta)}</span></td></tr>
@@ -1561,7 +1564,7 @@ function batCards(list, spot, labels, equi){
 // ---------- Batman protection (outside wings) ----------
 // Delta options fee: GST x min(0.01% of notional, 3.5% of premium)
 const feeOpt = (lots, px, spot, lot) => 1.18 * Math.min(0.0001 * lots * lot * spot, 0.035 * px * lots * lot);
-function protectSearch(c, chain, spot, limitPct, lot, minProfit, cen){
+function protectSearch(c, chain, spot, limitPct, lot, minProfit){
   const capBase = c.capBase || c.margin, lim = c.capDollar || limitPct / 100 * capBase, pmin = Number(minProfit) || 0, grid = c.grid;
   const u = Math.max(1, Math.round(c.sold / 20));
   const sideWings = isCall => {
@@ -1605,24 +1608,6 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit, cen){
       if (co.length && po.length) combos.push({s, b, co, po});
     });
   });
-  const cenCombos = [];
-  if (cen && cen.on){
-    const rng = o => o.bid > 0 && o.strike >= spot * (1 - cen.pct / 100) && o.strike <= spot * (1 + cen.pct / 100);
-    const pick3 = arr => { if (arr.length <= 3) return arr; return [arr[0], arr[Math.floor(arr.length / 2)], arr[arr.length - 1]]; };
-    const cC = pick3(chain.calls.filter(o => rng(o) && o.strike >= spot && o.strike < c.callLong.strike).sort((a, b) => a.strike - b.strike));
-    const cP = pick3(chain.puts.filter(o => rng(o) && o.strike <= spot && o.strike > c.putLong.strike).sort((a, b) => b.strike - a.strike));
-    const sS = new Set([c.sold]); [4, 8, 12, 16].forEach(k => sS.add(Math.min(c.sold, u * k)));
-    [...sS].sort((a, b) => a - b).forEach(s => {
-      const bS = new Set([0, Math.round(s * 0.2), Math.round(s * 0.3), Math.round(s * c.bought / c.sold)]);
-      [...bS].filter(b => b >= 0 && b < s).forEach(b => [0.2, 0.4, 0.6].forEach(fr => {
-        const m = Math.max(1, Math.round(s * fr));
-        cC.forEach(oc => cP.forEach(op => {
-          const co = sideOpts(true, s, b, {o: oc, n: m}), po = sideOpts(false, s, b, {o: op, n: m});
-          if (co.length && po.length) cenCombos.push({s, b, co, po});
-        }));
-      }));
-    });
-  }
   const full = (s, b, a, p) => {
     const ws = a.ws.concat(p.ws).concat(a.cl || [], p.cl || []);
     const legs = [{c: true, K: c.callShort.strike, side: -1, n: s, e: c.callShort.bid}, {c: true, K: c.callLong.strike, side: 1, n: b, e: c.callLong.ask},
@@ -1633,9 +1618,7 @@ function protectSearch(c, chain, spot, limitPct, lot, minProfit, cen){
   const near = S => grid.reduce((bi, x, i) => Math.abs(x - S) < Math.abs(grid[bi] - S) ? i : bi, 0);
   const iS = near(spot);
   const hold = full(c.sold, c.bought, {ws: []}, {ws: []});
-  const limC = cen && cen.on ? (c.capDollar ? c.capDollar * cen.lim / limitPct : (cen.lim / 100) * capBase) : lim;
   const groups = [["Keep lots", x => x.s === c.sold && x.b === c.bought, combos, lim], ["Batman-like", x => x.b >= 0.19 * x.s && x.b > 0, combos, lim], ["Max profit", () => true, combos, lim]];
-  if (cen && cen.on) groups.push(["Batman + center", x => x.b >= 0.19 * x.s && x.b > 0, cenCombos, limC], ["Max + center", () => true, cenCombos, limC]);
   const plans = groups.map(([name, ok, src, lim]) => {
     let best = null;
     src.filter(ok).forEach(g => g.co.forEach(a => g.po.forEach(p => {
@@ -1680,16 +1663,25 @@ function protBlock(c, label){
       p.ws.map(w => `<tr><td style="text-align:left">Buy ${w.c ? "call" : "put"} (wing)</td><td>${f(w.K, 0)}</td><td>×${f(w.n, 0)}</td><td>${f(w.e)}</td></tr>`).join("") + `</tbody></table>` +
       `<button data-iprot="${label}:${i}" style="margin-top:4px">Load this structure</button></div>`;
   };
-  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of ${c.capDollar ? "a fixed dollar cap" : c.capBase && c.capBase !== c.margin ? "funds $" + f(c.capBase, 0) : "margin, since no funds are entered"}${$("icen").checked ? "; center options use " + ($("icplim").value || 20) + "%" : ""})${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. The purple and red center options also sell a strangle near the current price (a profit bulge in the middle) and keep the wider cap. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
+  return `<div style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>Protection options</b> <span class="note">worst loss capped at ${usdD(pr.lim)} (${$("iplim").value || 15}% of ${c.capDollar ? "a fixed dollar cap" : c.capBase && c.capBase !== c.margin ? "funds $" + f(c.capBase, 0) : "margin, since no funds are entered"})${pr.pmin ? ", minimum profit " + usdD(pr.pmin) : ""}. Each option picks the highest profit that keeps the cap. “Keep lots” keeps your sold and bought lots and only adds wings; “Batman-like” may shrink the lots but keeps inner longs of at least 20% of the sold lots; “Max profit” may also drop the inner longs. The purple and red center options also sell a strangle near the current price (a profit bulge in the middle) and keep the wider cap. Buys at the ask, sells at the bid, fees included on every leg.</span>` +
     protChart(c, pr) + pr.plans.map(card).join("") + `</div>`;
 }
-function renderBat(main, equi, spot, exp, tol){
+function renderBat(main, equi, spot, exp, tol, wide, wideNote){
   let h = batTvHtml || "";
   if (main.length) h += batCards(main, spot, main.map((c, i) => "#" + (i + 1)), false);
   else h += `<p class="note l">No combination keeps profit at or above your minimum while BTC stays near ${f(spot, 0)}. Try a lower minimum, fewer bought lots, or a different expiry.${dfil.on ? " The delta filter (" + dfil.lo + "–" + dfil.hi + "Δ on the sold legs) is on and may be removing candidates." : ""}</p>`;
   h += `<p style="margin:14px 0 0"><b>Equidistant options</b> <span class="note">sold call and sold put the same distance from spot (within ±$${f(tol, 0)}), and the bought legs too</span></p>`;
   if (equi.length) h += batCards(equi, spot, equi.map((c, i) => "E" + (i + 1)), true);
   else h += `<p class="note l">No equidistant combination meets your minimum. Try a larger tolerance or a lower minimum profit.</p>`;
+  if (wide){
+    h += `<p style="margin:14px 0 0"><b>Wide shoulders</b> <span class="note">${esc(wideNote || "")}</span></p>`;
+    if (wide.length){
+      const ref = main[0], pc = v => (v >= 0 ? "+" : "") + f(v / spot * 100, 2) + "%", row = (lab, c) => `<tr><td style="text-align:left"><b>${lab}</b></td><td>${f(c.shC, 0)} / ${f(c.shP, 0)}</td><td>${f(c.lo, 0)} to ${f(c.hi, 0)}</td><td>${f(c.width, 0)} (${f(c.width / spot * 100, 2)}%)</td><td>${beN(c.be[0])} (${pc(c.be[0] - spot)})</td><td>${beN(c.be[1])} (${pc(c.be[1] - spot)})</td><td>${usdB(c.atSpot)}</td><td class="l">${usdB(c.maxLoss)}</td></tr>`;
+      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Option</th><th>Shoulders call / put</th><th>Profit range</th><th>Range width</th><th>Lower break-even</th><th>Upper break-even</th><th>Profit at spot</th><th>Worst in ±15%</th></tr></thead><tbody>` +
+        (ref ? row("#1 (reference)", ref) : "") + wide.map((c, i) => row("W" + (i + 1) + " ×" + c.wide, c)).join("") + `</tbody></table></div>`;
+      h += batCards(wide, spot, wide.map((c, i) => "W" + (i + 1)), false);
+    } else h += `<p class="note l">No combination with those wider shoulders keeps your minimum profit at spot. Try a lower minimum profit, smaller multiples or fewer bought lots.</p>`;
+  }
   h += `<p class="note">Expiry ${esc(exp)}, spot ${f(spot, 0)}. Chart: P&amp;L at expiry from -15% to +15% of spot; the shaded band is the profit-above-minimum range and the dashed line is your minimum. Margin is a rough estimate (sold lots × BTC per lot × spot ÷ leverage) and ignores any offset from the bought legs, so check Delta's order preview. P&amp;L is at expiry using today's bid and ask prices, without fees. The search tries bought strikes within 3% of spot and sold strikes within 8%. The equidistant options never repeat a combination from the first group.</p>`;
   $("iout").innerHTML = h;
 }
@@ -1718,7 +1710,6 @@ function batAutoPreview(){
 ["ifunds", "imsh", "irat", "iauto", "lev", "lot"].forEach(id => $(id).addEventListener("input", batAutoPreview));
 $("iauto").addEventListener("change", batAutoPreview);
 $("iprot").addEventListener("change", () => { if (lastBat && lastBat.length) $("ifind").click(); });
-$("icen").addEventListener("change", () => { if ($("iprot").checked && lastBat && lastBat.length) $("ifind").click(); });
 $("ifind").onclick = async () => {
   batNote = ""; batAutoPreview();
   if ($("iauto").checked && !batNote && batFunds()) return;
@@ -1745,11 +1736,25 @@ $("ifind").onclick = async () => {
     const main = batmanSearch(chain, spot, params);
     const tolIn = Number($("itol").value), tol = tolIn > 0 ? tolIn : strikeStep(chain);
     const equi = batmanSearch(chain, spot, Object.assign({}, params, {equi: {tol}, exclude: new Set(main.map(key4))}));
-    if (tvRem) main.concat(equi).forEach(c => { c.tv = {call: (c.callShort.strike / spot - 1) / tvRem.sig, put: (1 - c.putShort.strike / spot) / tvRem.sig}; });
-    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0, cn = {on: $("icen").checked, pct: Number($("icpct").value) || 2, lim: Number($("icplim").value) || 20}; const fb = batFunds(); main.concat(equi).forEach(c => { c.capBase = fb || c.margin; c.capDollar = Number($("imaxd").value) || 0; c.prot = protectSearch(c, chain, spot, lim, lot, pm, cn); }); }
-    lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})));
-    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant.` + (batNote ? " " + batNote : "");
-    renderBat(main, equi, spot, exp, tol);
+    let wide = null, wideNote = "";
+    if ($("iws").checked){
+      wide = [];
+      const step = strikeStep(chain), ref = main[0] ? {c: main[0].shC, p: main[0].shP} : {c: 2 * step, p: 2 * step}, side = $("iwside").value;
+      const mults = String($("iwm").value).split(",").map(x => Number(x.trim())).filter(x => x > 0).slice(0, 5);
+      const ex = new Set(main.map(key4));
+      mults.forEach(m => {
+        const sh = {c: side === "put" ? 0 : ref.c * m, p: side === "call" ? 0 : ref.p * m};
+        const r = batmanSearch(chain, spot, Object.assign({}, params, {shoulder: sh, exclude: ex}))[0];
+        if (r){ r.wide = m; r.wref = ref; wide.push(r); ex.add(key4(r)); }
+      });
+      wideNote = `gap between bought and sold strike widened to ${mults.map(m => "×" + m).join(", ")} of the best option's ${f(ref.c, 0)} (call) / ${f(ref.p, 0)} (put)${side === "both" ? "" : ", " + side + " side only"}; each row is the widest profit range found with at least that gap.`;
+    }
+    const wl = wide || [];
+    if (tvRem) main.concat(equi, wl).forEach(c => { c.tv = {call: (c.callShort.strike / spot - 1) / tvRem.sig, put: (1 - c.putShort.strike / spot) / tvRem.sig}; });
+    if ($("iprot").checked){ const lim = Number($("iplim").value) || 15, pm = Number($("iprmin").value) || 0; const fb = batFunds(); main.concat(equi, wl).forEach(c => { c.capBase = fb || c.margin; c.capDollar = Number($("imaxd").value) || 0; c.prot = protectSearch(c, chain, spot, lim, lot, pm); }); }
+    lastBat = main.map((c, i) => ({c, exp, label: "#" + (i + 1)})).concat(equi.map((c, i) => ({c, exp, label: "E" + (i + 1)})), wl.map((c, i) => ({c, exp, label: "W" + (i + 1)})));
+    $("imsg").textContent = `${main.length} by range covered, plus ${equi.length} equidistant${wide ? ", " + wide.length + " wide-shoulder" : ""}.` + (batNote ? " " + batNote : "");
+    renderBat(main, equi, spot, exp, tol, wide, wideNote);
   } catch (e){ $("imsg").className = "note l"; $("imsg").textContent = "Could not load the chain: " + e.message; }
 };
 $("iout").addEventListener("click", e => {
