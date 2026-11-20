@@ -174,6 +174,7 @@ h1{padding-right:170px}
     <button id="rsil" type="button">Silence until back in range</button>
     <button id="rtest" type="button">Test alarm</button> <button id="rtest2" type="button">Test early warning</button> <button id="rtest3" type="button">Test back-in-range tone</button>
   </div>
+  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours path <span id="trailMsg" class="note"></span></label></div>
   <div id="rbanner" style="margin:4px 0;font-size:15px"></div>
   <div id="posTip" style="min-height:44px;margin:4px 0"></div>
   <div id="posChart"></div>
@@ -1932,7 +1933,7 @@ function positionProfile(){
   return {ls, spot, lo, hi, S, P, be, credit, exps, pnl, off: closedOff(), atSpot: pnl(spot)};
 }
 
-let posGeom = null, posCur = null;
+let posGeom = null, posCur = null, posTrail = [];
 const POS_HINT = "";
 function hideCursor(keepTip){
   posCur = null;
@@ -1963,6 +1964,16 @@ $("posChart").addEventListener("pointermove", e => {
   const r = svg.getBoundingClientRect(); if (!r.width) return;
   const g = posGeom, xv = (e.clientX - r.left) / r.width * g.W;
   showCursor(g.pr.lo + (xv - g.L) / (g.W - g.L - g.R) * (g.pr.hi - g.pr.lo));
+  const hi = $("posTrHi"); if (hi) hi.setAttribute("visibility", "hidden");
+  if (posTrail.length){
+    const yv = (e.clientY - r.top) / r.height * g.H; let best = null, bd = 1e9;
+    posTrail.forEach(p => { const d = Math.hypot(g.x(p.btc) - xv, g.y(p.v) - yv); if (d < bd){ bd = d; best = p; } });
+    if (best && bd < 26){
+      hi.setAttribute("cx", g.x(best.btc).toFixed(1)); hi.setAttribute("cy", g.y(best.v).toFixed(1)); hi.setAttribute("visibility", "visible");
+      const tm = new Date(best.t * 1000).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
+      $("posTip").innerHTML += `<div style="margin-top:4px;color:#8e44ad"><b>Trail point ${tm}${best.live ? " (now)" : ""}</b>: BTC was <b>${f(best.btc, 0)}</b> · P&amp;L at mark <b class="${best.v >= 0 ? "g" : "l"}">${money(best.v)}</b></div>`;
+    }
+  }
 });
 $("posChart").addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideCursor(); });
 
@@ -1977,7 +1988,12 @@ function drawPosition(){
   }
   const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
   const minP = Math.min(...pr.P, 0), maxP = Math.max(...pr.P, 0), pad = (maxP - minP || 1) * 0.08;
-  const vmin = minP - pad, vmax = maxP + pad;
+  let trail = [];
+  if ($("trailOn").checked && h24Cache){
+    trail = h24Cache.pts.filter(p => p.btc && p.btc >= pr.lo && p.btc <= pr.hi).map(p => ({t: p.t, btc: p.btc, v: p.pnl + pr.off, live: p.live}));
+  }
+  const tv = trail.map(p => p.v);
+  const vmin = Math.min(minP, ...tv) - pad, vmax = Math.max(maxP, ...tv) + pad;
   const x = S => L + (W - L - R) * (S - pr.lo) / (pr.hi - pr.lo);
   const y = v => T + (H - T - B) * (1 - (v - vmin) / (vmax - vmin));
   // draw the curve in green where it is above zero and red where it is below
@@ -2008,10 +2024,23 @@ function drawPosition(){
   const spotLine = `<line x1="${x(pr.spot).toFixed(1)}" x2="${x(pr.spot).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--acc)" stroke-dasharray="5 4"/><text x="${(x(pr.spot) + 4).toFixed(1)}" y="${T + 11}" font-size="11" fill="var(--acc)">spot ${f(pr.spot, 0)}</text>`;
   const nowDot = lastNet !== null && lastNet !== undefined && lastRes
     ? `<circle cx="${x(pr.spot).toFixed(1)}" cy="${y(lastNet + pr.off).toFixed(1)}" r="5" fill="var(--acc)"/><text x="${(x(pr.spot) + 8).toFixed(1)}" y="${(y(lastNet + pr.off) - 6).toFixed(1)}" font-size="11" fill="var(--acc)">now ${money(lastNet + pr.off)}</text>` : "";
+  let trailSvg = "";
+  if (trail.length > 1){
+    const n = trail.length;
+    for (let i = 1; i < n; i++){
+      const a = trail[i - 1], b = trail[i];
+      trailSvg += `<line x1="${x(a.btc).toFixed(1)}" y1="${y(a.v).toFixed(1)}" x2="${x(b.btc).toFixed(1)}" y2="${y(b.v).toFixed(1)}" stroke="#8e44ad" stroke-width="1.8" stroke-linecap="round" opacity="${(0.12 + 0.8 * i / n).toFixed(2)}"/>`;
+    }
+    const f0 = trail[0], l0 = trail[n - 1];
+    trailSvg += `<circle cx="${x(f0.btc).toFixed(1)}" cy="${y(f0.v).toFixed(1)}" r="3.5" fill="none" stroke="#8e44ad" stroke-width="1.5"/><text x="${(x(f0.btc) + 6).toFixed(1)}" y="${(y(f0.v) - 5).toFixed(1)}" font-size="10" fill="#8e44ad">24h ago</text>`;
+    trailSvg += `<circle cx="${x(l0.btc).toFixed(1)}" cy="${y(l0.v).toFixed(1)}" r="4.5" fill="#8e44ad"/>`;
+  }
+  posTrail = trail;
   const beMarks = pr.be.map(b => `<circle cx="${x(b).toFixed(1)}" cy="${y(0).toFixed(1)}" r="4" fill="var(--card)" stroke="var(--fg)" stroke-width="1.5"/>`).join("");
   $("posChart").innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;touch-action:pan-y;cursor:crosshair">${g}
     <line x1="${L}" x2="${W - R}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="var(--mut)"/>
-    ${segs.map(poly).join("")}${strikes}${spotLine}${beMarks}${nowDot}
+    ${segs.map(poly).join("")}${trailSvg}${strikes}${spotLine}${beMarks}${nowDot}
+    <circle id="posTrHi" cx="0" cy="0" r="6" fill="none" stroke="#8e44ad" stroke-width="2.5" visibility="hidden"/>
     <line id="posCur" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--fg)" stroke-width="1" visibility="hidden"/>
     <circle id="posCurDot" cx="0" cy="0" r="5" fill="var(--fg)" stroke="var(--card)" stroke-width="2" visibility="hidden"/>
     <text id="posCurTxt" x="0" y="0" font-size="12" font-weight="700" fill="var(--fg)" visibility="hidden"></text></svg>`;
@@ -3205,14 +3234,15 @@ if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adj
 
 // ---------- Position P&L over the last 24 hours (current legs marked to Delta mark prices, by the minute or hour) ----------
 let h24Busy = false;
-async function h24Load(){
-  if (h24Busy) return; h24Busy = true;
-  const m = $("h24msg"), out = $("h24out");
-  try {
+let h24Cache = null, h24Fetching = null;
+async function h24Data(force){
+  const open = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s));
+  if (!open.length) throw new Error("Add legs with lots first.");
+  const key = open.map(L => [L.s, L.side, L.lots, L.entry].join(":")).join("|") + "@" + feeNow.i.toFixed(2);
+  if (!force && h24Cache && h24Cache.key === key && Date.now() - h24Cache.at < 55000) return h24Cache;
+  if (h24Fetching) return h24Fetching;
+  h24Fetching = (async () => {
     const lot = Number($("lot").value) || 0.001, base = $("base").value.replace(/\/$/, ""), res = "1m", st = 60;
-    const open = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s));
-    if (!open.length){ m.className = "note l"; m.textContent = "Add legs with lots first."; return; }
-    m.className = "note"; m.textContent = "Loading " + res + " prices for " + open.length + " legs…";
     const end = Math.floor(Date.now() / 1000), start = Math.floor((end - 24 * 3600) / st) * st - 2 * st;
     const get = async sym => {
       const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", res); u.searchParams.set("symbol", sym); u.searchParams.set("start", start); u.searchParams.set("end", end);
@@ -3224,7 +3254,6 @@ async function h24Load(){
     const usable = series.filter(x => x.c.length >= 3), missing = series.filter(x => x.c.length < 3).map(x => x.L.s);
     if (!usable.length) throw new Error("Delta returned no " + res + " history for these legs");
     const times = []; for (let t = Math.floor(end / st) * st; t > end - 24 * 3600; t -= st) times.unshift(t);
-    // price of each series at time t = close of the last candle that had ended by t (carried forward through gaps); times only increase, so one pass per series
     const mk = c => { let i = -1, px = null; return t => { while (i + 1 < c.length && c[i + 1].t + st <= t){ i++; px = c[i].c; } return px; }; };
     const fns = usable.map(x => ({L: x.L, at: mk(x.c)})), bAt = mk(btc);
     const pts = times.map(t => {
@@ -3234,6 +3263,17 @@ async function h24Load(){
     }).filter(p => p.pnl !== null);
     if (typeof lastNet === "number" && lastRes) pts.push({t: end, pnl: lastNet, btc: typeof lastSpotVal === "number" ? lastSpotVal : null, live: true});
     if (pts.length < 3) throw new Error("not enough points");
+    h24Cache = {key, at: Date.now(), pts, usable, missing, res};
+    return h24Cache;
+  })();
+  try { return await h24Fetching; } finally { h24Fetching = null; }
+}
+async function h24Load(){
+  if (h24Busy) return; h24Busy = true;
+  const m = $("h24msg"), out = $("h24out");
+  try {
+    m.className = "note"; m.textContent = "Loading minute prices for the legs…";
+    const D = await h24Data(true), {pts, usable, missing, res} = D;
     const W = 900, H = 260, L0 = 56, R = 12, T = 12, B = 30, vals = pts.map(p => p.pnl), lo = Math.min(...vals, 0), hi = Math.max(...vals, 0), span = (hi - lo) || 1;
     const xx = i => L0 + (W - L0 - R) * i / (pts.length - 1), yy = v => T + (H - T - B) * (1 - (v - lo) / span), tm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
     const dots = pts.length <= 120;
@@ -3264,6 +3304,15 @@ async function h24Load(){
   finally { h24Busy = false; }
 }
 $("h24go").onclick = h24Load;
+async function trailRefresh(force){
+  const m = $("trailMsg"); if (!$("trailOn").checked){ m.textContent = ""; drawPosition(); return; }
+  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(purple path: BTC price vs P&L at mark, faint = older)"; }
+  catch (e) { m.textContent = "– could not load: " + e.message; }
+  drawPosition();
+}
+$("trailOn").addEventListener("change", () => { try { localStorage.setItem("trailOn", $("trailOn").checked ? "1" : "0"); } catch (e) {} trailRefresh(false); });
+setInterval(() => { if ($("trailOn").checked) trailRefresh(false); }, 60000);
+try { if (localStorage.getItem("trailOn") === "1"){ $("trailOn").checked = true; setTimeout(() => trailRefresh(false), 5000); } } catch (e) {}
 setInterval(() => { if ($("h24auto").checked) h24Load(); }, 60000);
 $("h24auto").addEventListener("change", () => { try { localStorage.setItem("h24auto", $("h24auto").checked ? "1" : "0"); } catch (e) {} if ($("h24auto").checked) h24Load(); });
 try { if (localStorage.getItem("h24auto") === "1"){ $("h24auto").checked = true; setTimeout(h24Load, 4000); } } catch (e) {}
