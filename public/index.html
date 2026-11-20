@@ -253,7 +253,7 @@ h1{padding-right:170px}
   <div class="row" style="margin:8px 0">
     <label>Trigger point (% of the way from bought to sold strike)<input id="rcfrac" type="number" min="10" max="95" step="5" value="50"></label>
     <label>Min profit at the new centre ($)<input id="rcmin" type="number" step="1" value="0"></label>
-    <label>Max worst loss ($, blank = Batman cap above, else none)<input id="rcloss" type="number" min="1" step="10" placeholder="auto"></label>
+    <label>Max worst loss ($, blank = Batman dollar cap or % of Initial capital, else no cap)<input id="rcloss" type="number" min="1" step="10" placeholder="auto"></label>
     <label>Min cushion each side of the new centre (%)<input id="rccush" type="number" min="0" step="0.1" value="1"></label>
     <label>Max net cost of the trades ($, blank = no limit)<input id="rccost" type="number" min="0" step="5" placeholder="no limit"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="rcroll" type="checkbox" style="width:auto" checked> Also try rolling the sold leg on the side that was hit</label>
@@ -2724,10 +2724,12 @@ $("rcrun").onclick = async () => {
     const lv = adjLevels(base, spot, frac);
     if (!lv.C && !lv.P){ msg.className = "note l"; msg.textContent = "No bought strike inside a sold strike on either side, so there is no shoulder to take the middle of."; return; }
     const model = planModel(chain, spot, T), fb = batFunds();
-    let maxLoss = Number($("rcloss").value) || Number($("imaxd").value) || 0;
-    if (!maxLoss && fb) maxLoss = fb * (Number($("iplim").value) || 15) / 100;
-    const ctx = {S0: spot, T, lot, lev, roll: $("rcroll").checked, minProfit: Number($("rcmin").value) || 0, maxLoss, cush: Math.max(0, Number($("rccush").value) || 0), maxCost: $("rccost").value === "" ? null : Number($("rccost").value)};
-    const res = {}; let h = `<p class="note">Spot ${f(spot, 0)} · expiry ${esc(exp)} in ${f(Tdays, 2)} days · thresholds: profit at the new centre ≥ ${usdP(ctx.minProfit)}, worst loss ${ctx.maxLoss ? "≤ " + usdP(ctx.maxLoss) : "no cap"}, cushion ≥ ${f(ctx.cush, 1)}% each side${ctx.maxCost !== null ? ", net cost ≤ " + usdP(ctx.maxCost) : ""}${dfil.on ? ", sold delta " + dfil.lo + "–" + dfil.hi : ""}.</p>`;
+    let maxLoss = 0, capSrc = "";
+    if (Number($("rcloss").value)){ maxLoss = Number($("rcloss").value); capSrc = "this card's box"; }
+    else if (Number($("imaxd").value)){ maxLoss = Number($("imaxd").value); capSrc = "the Batman 'Max loss in dollars' box"; }
+    else if (Number($("ifunds").value)){ maxLoss = Number($("ifunds").value) * (Number($("iplim").value) || 15) / 100; capSrc = (Number($("iplim").value) || 15) + "% of the Batman 'Initial capital' box"; }
+    const ctx = {capSrc, S0: spot, T, lot, lev, roll: $("rcroll").checked, minProfit: Number($("rcmin").value) || 0, maxLoss, cush: Math.max(0, Number($("rccush").value) || 0), maxCost: $("rccost").value === "" ? null : Number($("rccost").value)};
+    const res = {}; let h = `<p class="note">Spot ${f(spot, 0)} · expiry ${esc(exp)} in ${f(Tdays, 2)} days · thresholds: profit at the new centre ≥ ${usdP(ctx.minProfit)}, worst loss ${ctx.maxLoss ? "≤ " + usdP(ctx.maxLoss) + " (from " + capSrc + ")" : "no cap"}, cushion ≥ ${f(ctx.cush, 1)}% each side${ctx.maxCost !== null ? ", net cost ≤ " + usdP(ctx.maxCost) : ""}${dfil.on ? ", sold delta " + dfil.lo + "–" + dfil.hi : ""}.</p>`;
     [["up", lv.C, 1], ["down", lv.P, -1]].forEach(([k, L, d]) => {
       if (!L){ h += `<p class="note">No ${d > 0 ? "call" : "put"}-side shoulder, so no ${k} scenario.</p>`; return; }
       const r = recScenario(base, model, d, L.trig, ctx); res[k] = r.top;
