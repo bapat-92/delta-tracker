@@ -1547,7 +1547,7 @@ function batCards(list, spot, labels, equi){
     <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
       <b style="font-size:16px">${labels[n]} · range ${f(c.width, 0)} (${pct(c.width)})</b>
       <div class="note" style="margin:4px 0">Profit stays above ${usdB(c.thr)} from ${f(c.lo, 0)} to ${f(c.hi, 0)}${c.atEdgeLo || c.atEdgeHi ? " (at least; hits the edge of the tested range)" : ""}</div>
-      ${c.wide ? `<div class="note" style="margin:0 0 4px"><b>Shoulders</b>: call ${f(c.shC, 0)} wide (${f(c.shC / spot * 100, 2)}% of spot), put ${f(c.shP, 0)} wide (${f(c.shP / spot * 100, 2)}%) · target ×${c.wide} of the best option's ${f(c.wref.c, 0)} / ${f(c.wref.p, 0)}.</div>` : ""}
+      ${c.wide ? `<div class="note" style="margin:0 0 4px"><b>Shoulders</b>: call ${f(c.shC, 0)} wide (${f(c.shC / spot * 100, 2)}% of spot), put ${f(c.shP, 0)} wide (${f(c.shP / spot * 100, 2)}%) · target ×${c.wide} of the best option's ${f(c.wref.c, 0)} / ${f(c.wref.p, 0)}${c.wside !== "both" ? "; only the " + c.wside + " side could be widened" : ""}${c.relaxed ? "; <span class='l'>the minimum profit had to be relaxed to break-even at spot</span>" : ""}.</div>` : ""}
       ${equi ? `<div class="note" style="margin:0 0 4px">Sold: call +${f(c.dSc, 0)} / put −${f(c.dSp, 0)} from spot. Bought: call +${f(c.dLc, 0)} / put −${f(c.dLp, 0)}.</div>` : ""}
       <table style="min-width:0"><tbody>
         <tr><td style="text-align:left">Sell call</td><td>${f(c.callShort.strike, 0)}</td><td>×${f(c.sold, 0)}</td><td>${f(c.callShort.bid)} <span class="note">${dTxt(c.callShort.delta)}</span></td></tr>
@@ -1678,7 +1678,7 @@ function renderBat(main, equi, spot, exp, tol, wide, wideNote){
     if (wide.length){
       const ref = main[0], pc = v => (v >= 0 ? "+" : "") + f(v / spot * 100, 2) + "%", row = (lab, c) => `<tr><td style="text-align:left"><b>${lab}</b></td><td>${f(c.shC, 0)} / ${f(c.shP, 0)}</td><td>${f(c.lo, 0)} to ${f(c.hi, 0)}</td><td>${f(c.width, 0)} (${f(c.width / spot * 100, 2)}%)</td><td>${beN(c.be[0])} (${pc(c.be[0] - spot)})</td><td>${beN(c.be[1])} (${pc(c.be[1] - spot)})</td><td>${usdB(c.atSpot)}</td><td class="l">${usdB(c.maxLoss)}</td></tr>`;
       h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Option</th><th>Shoulders call / put</th><th>Profit range</th><th>Range width</th><th>Lower break-even</th><th>Upper break-even</th><th>Profit at spot</th><th>Worst in ±15%</th></tr></thead><tbody>` +
-        (ref ? row("#1 (reference)", ref) : "") + wide.map((c, i) => row("W" + (i + 1) + " ×" + c.wide, c)).join("") + `</tbody></table></div>`;
+        (ref ? row("#1 (reference)", ref) : "") + wide.map((c, i) => row("W" + (i + 1) + " ×" + c.wide + (c.wside !== "both" ? " (" + c.wside + " only)" : "") + (c.relaxed ? " *" : ""), c)).join("") + `</tbody></table></div>`;
       h += batCards(wide, spot, wide.map((c, i) => "W" + (i + 1)), false);
     } else h += `<p class="note l">No combination with those wider shoulders keeps your minimum profit at spot. Try a lower minimum profit, smaller multiples or fewer bought lots.</p>`;
   }
@@ -1743,11 +1743,16 @@ $("ifind").onclick = async () => {
       const mults = String($("iwm").value).split(",").map(x => Number(x.trim())).filter(x => x > 0).slice(0, 5);
       const ex = new Set(main.map(key4));
       mults.forEach(m => {
-        const sh = {c: side === "put" ? 0 : ref.c * m, p: side === "call" ? 0 : ref.p * m};
-        const r = batmanSearch(chain, spot, Object.assign({}, params, {shoulder: sh, exclude: ex}))[0];
-        if (r){ r.wide = m; r.wref = ref; wide.push(r); ex.add(key4(r)); }
+        // try the chosen side(s) first; if nothing meets the minimum profit, try each single side, then relax the minimum to break-even at spot
+        const tries = [];
+        [params.minPct, 0].forEach((mp, k) => (side === "both" ? ["both", "put", "call"] : [side]).forEach(sd => { if (k === 0 || params.minPct > 0) tries.push([sd, mp, k === 1]); }));
+        for (const [sd, mp, relaxed] of tries){
+          const sh = {c: sd === "put" ? 0 : ref.c * m, p: sd === "call" ? 0 : ref.p * m};
+          const r = batmanSearch(chain, spot, Object.assign({}, params, {minPct: mp, shoulder: sh, exclude: ex}))[0];
+          if (r){ r.wide = m; r.wref = ref; r.wside = sd; r.relaxed = relaxed; wide.push(r); ex.add(key4(r)); break; }
+        }
       });
-      wideNote = `gap between bought and sold strike widened to ${mults.map(m => "×" + m).join(", ")} of the best option's ${f(ref.c, 0)} (call) / ${f(ref.p, 0)} (put)${side === "both" ? "" : ", " + side + " side only"}; each row is the widest profit range found with at least that gap.`;
+      wideNote = `gap between bought and sold strike widened to ${mults.map(m => "×" + m).join(", ")} of the best option's ${f(ref.c, 0)} (call) / ${f(ref.p, 0)} (put)${side === "both" ? "" : ", " + side + " side only"}; each row is the widest profit range found with at least that gap. If both sides together can't keep your minimum profit, it tries one side at a time, then (marked *) relaxes the minimum to break-even at spot.`;
     }
     const wl = wide || [];
     if (tvRem) main.concat(equi, wl).forEach(c => { c.tv = {call: (c.callShort.strike / spot - 1) / tvRem.sig, put: (1 - c.putShort.strike / spot) / tvRem.sig}; });
