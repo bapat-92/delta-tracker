@@ -341,8 +341,13 @@ h1{padding-right:170px}
     <label>Loss level 3 (% of capital used)<input id="dbd2" type="number" min="1" value="30"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbA" type="checkbox" style="width:auto" checked> 15:00 CET day before</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto" checked> Apply the re-center adjustment (trigger point and thresholds from the Re-center planner card)</label>
+    <label>Adjustment must leave at least this much at the new centre ($, negative allows a smaller loss; blank = the Re-center card's minimum)<input id="dbamin" type="number" step="10" placeholder="blank"></label>
+    <label>Pick the adjustment with<select id="dbrank"><option value="width">the widest profit range</option><option value="at">the best result at the new centre (loss-cutting)</option></select></label>
     <button id="dbgo">Run the backtest</button>
+    <button id="dbclr" type="button">Clear saved candles</button>
   </div>
+  <div id="dbcache" class="note"></div>
   <div id="dbprog" class="note"></div>
   <div id="dbout"></div>
 </div>
@@ -2775,7 +2780,34 @@ function berlinUtc(y, mo, d, h){            // seconds (UTC) of Europe/Berlin lo
   }
   return t / 1000;
 }
-async function candles15(base, sym, a, b){
+// Saved candles (IndexedDB in this browser): prices of an expired option never change, so they are fetched once and reused.
+const dbCache = {hits: 0, cloud: 0, miss: 0, up: 0, err: "", db: null};
+function idbOpen(){
+  if (dbCache.db) return Promise.resolve(dbCache.db);
+  return new Promise((res, rej) => { try { const q = indexedDB.open("dtcache", 1); q.onupgradeneeded = () => q.result.createObjectStore("c"); q.onsuccess = () => { dbCache.db = q.result; res(q.result); }; q.onerror = () => rej(q.error); } catch (e) { rej(e); } });
+}
+const idbGet = k => idbOpen().then(d => new Promise(r => { const q = d.transaction("c").objectStore("c").get(k); q.onsuccess = () => r(q.result || null); q.onerror = () => r(null); })).catch(() => null);
+const idbPut = (k, v) => idbOpen().then(d => new Promise(r => { const t = d.transaction("c", "readwrite"); t.objectStore("c").put(v, k); t.oncomplete = () => r(true); t.onerror = () => r(false); })).catch(() => false);
+const idbClear = () => idbOpen().then(d => new Promise(r => { const t = d.transaction("c", "readwrite"); t.objectStore("c").clear(); t.oncomplete = () => r(true); t.onerror = () => r(false); })).catch(() => false);
+const idbCount = () => idbOpen().then(d => new Promise(r => { const q = d.transaction("c").objectStore("c").count(); q.onsuccess = () => r(q.result); q.onerror = () => r(0); })).catch(() => 0);
+// Second layer: the same series kept in Cloudflare KV (one key per expiry, behind your passphrase), shared between your devices.
+async function cloudCandles(method, code, body){
+  const r = await fetch("/api/candles/" + code, {method, headers: Object.assign({Authorization: "Bearer " + pw}, body !== undefined ? {"Content-Type": "application/json"} : {}), body: body !== undefined ? JSON.stringify(body) : undefined});
+  if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? "cloud storage not set up" : "HTTP " + r.status);
+  return r.json();
+}
+async function candles15(base, sym, a, b, cacheable, cloud, fresh){
+  const ck = "15m|" + sym;
+  if (cacheable){
+    const hit = await idbGet(ck); if (hit && hit.from <= a && hit.to >= b){ dbCache.hits++; return hit.data; }
+    const cl = cloud && cloud[sym];
+    if (cl && cl.from <= a && cl.to >= b){ const data = cl.d.map(x => ({t: x[0], o: x[1], c: x[2]})); dbCache.cloud++; idbPut(ck, {from: cl.from, to: cl.to, data}); return data; }
+  }
+  const out = await candles15net(base, sym, a, b);
+  if (cacheable){ dbCache.miss++; idbPut(ck, {from: a, to: b, data: out}); if (fresh) fresh[sym] = {from: a, to: b, d: out.map(x => [x.t, x.o, x.c])}; }
+  return out;
+}
+async function candles15net(base, sym, a, b){
   const get = async s => {
     const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", "15m"); u.searchParams.set("symbol", s); u.searchParams.set("start", a); u.searchParams.set("end", b);
     const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
@@ -2795,6 +2827,13 @@ const dbMark = (arr, t, useOpen) => {        // price at time t: candle starting
   return v > 0 ? v : null;
 };
 let dbRunning = false;
+async function dbCacheInfo(){
+  const n = await idbCount();
+  $("dbcache").textContent = (n ? `Saved in this browser: ${n} option price series (finished expiries only). They load instantly next time.` : "Nothing saved yet. The first run downloads everything; later runs reuse it.") +
+    (pw ? ` Cloud copy: on (${dbCache.up} expiries uploaded this session${dbCache.cloud ? ", " + dbCache.cloud + " series fetched from the cloud" : ""}).` : " Cloud copy: off (enter your passphrase in the cloud sync section to share it across devices).") + (dbCache.err ? " Cloud problem: " + dbCache.err + "." : "");
+}
+$("dbclr").onclick = async () => { await idbClear(); dbCache.hits = dbCache.miss = 0; dbCacheInfo(); };
+dbCacheInfo();
 $("dbgo").onclick = async () => {
   if (dbRunning) return; dbRunning = true;
   const prog = $("dbprog"), out = $("dbout"), savedDf = dfil.on; prog.className = "note"; out.innerHTML = "";
@@ -2825,11 +2864,17 @@ $("dbgo").onclick = async () => {
     if (!exps.length){ prog.className = "note l"; prog.textContent = "No completed expiries with BTC data for those times."; return; }
     const results = []; let done = 0;
     for (const E of exps){
-      done++; prog.textContent = `Expiry ${E.code} (${done}/${exps.length}): loading option prices…`;
+      done++; prog.textContent = `Expiry ${E.code} (${done}/${exps.length}): loading option prices… (${dbCache.hits} from this browser, ${dbCache.cloud} from cloud, ${dbCache.miss} downloaded from Delta)`;
       const sp = E.rows.map(r => r.spot), loK = Math.floor(Math.min(...sp) * 0.9 / step) * step, hiK = Math.ceil(Math.max(...sp) * 1.1 / step) * step, tmin = Math.min(...E.rows.map(r => r.t0));
       const syms = []; for (let K = loK; K <= hiK; K += step){ syms.push({K, c: true, sym: `C-BTC-${K}-${E.code}`}); syms.push({K, c: false, sym: `P-BTC-${K}-${E.code}`}); }
-      const ser = new Map();
-      await runPool(syms, 5, async x => { ser.set(x.sym, await candles15(base, x.sym, tmin - 900, E.tx + 900)); });
+      const ser = new Map(), cacheable = E.tx + 900 < now - 3600, wa = E.D - 86400, wb = E.tx + 900, fresh = {};
+      let cloud = null;
+      if (cacheable && pw){
+        const local = await Promise.all(syms.map(x => idbGet("15m|" + x.sym)));
+        if (local.some(h => !(h && h.from <= wa && h.to >= wb))){ try { cloud = await cloudCandles("GET", E.code); } catch (e) { dbCache.err = e.message; } }
+      }
+      await runPool(syms, 5, async x => { ser.set(x.sym, await candles15(base, x.sym, wa, wb, cacheable, cloud, fresh)); });
+      if (cacheable && pw && Object.keys(fresh).length){ try { await cloudCandles("PUT", E.code, Object.assign({}, cloud || {}, fresh)); dbCache.up++; } catch (e) { dbCache.err = e.message; } }
       E.rows.forEach(r => {
         const mk = (isCall, K, t, o) => dbMark(ser.get(`${isCall ? "C" : "P"}-BTC-${K}-${E.code}`), t, o);
         const calls = [], puts = [];
@@ -2850,12 +2895,69 @@ $("dbgo").onclick = async () => {
           if (b2 === null && v <= -lv2 / 100 * margin) b2 = t;
         }
         let fin = -fees; L.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); fin += l.side * (intr - l.e) * l.n * lot; if (intr > 0) fin -= settleFee(l.n * lot, intr, E.settle); });
-        Object.assign(row, {best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
+
+        // ---- optional re-center adjustment: at the first 15-minute step where BTC reaches the middle of a shoulder, close the opposite side and re-build it around the new price ----
+        let adj = null;
+        if ($("dbadj").checked){
+          const frac = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
+          const cT = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac, pT = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac;
+          let tA = null, sideA = null, pxA = null;
+          for (let t = r.t0 + 900; t < E.tx - 900 && tA === null; t += 900){
+            const cb = byT.get(t - 300); if (!cb) continue;
+            if (cb.close >= cT){ tA = t; sideA = "C"; pxA = cb.close; } else if (cb.close <= pT){ tA = t; sideA = "P"; pxA = cb.close; }
+          }
+          if (tA !== null){
+            adj = {t: tA, spot: pxA, side: sideA, none: true};
+            const opp = L.filter(l => l.c === (sideA === "P")), kept = L.filter(l => l.c !== (sideA === "P")), isCallO = sideA === "P", dirO = isCallO ? 1 : -1;
+            let realised = 0, adjFees = 0, ok = true, cost0 = 0;
+            opp.forEach(l => { const m = mk(l.c, l.K, tA, false); if (m === null){ ok = false; return; } const px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); realised += l.side * (px - l.e) * l.n * lot; adjFees += feeOpt(l.n, px, pxA, lot); cost0 += (l.side === -1 ? 1 : -1) * px * l.n * lot; });
+            const avail = syms.filter(x => x.c === isCallO).map(x => ({K: x.K, m: mk(x.c, x.K, tA, false)})).filter(x => x.m > 0);
+            const near = target => avail.reduce((b, x) => !b || Math.abs(x.K - target) < Math.abs(b.K - target) ? x : b, null);
+            if (ok && avail.length > 2){
+              const oS = opp.filter(l => l.side === -1), oL = opp.filter(l => l.side === 1), sl0 = oS.reduce((a, l) => a + l.n, 0) || sold, bl0 = oL.reduce((a, l) => a + l.n, 0);
+              const gap0 = oS.length && oL.length ? Math.abs(oS[0].K - oL[0].K) : 0, rat0 = bl0 / sl0;
+              const A = [0, 0.0025, 0.005, 0.01], G = [0.01, 0.015, 0.02, 0.03].concat(gap0 ? [gap0 / pxA] : []), KL = [1, 0.75, 0.5];
+              const RT = [...new Set([rat0, 0.2, 0.3, 0.4, 0.5].filter(x => x > 0 && x < 1).map(x => Math.round(x * 100) / 100))];
+              const minProfit = $("dbamin").value !== "" ? Number($("dbamin").value) : (Number($("rcmin").value) || 0), byAt = $("dbrank").value === "at", cush = Math.max(0, Number($("rccush").value) || 0), maxCost = $("rccost").value === "" ? null : Number($("rccost").value), maxLoss = Number($("rcloss").value) || Number($("imaxd").value) || 0;
+              const grid = []; for (let i = 0; i <= 400; i++) grid.push(pxA * (0.7 + 0.6 * i / 400));
+              const iS = 200, seenC = new Set(); let bestC = null;
+              A.forEach(a => G.forEach(g => KL.forEach(k => RT.forEach(rt => {
+                const Kb = near(pxA * (1 + dirO * a)), Ks = near(pxA * (1 + dirO * (a + g)));
+                if (!Kb || !Ks || (isCallO ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
+                const sl = Math.max(1, Math.round(sl0 * k)), bl = Math.max(1, Math.round(sl * rt)); if (bl >= sl) return;
+                const key = [Kb.K, Ks.K, sl, bl].join("|"); if (seenC.has(key)) return; seenC.add(key);
+                const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(sl, pS, pxA, lot) + feeOpt(bl, pB, pxA, lot);
+                const cost = cost0 + (bl * pB - sl * pS) * lot + fee2 + adjFees;
+                if (maxCost !== null && cost > maxCost) return;
+                const nl = [{c: isCallO, K: Ks.K, side: -1, n: sl, e: pS}, {c: isCallO, K: Kb.K, side: 1, n: bl, e: pB}], all = kept.concat(nl);
+                const P = grid.map(S => realised - fees - adjFees - fee2 + all.reduce((t, l) => t + l.side * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.n * lot, 0));
+                if (P[iS] < minProfit) return;
+                if (maxLoss && Math.min(...P) < -maxLoss) return;
+                let lo = iS, hi = iS; while (lo > 0 && P[lo - 1] >= 0) lo--; while (hi < grid.length - 1 && P[hi + 1] >= 0) hi++;
+                if (P[iS] >= 0 && ((pxA - grid[lo]) / pxA * 100 < cush || (grid[hi] - pxA) / pxA * 100 < cush)) return;
+                const w = P[iS] >= 0 ? grid[hi] - grid[lo] : 0;
+                if (!bestC || (byAt ? (P[iS] > bestC.at || (P[iS] === bestC.at && w > bestC.w)) : (w > bestC.w || (w === bestC.w && P[iS] > bestC.at)))) bestC = {w, at: P[iS], nl, fee2, desc: `buy ${Kb.K} ×${f(bl, 0)}, sell ${Ks.K} ×${f(sl, 0)}`};
+              }))));
+              if (bestC){
+                const all = kept.concat(bestC.nl), pathAdj = t => { let v = realised - fees - adjFees - bestC.fee2; for (const l of all){ const m = mk(l.c, l.K, t, false); if (m === null) return null; v += l.side * (m - l.e) * l.n * lot; } return v; };
+                let mV = Infinity, mT = null, a0 = null, a1 = null, a2 = null;
+                for (let t = r.t0 + 900; t < E.tx; t += 900){
+                  const v = t < tA ? pnlAt(t) : pathAdj(t); if (v === null) continue;
+                  if (v < mV){ mV = v; mT = t; }
+                  if (a0 === null && v <= -lv0 / 100 * margin) a0 = t; if (a1 === null && v <= -lv1 / 100 * margin) a1 = t; if (a2 === null && v <= -lv2 / 100 * margin) a2 = t;
+                }
+                let fa = realised - fees - adjFees - bestC.fee2; all.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); fa += l.side * (intr - l.e) * l.n * lot; if (intr > 0) fa -= settleFee(l.n * lot, intr, E.settle); });
+                adj = {t: tA, spot: pxA, side: sideA, fin: fa, minV: isFinite(mV) ? mV : null, b0: a0, b1: a1, b2: a2, desc: bestC.desc};
+              }
+            }
+          }
+        }
+        Object.assign(row, {adj, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
           strikes: `${best.putShort.strike}/${best.putLong.strike} · ${best.callLong.strike}/${best.callShort.strike}`});
         results.push(row);
       });
     }
-    window.dbLast = results;
+    window.dbLast = results; dbCacheInfo();
     const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0), tz = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
     let h = `<p class="note">${f(sold, 0)} sold / ${f(bought, 0)} bought lots per leg, leverage ${f(lev, 0)}x, minimum profit ${f(minPct, 1)}% of margin, assumed half-spread ${f(spr * 100, 1)}%, fees included (entry fees and settlement fees). Times in CET. Capital used = estimated margin of the sold lots.</p>`;
     slots.forEach(sl => {
@@ -2866,9 +2968,18 @@ $("dbgo").onclick = async () => {
       const rec = a => a.filter(r => r.fin > 0).length;
       h += `<div class="kpi" style="margin:6px 0"><div>Days with a setup<b>${ok.length}/${R.length}</b></div><div>Finished in profit<b class="${wins.length >= ok.length / 2 ? "g" : "l"}">${wins.length} (${f(wins.length / ok.length * 100, 0)}%)</b></div><div>Total P&amp;L<b class="${sg(tot)}">${usd(tot)}</b></div><div>Average per day<b class="${sg(tot)}">${usd(tot / ok.length)}</b></div><div>Best / worst day<b>${usd(Math.max(...ok.map(r => r.fin)))} / <span class="l">${usd(Math.min(...ok.map(r => r.fin)))}</span></b></div>` +
         `<div>Open loss reached ${lv0}% of capital<b class="${h0.length ? "l" : "g"}">${h0.length} of ${ok.length}</b><span class="note">${h0.length ? rec(h0) + " still finished in profit" : ""}</span></div><div>Open loss reached ${lv1}%<b class="${h1.length ? "l" : "g"}">${h1.length} of ${ok.length}</b><span class="note">${h1.length ? rec(h1) + " still finished in profit" : ""}</span></div><div>Open loss reached ${lv2}%<b class="${h2.length ? "l" : "g"}">${h2.length} of ${ok.length}</b><span class="note">${h2.length ? rec(h2) + " still finished in profit" : ""}</span></div></div>`;
-      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th></tr></thead><tbody>` +
-        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="8" class="note">no combination met the minimum (${r.n} priced strikes)</td></tr>` :
-          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td></tr>`).join("") + `</tbody></table></div>`;
+      if ($("dbadj").checked){
+        const A2 = ok.map(r => r.adj && r.adj.fin !== undefined ? r.adj : null), fa = ok.map((r, i) => A2[i] ? A2[i].fin : r.fin), nAdj = A2.filter(Boolean).length, trig = ok.filter(r => r.adj).length;
+        const totA = fa.reduce((t, v) => t + v, 0), winsA = fa.filter(v => v > 0).length, impr = ok.filter((r, i) => A2[i] && A2[i].fin > r.fin + 0.5).length, worse = ok.filter((r, i) => A2[i] && A2[i].fin < r.fin - 0.5).length;
+        const cnt = k => ok.filter((r, i) => (A2[i] ? A2[i][k] : r[k]) !== null).length;
+        const lossDays = ok.filter(r => r.fin < 0), lossB = lossDays.reduce((t, r) => t + r.fin, 0), lossA = lossDays.reduce((t, r) => t + (r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin), 0);
+        h += `<p style="margin:10px 0 4px"><b>Same days with the re-center adjustment</b> <span class="note">(one adjustment per day, at the first 15-minute step BTC reaches the trigger; ${trig} days triggered, ${nAdj} could be adjusted within your thresholds)</span></p>` +
+          `<div class="kpi" style="margin:6px 0"><div>Finished in profit<b class="${winsA >= ok.length / 2 ? "g" : "l"}">${winsA} (${f(winsA / ok.length * 100, 0)}%)</b><span class="note">before ${wins.length}</span></div><div>Total P&amp;L<b class="${sg(totA)}">${usd(totA)}</b><span class="note">before ${usd(tot)}</span></div><div>Better / worse days<b>${impr} / ${worse}</b></div><div>Loss days only: total<b class="${sg(lossA)}">${usd(lossA)}</b><span class="note">before ${usd(lossB)} on ${lossDays.length} days</span></div><div>Worst day<b class="l">${usd(Math.min(...fa))}</b><span class="note">before ${usd(Math.min(...ok.map(r => r.fin)))}</span></div>` +
+          `<div>Open loss reached ${lv0}%<b>${cnt("b0")} of ${ok.length}</b><span class="note">before ${h0.length}</span></div><div>Open loss reached ${lv1}%<b>${cnt("b1")} of ${ok.length}</b><span class="note">before ${h1.length}</span></div><div>Open loss reached ${lv2}%<b>${cnt("b2")} of ${ok.length}</b><span class="note">before ${h2.length}</span></div></div>`;
+      }
+      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}</tr></thead><tbody>` +
+        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${$("dbadj").checked ? 12 : 8}" class="note">no combination met the minimum (${r.n} priced strikes)</td></tr>` :
+          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}</tr>`).join("") + `</tbody></table></div>`;
     });
     h += `<p class="note">How to read this: "Open loss" is the mark-to-market loss of the four legs at any 15-minute step before expiry (before any closing costs), compared with the estimated margin. Delta's history has no bid and ask, so fills are the mark price plus or minus the assumed half-spread, and the delta filter is switched off for this test. Strikes without a historical price at the entry time are skipped. The result at expiry uses BTC's price at the expiry time from Delta's index candles.</p>`;
     out.innerHTML = h; prog.className = "note"; prog.textContent = `Done: ${results.filter(r => !r.none).length} setups from ${exps.length} expiries.`;
