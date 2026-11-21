@@ -337,6 +337,8 @@ h1{padding-right:170px}
     <label>Days back<input id="dbdays" type="number" min="3" max="45" value="30"></label>
     <label>From date (optional, replaces Days back)<input id="dbfrom" type="date"></label>
     <label>To date (blank = today)<input id="dbto" type="date"></label>
+    <label>Min profit % of margin (same as in the Inverted Batman card; 0 or negative = wider zone)<input id="dbpct" type="number" min="-100" step="0.5" value="2"></label>
+    <label>Min profit slider<input id="dbsl" type="range" min="-5" max="10" step="0.5" value="2" style="width:100%;max-width:260px"></label>
     <label>Option price step<select id="dbres"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></label>
     <label>Assumed half-spread on each fill (%)<input id="dbspr" type="number" min="0" step="0.5" value="2"></label>
     <label>Loss level 1 (% of capital used)<input id="dbd0" type="number" min="1" value="10"></label>
@@ -2943,7 +2945,11 @@ $("dbxgo").onclick = async () => {
     m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
   } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
 };
-{ const n = $("ipct"), r = $("ipsl"); r.oninput = () => { n.value = r.value; }; n.oninput = () => { if (n.value !== "" && !isNaN(Number(n.value))) r.value = Math.max(-5, Math.min(10, Number(n.value))); }; }
+{ // the four min-profit controls (two number boxes, two sliders) always show the same value; the search and the backtest read the Inverted Batman box
+  const nums = [$("ipct"), $("dbpct")], sl = [$("ipsl"), $("dbsl")], all = nums.concat(sl);
+  const setAll = (v, from) => { all.forEach(e => { if (e !== from) e.value = e.type === "range" ? Math.max(-5, Math.min(10, Number(v))) : v; }); };
+  sl.forEach(r => { r.oninput = () => setAll(r.value, r); });
+  nums.forEach(n => { n.oninput = () => { if (n.value !== "" && !isNaN(Number(n.value))) setAll(n.value, n); }; }); }
 $("autolist").onclick = async () => {
   const m = $("automsg"), sel = $("autosel"); m.textContent = "Loading the list...";
   try{
