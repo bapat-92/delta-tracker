@@ -353,6 +353,19 @@ h1{padding-right:170px}
     <button id="dbsync" type="button">Upload this browser's saved candles to the cloud</button>
   </div>
   <div id="dbcache" class="note"></div>
+  <details style="margin:6px 0"><summary><b>Export the saved candle data (this browser) as a file</b></summary>
+    <p class="note" style="margin:4px 0 8px">Writes the option price candles saved in this browser to a CSV file (one row per symbol and candle: expiry, symbol, strike, time, open, close). 1-minute data for all strikes and days is very large, so narrow it with the filters. If you need data that is only in the cloud, run the backtest once first (it copies cloud data into this browser).</p>
+    <div class="row">
+      <label>Saved step to read<select id="dbxsrc"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></label>
+      <label>Write one row per<select id="dbxout"><option value="1">as saved</option><option value="300">5 minutes</option><option value="900">15 minutes</option><option value="3600">1 hour</option></select></label>
+      <label>Only strikes within ±% of BTC<input id="dbxband" type="number" min="0" step="0.5" value="4"></label>
+      <label>Expiries from<input id="dbxfrom" type="date"></label>
+      <label>to<input id="dbxto" type="date"></label>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbxgz" type="checkbox" style="width:auto" checked> Compress (.csv.gz)</label>
+      <button id="dbxgo" type="button">Download candle data</button>
+    </div>
+    <div id="dbxmsg" class="note"></div>
+  </details>
   <div id="dbprog" class="note"></div>
   <div id="dbout"></div>
 </div>
@@ -2887,6 +2900,38 @@ $("dbcsv").onclick = () => {
   });
   const blob = new Blob([lines.join("\n") + "\n"], {type: "text/csv"}), a2 = document.createElement("a");
   a2.href = URL.createObjectURL(blob); a2.download = "batman-backtest-" + new Date().toISOString().slice(0, 10) + ".csv"; document.body.appendChild(a2); a2.click(); setTimeout(() => { URL.revokeObjectURL(a2.href); a2.remove(); }, 1000);
+};
+
+// ---------- Export saved candles ----------
+$("dbxgo").onclick = async () => {
+  const m = $("dbxmsg"); m.className = "note";
+  try {
+    const src = $("dbxsrc").value, outStep = Number($("dbxout").value), srcSec = {"1m": 60, "5m": 300, "15m": 900}[src], bucket = outStep > 1 ? Math.max(outStep, srcSec) : srcSec, band = Number($("dbxband").value) || 0;
+    const fromD = $("dbxfrom").value ? Date.parse($("dbxfrom").value + "T00:00:00Z") / 1000 : 0, toD = $("dbxto").value ? Date.parse($("dbxto").value + "T23:59:59Z") / 1000 : 1e12;
+    const codeDay = code => { const d = Number(code.slice(0, 2)), mo = Number(code.slice(2, 4)), y = 2000 + Number(code.slice(4, 6)); return Date.UTC(y, mo - 1, d) / 1000; };
+    const keys = (await idbKeys()).filter(k => k.startsWith(src + "|") && /^[CP]-BTC-\d+-\d{6}$/.test(k.slice(src.length + 1)) && codeDay(k.slice(-6)) >= fromD && codeDay(k.slice(-6)) <= toD);
+    if (!keys.length){ m.className = "note l"; m.textContent = "Nothing saved at " + src + " for those expiries. Run the backtest at that step first."; return; }
+    let byT = null;
+    if (band > 0){ m.textContent = "Loading BTC prices for the strike filter…"; const btc = await fetchCandles($("base").value.replace(/\/$/, ""), "BTCUSD", 70); byT = new Map(btc.map(c => [c.time, c])); }
+    const parts = ["expiry_day,symbol,type,strike,time_utc,time_epoch,open,close\n"]; let rows = 0, used = 0;
+    const iso = t => new Date(t * 1000).toISOString().slice(0, 19).replace("T", " ");
+    for (let i = 0; i < keys.length; i++){
+      if (i % 25 === 0){ m.textContent = `Reading ${i}/${keys.length} series… (${f(rows, 0)} rows so far)`; await new Promise(r => setTimeout(r, 0)); }
+      const k = keys[i], sym = k.slice(src.length + 1), pp = sym.split("-"), strike = Number(pp[2]), code = pp[3], D = codeDay(code);
+      if (byT){ const sp = byT.get(Math.floor((D - 43200 + 7200) / 300) * 300); if (sp && Math.abs(strike - sp.close) / sp.close * 100 > band) continue; }
+      const v = await idbGet(k); if (!v || !v.data || !v.data.length) continue; used++;
+      const day = new Date(D * 1000).toISOString().slice(0, 10);
+      let cur = null; const flush = () => { if (cur){ parts.push(`${day},${sym},${pp[0]},${strike},${iso(cur.t)},${cur.t},${cur.o},${cur.c}\n`); rows++; } };
+      for (const c of v.data){ const bt = Math.floor(c.t / bucket) * bucket; if (!cur || cur.t !== bt){ flush(); cur = {t: bt, o: c.o, c: c.c}; } else cur.c = c.c; }
+      flush();
+    }
+    if (!rows){ m.className = "note l"; m.textContent = "No rows matched those filters."; return; }
+    m.textContent = `Building the file (${f(rows, 0)} rows from ${used} series)…`;
+    let blob = new Blob(parts, {type: "text/csv"}), name = `candles-${src}-${new Date().toISOString().slice(0, 10)}.csv`;
+    if ($("dbxgz").checked && typeof CompressionStream !== "undefined"){ blob = await new Response(blob.stream().pipeThrough(new CompressionStream("gzip"))).blob(); name += ".gz"; }
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} a.remove(); }, 1500);
+    m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
+  } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
 };
 $("dbclr").onclick = async () => { await idbClear(); dbCache.hits = dbCache.miss = 0; dbCacheInfo(); };
 dbCacheInfo();
