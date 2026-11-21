@@ -364,14 +364,7 @@ h1{padding-right:170px}
     <div id="dbxmsg" class="note"></div>
   </details>
   <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
-    <p class="note" style="margin:4px 0 8px">Fill in the boxes (blank = default: last 30 days, $5,000, 100% margin, spread 2%, min profit 3%) and press Run on GitHub. Enter 1,2 as spread to run both. Reports appear in the list.</p>
-    <div class="row">
-      <label>From date<input id="rfrom" type="date"></label><label>To date<input id="rto" type="date"></label>
-      <label>Capital $<input id="rcap" type="number" placeholder="5000"></label><label>Margin share %<input id="rshare" type="number" placeholder="100"></label>
-      <label>Spread % (comma = several runs, e.g. 1,2)<input id="rspr" type="text" placeholder="2"></label><label>Min profit %<input id="rmin" type="number" placeholder="3"></label><label style="flex-direction:row;align-items:center;gap:6px"><input id="rbal" type="checkbox" style="width:auto"> Balanced range</label>
-      <label>Entry hours before expiry<input id="rhrs" type="text" placeholder="9,8,7,6,5,4"></label>
-      <button id="runbt" type="button">Run on GitHub</button><button id="runchk" type="button">Test GitHub token</button>
-    </div>
+    <p class="note" style="margin:4px 0 8px">Start a run on GitHub yourself (Actions tab, daily-backtest, Run workflow), wait a few minutes, then refresh the list and pick the report.</p>
     <div class="row"><label>Saved reports<select id="autosel"><option value="latest">Latest 30-day report</option></select></label><button id="autolist" type="button">Refresh list</button><button id="autoload" type="button">Show report</button></div>
     <div id="automsg" class="note"></div><div id="autoout"></div>
   </details>
@@ -2944,31 +2937,6 @@ $("dbxgo").onclick = async () => {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} a.remove(); }, 1500);
     m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
   } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
-};
-$("runchk").onclick = async () => {
-  const m = $("automsg"); if (!pw){ m.textContent = "Connect with your passphrase first (Cloud sync card)."; return; }
-  try{ const r = await fetch("/api/run?check=1", {headers: {Authorization: "Bearer " + pw}}); m.textContent = "Token check: " + JSON.stringify(await r.json()); }catch(e){ m.textContent = "Check failed: " + e.message; }
-};
-$("runbt").onclick = async () => {
-  const m = $("automsg"); if (!pw){ m.textContent = "Connect with your passphrase first (Cloud sync card)."; return; }
-  const sp = ($("rspr").value || "").split(",").map(x => x.trim()).filter(x => x !== ""), list = sp.length ? sp : [""], t0 = Date.now();
-  m.textContent = "Starting " + list.length + " run(s) on GitHub...";
-  try{
-    for (const spread of list){
-      const r = await fetch("/api/run", {method: "POST", headers: {Authorization: "Bearer " + pw, "Content-Type": "application/json"}, body: JSON.stringify({from_date: $("rfrom").value, to_date: $("rto").value || $("rfrom").value, capital: $("rcap").value, share: $("rshare").value, spread, minpct: $("rmin").value, balanced: $("rbal").checked ? "1" : "", hours: $("rhrs").value.replace(/\s/g, "")})});
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
-    }
-    m.textContent = "Started. Waiting for the report (usually 2 to 6 minutes; the list refreshes by itself)...";
-    for (let i = 0; i < 40; i++){
-      await new Promise(res => setTimeout(res, 15000));
-      const r = await fetch("/api/backtest?name=index", {headers: {Authorization: "Bearer " + pw}}); if (!r.ok) continue;
-      const L = await r.json(), fresh = (Array.isArray(L) ? L : []).filter(x => new Date(x.at).getTime() > t0 - 60000);
-      if (fresh.length >= list.length){ await $("autolist").onclick(); $("autosel").value = fresh[fresh.length - 1].name; m.textContent = "Done: " + fresh.length + " report(s) ready. Pick one in the list and press Show report."; return; }
-      m.textContent = "Waiting for the report... (" + fresh.length + " of " + list.length + " ready)";
-    }
-    m.textContent = "Not finished yet. Check the Actions tab, then press Refresh list.";
-  }catch(e){ m.textContent = "Could not start: " + e.message; }
 };
 $("autolist").onclick = async () => {
   const m = $("automsg"), sel = $("autosel"); m.textContent = "Loading the list...";
