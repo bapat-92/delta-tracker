@@ -3134,7 +3134,7 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {edge: fin, all: fin, side: fin, roll: fin, trig: null};
+        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, trig: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
           const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2;
@@ -3155,7 +3155,25 @@ $("dbgo").onclick = async () => {
               rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c;
               const nearL = L.filter(l => l.c === (sideM === "C")), farL = L.filter(l => l.c !== (sideM === "C")), cn = closeV(nearL, tM, sp);
               if (cn !== null) rv.side = -fees + cn + settleV(farL);
-              rv.roll = rv.all;
+              rv.roll = rv.all; rv.half = rv.side;
+              {   // close the side BTC is moving away from (the profitable one) and re-sell it at half the original width, nearer the new price
+                const farCall = sideM === "P", dirF = farCall ? 1 : -1, cf = closeV(farL, tM, sp);
+                const fS = farL.filter(l => l.side === -1), fB = farL.filter(l => l.side === 1);
+                const av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tM, true)})).filter(x => x.m > 0);
+                if (cf !== null && fS.length && fB.length && av.length > 2){
+                  const gap0 = Math.abs(fS[0].K - fB[0].K), nS = fS[0].n, nB = fB[0].n, nr = t => av.reduce((b, x) => !b || Math.abs(x.K - t) < Math.abs(b.K - t) ? x : b, null);
+                  const iv = (c, K, S) => c ? Math.max(S - K, 0) : Math.max(K - S, 0); let bestH = null;
+                  [0, 0.0025, 0.005, 0.01].forEach(a => {
+                    const Kb = nr(sp * (1 + dirF * a)); if (!Kb) return; const Ks = nr(Kb.K + dirF * gap0 / 2);
+                    if (!Ks || (farCall ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
+                    const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(nS, pS, sp, lot) + feeOpt(nB, pB, sp, lot);
+                    const nw = [{c: farCall, K: Ks.K, side: -1, n: nS, e: pS}, {c: farCall, K: Kb.K, side: 1, n: nB, e: pB}], all2 = nearL.concat(nw);
+                    const Pc = -fees + cf - fee2 + all2.reduce((t, l) => t + l.side * (iv(l.c, l.K, sp) - l.e) * l.n * lot, 0);
+                    if (!bestH || Pc > bestH.Pc) bestH = {Pc, all2, fee2};
+                  });
+                  if (bestH) rv.half = -fees + cf - bestH.fee2 + settleV(bestH.all2);
+                }
+              }
               const cs = [], ps = [];
               syms.forEach(x => { const m = mk(x.c, x.K, tM, true); if (!(m > 0)) return; (x.c ? cs : ps).push({strike: x.K, bid: m * (1 - spr), ask: m * (1 + spr), mark: m, delta: null, spot: sp, symbol: x.sym}); });
               if (cs.length > 2 && ps.length > 2){
@@ -3216,7 +3234,7 @@ $("dbgo").onclick = async () => {
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin]];
         slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll]);
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half]);
         if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin]);
         const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
