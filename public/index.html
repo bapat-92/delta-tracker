@@ -15,6 +15,7 @@ h1{font-size:20px;margin:0 0 4px}
 label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:3px}
 input,select,button{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)}
 input{width:100%}
+td.pick{cursor:pointer}td.pick:hover{outline:1px solid var(--acc);outline-offset:-1px}
 button{cursor:pointer;background:var(--acc);color:#fff;border-color:var(--acc)}
 .wrap{overflow-x:auto}
 table{border-collapse:collapse;width:100%;min-width:760px;font-variant-numeric:tabular-nums}
@@ -349,6 +350,8 @@ h1{padding-right:170px}
     <label>Loss-day test "out of range": trigger, % of BTC beyond the profit range<input id="lrtrig" type="number" min="0" step="0.05" value="0.2"></label>
     <label>…new profit range reaches, % of BTC price, in the loss direction<input id="lrdir" type="number" min="0.1" step="0.1" value="1"></label>
     <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
+    <label>Loss-day test "cover": buy back the net-short lots this % beyond the sold strike<input id="lrcov" type="number" min="0" step="0.1" value="0.5"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbchart" type="checkbox" style="width:auto"> Also draw every loss day's chart below the table (otherwise click a day or a result in the loss-day table)</label>
     <label>Stop-loss % is taken of<select id="dbsb"><option value="cap" selected>Initial capital (Inverted Batman card)</option><option value="mar">Estimated margin of the position</option></select></label>
     <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson1" type="checkbox" style="width:auto" checked> Stop-loss 1 (%)<input id="dbs1" type="number" min="1" step="1" value="10" style="max-width:90px"></label>
     <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson2" type="checkbox" style="width:auto" checked> Stop-loss 2 (%)<input id="dbs2" type="number" min="1" step="1" value="15" style="max-width:90px"></label>
@@ -2900,6 +2903,7 @@ $("dbsync").onclick = async () => {
   } catch (e){ m.className = "note l"; m.textContent = "Upload failed: " + e.message; }
 };
 
+$("dbout").addEventListener("click", ev => { const td = ev.target.closest("[data-case]"); if (!td || !window.dbCases || !window.dbDrawCase) return; const c = window.dbCases[td.dataset.case]; if (!c) return; const box = td.closest("div.wrap").parentNode.querySelector("div.dbcase") || (td.closest("div.wrap").nextElementSibling); const slotBoxes = [...document.querySelectorAll("#dbout div.dbcase")]; const wrap = td.closest("div.wrap"); let nb = wrap.nextElementSibling; while (nb && !(nb.classList && nb.classList.contains("dbcase"))) nb = nb.nextElementSibling; (nb || box).innerHTML = window.dbDrawCase(c.r, c.key); });
 $("dbcsv").onclick = () => {
   const R = window.dbLast || [], C = window.dbCfg || {}; if (!R.length) return;
   const q = v => { if (v === null || v === undefined) return ""; if (typeof v === "number") return Number.isFinite(v) ? String(Math.round(v * 100) / 100) : ""; v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
@@ -3136,13 +3140,21 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, trig: null};
+        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, cov1: fin, cov2: fin, trig: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
-          const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2;
+          const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2; rv.cT = cT2; rv.pT = pT2;
           const spotAt = t => { const cb = byT.get(Math.floor((t - 300) / 300) * 300); return cb ? cb.close : null; };
           const closeV = (legs, t, sp) => { let v = 0; for (const l of legs){ const m = mk(l.c, l.K, t, false); if (m === null) return null; const px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); v += l.side * (px - l.e) * l.n * lot - feeOpt(l.n, px, sp, lot); } return v; };
           const settleV = legs => { let v = 0; legs.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); v += l.side * (intr - l.e) * l.n * lot; if (intr > 0) v -= settleFee(l.n * lot, intr, E.settle); }); return v; };
+          // cover: buy back the net-short lots of the threatened side as options X% beyond the sold strike, then hold to expiry
+          const coverAt = (t, isCall) => {
+            const sh = L.find(l => l.c === isCall && l.side === -1), lg = L.find(l => l.c === isCall && l.side === 1); if (!sh || !lg) return null;
+            const q = sh.n - lg.n; if (q <= 0) return null; const off = (Number($("lrcov").value) || 0) / 100, tgt = isCall ? sh.K * (1 + off) : sh.K * (1 - off); let bc = null;
+            syms.forEach(x => { if (x.c !== isCall) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (isCall ? x.K < sh.K : x.K > sh.K) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
+            if (!bc) return null; const e = bc.m * (1 + spr), sp = spotAt(t), intr = isCall ? Math.max(E.settle - bc.K, 0) : Math.max(bc.K - E.settle, 0);
+            return {K: bc.K, fin: fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), desc: `${isCall ? "calls" : "puts"} ×${f(q, 0)} at ${bc.K}, paid $${f(q * lot * e, 0)}`};
+          };
           let tE = null, tM = null, sideM = null;
           for (const q of path){
             const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue;
@@ -3150,11 +3162,12 @@ $("dbgo").onclick = async () => {
             if (tM === null){ if (sp >= cT2){ tM = t; sideM = "C"; } else if (sp <= pT2){ tM = t; sideM = "P"; } }
             if (tE !== null && tM !== null) break;
           }
+          rv.edgeT = tE;
           if (tE !== null){ const c = closeV(L, tE, spotAt(tE)); if (c !== null) rv.edge = -fees + c; }
           if (tM !== null){
             const sp = spotAt(tM), c = closeV(L, tM, sp);
             if (c !== null){
-              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c;
+              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c; { const cv = coverAt(tM, sideM === "C"); if (cv){ rv.cov2 = cv.fin; rv.cov2d = cv.desc; rv.cov2K = cv.K; } }
               const nearL = L.filter(l => l.c === (sideM === "C")), farL = L.filter(l => l.c !== (sideM === "C")), cn = closeV(nearL, tM, sp);
               if (cn !== null) rv.side = -fees + cn + settleV(farL);
               rv.roll = rv.all; rv.half = rv.side;
@@ -3196,7 +3209,7 @@ $("dbgo").onclick = async () => {
             if (tO !== null){
               const sp = spotAt(tO), farCall = !up, dirF = farCall ? 1 : -1, farL = L.filter(l => l.c === farCall), nearL = L.filter(l => l.c !== farCall), cf = closeV(farL, tO, sp);
               const fS = farL.find(l => l.side === -1), av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tO, true)})).filter(x => x.m > 0);
-              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin;        // if no acceptable rebuild exists the position is simply held
+              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin; { const cv = coverAt(tO, up); if (cv){ rv.cov1 = cv.fin; rv.cov1d = cv.desc; rv.cov1K = cv.K; } }        // if no acceptable rebuild exists the position is simply held
               if (cf !== null && fS && av.length > 2){
                 const tLo = sp * (1 - (up ? dO : dL)), tHi = sp * (1 + (up ? dL : dO)), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestO = null;
                 [0, 0.0025, 0.005, 0.01, 0.015].forEach(a => [0.01, 0.015, 0.02, 0.03, 0.04].forEach(g => [1, 0.75, 0.5, 0.35].forEach(k => [0.2, 0.3, 0.4, 0.5, 0.7].forEach(rt => {
@@ -3221,7 +3234,9 @@ $("dbgo").onclick = async () => {
             }
           }
         }
-        Object.assign(row, {sls, adj, rv, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
+        let ch = null;
+        if (fin < 0){ const pts = []; for (let t = r.t0; t <= E.tx; t += 300){ const cb = byT.get(t); if (cb) pts.push([t, cb.close]); } const st = Math.max(1, Math.round(300 / rs)); ch = {pts, pn: path.filter((q, i) => i % st === 0)}; }
+        Object.assign(row, {ch, tx: E.tx, sls, adj, rv, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
           strikes: `${best.putShort.strike}/${best.putLong.strike} · ${best.callLong.strike}/${best.callShort.strike}`});
         results.push(row);
       });
@@ -3229,6 +3244,7 @@ $("dbgo").onclick = async () => {
     window.dbLast = results; window.dbCfg = {days, spr: spr * 100, minPct, sold, bought, lev, lot, step: resName, adj: $("dbadj").checked, stop_loss_pct: slv.join("/"), stop_loss_of: $("dbsb").value, frac: Number($("rcfrac").value) || 50, amin: $("dbamin").value, apct: $("dbapct").value, rank: $("dbrank").value, cush: $("rccush").value, maxLoss: $("rcloss").value || $("imaxd").value, maxCost: $("rccost").value}; $("dbcsv").disabled = false; dbCacheInfo();
     const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0), tz = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
     let h = `<p class="note">${f(sold, 0)} sold / ${f(bought, 0)} bought lots per leg, leverage ${f(lev, 0)}x, minimum profit ${f(minPct, 1)}% of margin, assumed half-spread ${f(spr * 100, 1)}%, fees included (entry fees and settlement fees). Times in CET. Capital used = estimated margin of the sold lots.</p>`;
+    const cases = window.dbCases = {}; let caseN = 0; window.dbDrawCase = null;
     slots.forEach(sl => {
       const R = results.filter(r => r.sl === sl), ok = R.filter(r => !r.none), name = sl === "A" ? "15:00 CET, the day before expiry" : "06:00 CET, expiry day";
       h += `<p style="margin:14px 0 4px"><b>Entry ${name}</b></p>`;
@@ -3267,10 +3283,38 @@ $("dbgo").onclick = async () => {
           })() : "") + `</tbody></table></div>`;
       }
       {
-        const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin]];
-        slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin]);
-        if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin]);
+        const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin, "hold"]];
+        slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin, "sl" + k]));
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"]);
+        if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin, "recenter"]);
+        const drawCase = (r, key) => {
+          key = key || "all"; const A = key === "all", rl = RL.find(x => x[2] === key), sk = /^sl\d$/.test(key) ? r.sls[Number(key.slice(2))] : null;
+          const sMid = A || /^mid_|^cov2$|^recenter$/.test(key), sOut = A || key === "out" || key === "cov1", sEdge = A || key === "edge", sBand = A || key === "out", sCov = (A || key === "cov1") && r.rv.cov1K ? r.rv.cov1K : (key === "cov2" ? r.rv.cov2K : 0), sCovT = key === "cov2" ? (r.rv.trig && r.rv.trig.t) : (r.rv.out && r.rv.out.t);
+          const c = r.ch; if (!c || c.pts.length < 2) return "";
+          const W = 720, H1 = 220, H2 = 120, L = 56, R = 16, T = 14, gap = 34, t0 = r.t0, t1 = r.tx, o = r.rv, op = o.outP;
+          const x = t => L + (t - t0) / (t1 - t0) * (W - L - R), clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+          const pr = c.pts.map(q => q[1]).concat([r.lo, r.hi, r.settle, r.spot]); if (op) pr.push(op.tLo, op.tHi); if (o.cov1K) pr.push(o.cov1K);
+          const pmin = Math.min(...pr), pmax = Math.max(...pr), pad = (pmax - pmin) * 0.05 || 1, y1 = v => T + (1 - (v - pmin + pad) / (pmax - pmin + 2 * pad)) * H1;
+          const fins = [r.fin, o.all, o.outFin, o.cov1].filter(v => v !== undefined && v !== null).concat(c.pn.map(q => q[1])).concat([0]);
+          const vmin = Math.min(...fins), vmax = Math.max(...fins), vp = (vmax - vmin) * 0.06 || 1, y2o = T + H1 + gap, y2 = v => y2o + (1 - (v - vmin + vp) / (vmax - vmin + 2 * vp)) * H2;
+          const fm = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+          const tt = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
+          const vline = (t, col, lab, k) => t ? `<line x1="${x(t).toFixed(1)}" x2="${x(t).toFixed(1)}" y1="${T}" y2="${y2o + H2}" stroke="${col}" stroke-dasharray="4 3"/><text x="${clamp(x(t) + 3, L, W - 150).toFixed(1)}" y="${T + 10 + k * 11}" font-size="10" fill="${col}">${lab}</text>` : "";
+          const hl = (v, col, x0) => `<line x1="${(x0 || L).toFixed(1)}" x2="${W - R}" y1="${y1(v).toFixed(1)}" y2="${y1(v).toFixed(1)}" stroke="${col}" stroke-dasharray="2 3" opacity=".8"/><text x="${L - 4}" y="${(y1(v) + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="${col}">${f(v, 0)}</text>`;
+          let g = `<rect x="${L}" y="${y1(r.hi).toFixed(1)}" width="${W - L - R}" height="${(y1(r.lo) - y1(r.hi)).toFixed(1)}" fill="var(--rng)" opacity=".13"/>`;
+          if (sBand && op && o.out) g += `<rect x="${x(o.out.t).toFixed(1)}" y="${y1(op.tHi).toFixed(1)}" width="${(W - R - x(o.out.t)).toFixed(1)}" height="${(y1(op.tLo) - y1(op.tHi)).toFixed(1)}" fill="var(--be)" opacity=".18"/>`;
+          g += hl(r.hi, "var(--rng)") + hl(r.lo, "var(--rng)");
+          if (sMid && o.cT) g += hl(o.cT, "#d98c00") + hl(o.pT, "#d98c00");
+          if (sCov && sCovT) g += hl(sCov, "var(--be)", x(sCovT));
+          g += `<polyline fill="none" stroke="var(--fg)" stroke-width="1.6" points="${c.pts.map(q => x(q[0]).toFixed(1) + "," + y1(q[1]).toFixed(1)).join(" ")}"/>`;
+          g += `<circle cx="${x(t1).toFixed(1)}" cy="${y1(r.settle).toFixed(1)}" r="4" fill="var(--loss)"/><text x="${(x(t1) - 6).toFixed(1)}" y="${(y1(r.settle) - 7).toFixed(1)}" font-size="10" text-anchor="end" fill="var(--loss)">expiry ${f(r.settle, 0)}</text>`;
+          g += (sMid ? vline(o.trig && o.trig.t, "#d98c00", "mid-shoulder " + (o.trig ? tt(o.trig.t) : ""), 0) : "") + (sOut ? vline(o.out && o.out.t, "var(--loss)", "out of range " + (o.out ? tt(o.out.t) : ""), 1) : "") + (sEdge ? vline(o.edgeT, "var(--mut)", "left range " + (o.edgeT ? tt(o.edgeT) : ""), 2) : "") + (sk ? vline(sk.t, "var(--loss)", "stop-loss exit " + tt(sk.t), 0) : "");
+          g += `<line x1="${L}" x2="${W - R}" y1="${y2(0).toFixed(1)}" y2="${y2(0).toFixed(1)}" stroke="var(--mut)"/><text x="${L - 4}" y="${(y2(0) + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="var(--mut)">$0</text>`;
+          g += `<polyline fill="none" stroke="var(--acc)" stroke-width="1.4" points="${c.pn.map(q => x(q[0]).toFixed(1) + "," + y2(q[1]).toFixed(1)).join(" ")}"/>`;
+          (A ? [["hold", r.fin, "var(--loss)"], ["close all at mid-shoulder", o.all, "#d98c00"], ["rebuild", o.outFin, "var(--be)"], ["cover", o.cov1, "var(--gain)"]] : [["hold", r.fin, "var(--loss)"]].concat(key === "hold" || !rl ? [] : [[rl[0].slice(0, 46), rl[1](r), "var(--gain)"]])).forEach(([nm, v, col]) => { if (v === undefined || v === null) return; g += `<circle cx="${(W - R).toFixed(1)}" cy="${y2(v).toFixed(1)}" r="3.5" fill="${col}"/><text x="${(W - R - 8).toFixed(1)}" y="${(y2(v) + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="${col}">${nm} ${fm(v)}</text>`; });
+          g += `<text x="${L}" y="${T + H1 + 22}" font-size="10" fill="var(--mut)">Open P&amp;L of the original position (line) and final results at expiry (dots)</text><text x="${L}" y="${y2o + H2 + 14}" font-size="9" fill="var(--mut)">${tt(t0)}</text><text x="${W - R}" y="${y2o + H2 + 14}" font-size="9" text-anchor="end" fill="var(--mut)">${tt(t1)} CET</text>`;
+          return `<div style="margin:10px 0"><b>${r.day}</b>${A || !rl ? "" : " · " + esc(rl[0]) + ": <b>" + fm(rl[1](r)) + "</b>"} <span class="note">entry ${f(r.spot, 0)} → expiry ${f(r.settle, 0)}; blue band = original profit range, purple = rebuilt range after going out of range, orange dashed = mid-shoulder levels</span><svg viewBox="0 0 ${W} ${y2o + H2 + 20}" style="width:100%;max-width:${W}px;height:auto;display:block">${g}</svg></div>`;
+        };
         const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
         if (!LD.length) h += `<p class="note g">No loss days in this entry slot.</p>`;
@@ -3280,7 +3324,11 @@ $("dbgo").onclick = async () => {
               return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(t)}"><b>${usd(t)}</b></td><td class="l">${usd(Math.min(...v))}</td><td class="${sg(lt)}">${usd(lt)}</td><td>${lv.filter(x => x > 0).length} of ${LD.length}</td><td>${LD.filter((r, i) => lv[i] > r.fin + 0.5).length}</td><td>${ok.filter((r, i) => v[i] > r.fin + 0.5).length} / ${ok.filter((r, i) => v[i] < r.fin - 0.5).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
-              return `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)} → ${f(r.settle, 0)}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${r.rv.trig ? tz(r.rv.trig.t) + " · " + f(r.rv.trig.spot, 0) : "no"}${r.rv.out ? "<br><span class=\"note\">out of range " + tz(r.rv.out.t) + " · " + f(r.rv.out.spot, 0) + (r.rv.outDesc ? ": " + r.rv.outDesc : ": no rebuild fits") + "</span>" : ""}</td>${vals.map((v, i) => `<td class="${sg(v)}">${usd(v)}</td>`).join("")}<td><b>${RL[bi][0]}</b><br><span class="note">${usd(vals[bi])}</span></td></tr>`; }).join("") + `</tbody></table></div>`;
+              const cid = k => { const id = "c" + (++caseN); cases[id] = {r, key: k}; return id; };
+              return `<tr><td style="text-align:left" class="pick" data-case="${cid("all")}"><b>${r.day}</b><br><span class="note">click: chart</span></td><td>${f(r.spot, 0)} → ${f(r.settle, 0)}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${r.rv.trig ? tz(r.rv.trig.t) + " · " + f(r.rv.trig.spot, 0) : "no"}${r.rv.out ? "<br><span class=\"note\">out of range " + tz(r.rv.out.t) + " · " + f(r.rv.out.spot, 0) + (r.rv.outDesc ? ": " + r.rv.outDesc : ": no rebuild fits") + "</span>" : ""}</td>${vals.map((v, i) => `<td class="${sg(v)} pick" data-case="${cid(RL[i][2])}">${usd(v)}</td>`).join("")}<td><b>${RL[bi][0]}</b><br><span class="note">${usd(vals[bi])}</span></td></tr>`; }).join("") + `</tbody></table></div>`;
+          h += `<div class="dbcase" style="margin:8px 0"><p class="note">Click a day, or any result in the table, to draw its chart here.</p></div>`;
+          if ($("dbchart").checked) LD.slice(0, 12).forEach(r => { h += drawCase(r, "all"); });
+          window.dbDrawCase = (r, k) => drawCase(r, k);
         }
       }
       {
