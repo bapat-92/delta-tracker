@@ -335,6 +335,8 @@ h1{padding-right:170px}
   <p class="note" style="margin:4px 0 8px">Best Inverted Batman at 15:00 CET (day before) and 06:00 CET (expiry day), from Delta mark prices plus an assumed spread, followed to expiry. Shows the final result and whether the loss hit your loss levels. Estimate only.</p>
   <div class="row" style="margin:8px 0">
     <label>Days back<input id="dbdays" type="number" min="3" max="45" value="30"></label>
+    <label>From date (optional, replaces Days back)<input id="dbfrom" type="date"></label>
+    <label>To date (blank = today)<input id="dbto" type="date"></label>
     <label>Option price step<select id="dbres"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></label>
     <label>Assumed half-spread on each fill (%)<input id="dbspr" type="number" min="0" step="0.5" value="2"></label>
     <label>Loss level 1 (% of capital used)<input id="dbd0" type="number" min="1" value="10"></label>
@@ -1285,8 +1287,8 @@ function volStats(candles, N, thr, up, dn){
   return out;
 }
 
-async function fetchCandles(base, symbol, days){
-  const end = Math.floor(Date.now() / 1000), start = end - days * 86400, step = 1800 * 300;   // 1800 candles per request (limit is 2000)
+async function fetchCandles(base, symbol, days, startSec, endSec){
+  const end = endSec || Math.floor(Date.now() / 1000), start = startSec || end - days * 86400, step = 1800 * 300;   // 1800 candles per request (limit is 2000)
   const seen = new Map();
   for (let a = start; a < end; a += step){
     const u = new URL(base + "/v2/history/candles");
@@ -2976,7 +2978,13 @@ $("dbgo").onclick = async () => {
   const prog = $("dbprog"), out = $("dbout"), savedDf = dfil.on; prog.className = "note"; out.innerHTML = "";
   try {
     dfil.on = false;                                   // no historical delta, so the delta filter can't apply here
-    const days = Math.min(45, Math.max(3, Number($("dbdays").value) || 30)), spr = Math.max(0, Number($("dbspr").value) || 0) / 100;
+    // a chosen calendar range replaces "Days back"; anything not saved yet is downloaded from Delta and then saved
+    const dFrom = $("dbfrom").value, dTo = $("dbto").value, t0d = Math.floor(Date.now() / 86400000) * 86400, ranged = !!(dFrom || dTo);
+    let fromD = dFrom ? Math.floor(Date.parse(dFrom + "T00:00:00Z") / 1000) : 0, toD = dTo ? Math.floor(Date.parse(dTo + "T00:00:00Z") / 1000) : t0d;
+    if (toD > t0d) toD = t0d;
+    if (dTo && !dFrom) fromD = toD - 29 * 86400;
+    if (ranged && (toD < fromD || (toD - fromD) / 86400 > 120)){ prog.className = "note l"; prog.textContent = "Choose a From date before the To date, at most 120 days apart."; return; }
+    const days = ranged ? Math.round((t0d - fromD) / 86400) : Math.min(45, Math.max(3, Number($("dbdays").value) || 30)), spr = Math.max(0, Number($("dbspr").value) || 0) / 100;
     const resName = $("dbres").value, rs = {"1m": 60, "5m": 300, "15m": 900}[resName] || 900, lv0 = Number($("dbd0").value) || 10, lv1 = Number($("dbd1").value) || 20, lv2 = Number($("dbd2").value) || 30;
     const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, step = Number($("bstep").value) || 200, expSec = hmSec($("bexp").value);
     const minPct = isNaN(Number($("ipct").value)) ? 2 : Number($("ipct").value);
@@ -2989,10 +2997,11 @@ $("dbgo").onclick = async () => {
     if (!slots.length){ prog.className = "note l"; prog.textContent = "Tick at least one entry time."; return; }
     const base = $("base").value.replace(/\/$/, ""), now = Math.floor(Date.now() / 1000);
     prog.textContent = "Loading BTC candles…";
-    const btc = await fetchCandles(base, "BTCUSD", days + 3), byT = new Map(btc.map(c => [c.time, c]));
+    const btc = ranged ? await fetchCandles(base, "BTCUSD", 0, fromD - 2 * 86400, Math.min(now, toD + 2 * 86400)) : await fetchCandles(base, "BTCUSD", days + 3), byT = new Map(btc.map(c => [c.time, c]));
     const today = Math.floor(now / 86400) * 86400, exps = [];
     for (let d = days; d >= 0; d--){
       const D = today - d * 86400, tx = D + expSec; if (tx > now - 1800) continue;
+      if (ranged && (D < fromD || D > toD)) continue;
       const dd = new Date(D * 1000), pd = new Date((D - 86400) * 1000);
       const ent = {A: berlinUtc(pd.getUTCFullYear(), pd.getUTCMonth(), pd.getUTCDate(), 15), B: berlinUtc(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate(), 6)};
       const rows = slots.map(sl => ({sl, t0: ent[sl]})).filter(r => r.t0 < tx && byT.get(r.t0) && byT.get(tx - 300)).map(r => Object.assign(r, {spot: byT.get(r.t0).open}));
