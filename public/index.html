@@ -3134,7 +3134,7 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, trig: null};
+        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, rec: fin, recN: 0, trig: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
           const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2;
@@ -3185,6 +3185,37 @@ $("dbgo").onclick = async () => {
               }
             }
           }
+          // keep halving: every time BTC newly reaches the middle of a shoulder, close the side it is moving away from and re-sell it at half its current width (max 8 times)
+          {
+            const iv = (c, K, S) => c ? Math.max(S - K, 0) : Math.max(K - S, 0);
+            let cur = L.slice(), cash = -fees, n = 0, armC = true, armP = true;
+            const shoulder = (legs, c) => { const lg = legs.find(l => l.c === c && l.side === 1), sh = legs.find(l => l.c === c && l.side === -1); return lg && sh ? [lg.K, sh.K] : null; };
+            for (const q of path){
+              const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue;
+              const sc = shoulder(cur, true), spp = shoulder(cur, false); if (!sc || !spp) break;
+              const cT3 = sc[0] + (sc[1] - sc[0]) * frac2, pT3 = spp[0] - (spp[0] - spp[1]) * frac2;
+              if (sp < cT3) armC = true; if (sp > pT3) armP = true;
+              let hit = null; if (sp >= cT3 && armC){ hit = "C"; armC = false; } else if (sp <= pT3 && armP){ hit = "P"; armP = false; }
+              if (!hit || n >= 8) continue;
+              const farCall = hit === "P", dirF = farCall ? 1 : -1, farL = cur.filter(l => l.c === farCall), nearL = cur.filter(l => l.c !== farCall), cf = closeV(farL, t, sp);
+              const fS = farL.find(l => l.side === -1), fB = farL.find(l => l.side === 1);
+              const av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, t, true)})).filter(x => x.m > 0);
+              if (cf === null || !fS || !fB || av.length < 3) continue;
+              const gap0 = Math.abs(fS.K - fB.K), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestH = null;
+              [0, 0.0025, 0.005, 0.01].forEach(a => {
+                const Kb = nr(sp * (1 + dirF * a)); if (!Kb) return; const Ks = nr(Kb.K + dirF * gap0 / 2);
+                if (!Ks || (farCall ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
+                const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(fS.n, pS, sp, lot) + feeOpt(fB.n, pB, sp, lot);
+                const nw = [{c: farCall, K: Ks.K, side: -1, n: fS.n, e: pS}, {c: farCall, K: Kb.K, side: 1, n: fB.n, e: pB}], all2 = nearL.concat(nw);
+                const Pc = cash + cf - fee2 + all2.reduce((tt, l) => tt + l.side * (iv(l.c, l.K, sp) - l.e) * l.n * lot, 0);
+                if (!bestH || Pc > bestH.Pc) bestH = {Pc, all2, fee2};
+              });
+              if (!bestH) continue;                       // width can no longer be halved on the strike grid: keep what we have
+              cash += cf - bestH.fee2; cur = bestH.all2; n++;
+              if (farCall){ armC = sp < (shoulder(cur, true)[0] + (shoulder(cur, true)[1] - shoulder(cur, true)[0]) * frac2); } else { const z = shoulder(cur, false); armP = sp > z[0] - (z[0] - z[1]) * frac2; }
+            }
+            rv.rec = cash + settleV(cur); rv.recN = n;
+          }
         }
         Object.assign(row, {sls, adj, rv, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
           strikes: `${best.putShort.strike}/${best.putLong.strike} · ${best.callLong.strike}/${best.callShort.strike}`});
@@ -3234,7 +3265,7 @@ $("dbgo").onclick = async () => {
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin]];
         slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half]);
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half], ["Same, repeated every time BTC reaches a mid-shoulder again (max 8)", r => r.rv.rec]);
         if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin]);
         const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
@@ -3245,7 +3276,7 @@ $("dbgo").onclick = async () => {
               return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(t)}"><b>${usd(t)}</b></td><td class="l">${usd(Math.min(...v))}</td><td class="${sg(lt)}">${usd(lt)}</td><td>${lv.filter(x => x > 0).length} of ${LD.length}</td><td>${LD.filter((r, i) => lv[i] > r.fin + 0.5).length}</td><td>${ok.filter((r, i) => v[i] > r.fin + 0.5).length} / ${ok.filter((r, i) => v[i] < r.fin - 0.5).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
-              return `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)} → ${f(r.settle, 0)}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${r.rv.trig ? tz(r.rv.trig.t) + " · " + f(r.rv.trig.spot, 0) : "no"}</td>${vals.map((v, i) => `<td class="${sg(v)}">${usd(v)}</td>`).join("")}<td><b>${RL[bi][0]}</b><br><span class="note">${usd(vals[bi])}</span></td></tr>`; }).join("") + `</tbody></table></div>`;
+              return `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)} → ${f(r.settle, 0)}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${r.rv.trig ? tz(r.rv.trig.t) + " · " + f(r.rv.trig.spot, 0) : "no"}${r.rv.recN ? "<br><span class=\"note\">" + r.rv.recN + " halvings</span>" : ""}</td>${vals.map((v, i) => `<td class="${sg(v)}">${usd(v)}</td>`).join("")}<td><b>${RL[bi][0]}</b><br><span class="note">${usd(vals[bi])}</span></td></tr>`; }).join("") + `</tbody></table></div>`;
         }
       }
       h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${$("dbadj").checked ? slv.map(X => `<th>Re-center + ${X}% SL</th>`).join("") : ""}${slv.map(X => `<th>Exit at ${X}% SL${$("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? "<br>(" + usd(-X / 100 * Number($("ifunds").value)) + ")" : ""}</th>`).join("")}</tr></thead><tbody>` +
