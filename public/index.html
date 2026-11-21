@@ -346,16 +346,13 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
     <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
     <span hidden><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select></span>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto"> Also test: re-center when BTC reaches the middle of a shoulder (rebuild the other side around the new price, accept up to 5% loss at the new centre), then apply the stop-losses below</label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto"> Also test: re-center when BTC reaches the middle of a shoulder (rebuild the other side around the new price, accept up to 5% loss at the new centre)</label>
     <label>Loss-day test "out of range": trigger, % of BTC beyond the profit range<input id="lrtrig" type="number" min="0" step="0.05" value="0.2"></label>
     <label>…new profit range reaches, % of BTC price, in the loss direction<input id="lrdir" type="number" min="0.1" step="0.1" value="1"></label>
     <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
     <label>Loss-day test "cover": buy back the net-short lots this % beyond the sold strike<input id="lrcov" type="number" min="0" step="0.1" value="0.5"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbchart" type="checkbox" style="width:auto"> Also draw every loss day's chart below the table (otherwise click a day or a result in the loss-day table)</label>
-    <label>Stop-loss % is taken of<select id="dbsb"><option value="cap" selected>Initial capital (Inverted Batman card)</option><option value="mar">Estimated margin of the position</option></select></label>
-    <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson1" type="checkbox" style="width:auto" checked> Stop-loss 1 (%)<input id="dbs1" type="number" min="1" step="1" value="10" style="max-width:90px"></label>
-    <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson2" type="checkbox" style="width:auto" checked> Stop-loss 2 (%)<input id="dbs2" type="number" min="1" step="1" value="15" style="max-width:90px"></label>
-    <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson3" type="checkbox" style="width:auto" checked> Stop-loss 3 (%)<input id="dbs3" type="number" min="1" step="1" value="20" style="max-width:90px"></label>
+    <span hidden><select id="dbsb"><option value="cap" selected>cap</option></select></span>
     <button id="dbgo">Run the backtest</button>
     <button id="dbcsv" type="button" disabled>Download results as CSV</button>
     <button id="dbclr" type="button">Clear saved candles</button>
@@ -3004,9 +3001,9 @@ $("dbgo").onclick = async () => {
     let fromD = dFrom ? Math.floor(Date.parse(dFrom + "T00:00:00Z") / 1000) : 0, toD = dTo ? Math.floor(Date.parse(dTo + "T00:00:00Z") / 1000) : t0d;
     if (toD > t0d) toD = t0d;
     if (dTo && !dFrom) fromD = toD - 29 * 86400;
-    if (ranged && (toD < fromD || (toD - fromD) / 86400 > 120)){ prog.className = "note l"; prog.textContent = "Choose a From date before the To date, at most 120 days apart."; return; }
+    if (ranged && (toD < fromD || (toD - fromD) / 86400 > 740)){ prog.className = "note l"; prog.textContent = "Choose a From date before the To date, at most 740 days (2 years) apart."; return; }
     const days = ranged ? Math.round((t0d - fromD) / 86400) : Math.min(45, Math.max(3, Number($("dbdays").value) || 30)), spr = Math.max(0, Number($("dbspr").value) || 0) / 100;
-    const resName = $("dbres").value, rs = {"1m": 60, "5m": 300, "15m": 900}[resName] || 900, lv0 = 10, lv1 = 20, lv2 = 30, slv = [1, 2, 3].filter(k => $("dbson" + k).checked).map(k => Number($("dbs" + k).value) || [10, 15, 20][k - 1]);
+    const resName = $("dbres").value, rs = {"1m": 60, "5m": 300, "15m": 900}[resName] || 900, lv0 = 10, lv1 = 20, lv2 = 30, slv = [];
     const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, step = Number($("bstep").value) || 200, expSec = hmSec($("bexp").value);
     const minPct = isNaN(Number($("ipct").value)) ? 2 : Number($("ipct").value);
     if (!lot || expSec === null){ prog.className = "note l"; prog.textContent = "Check the BTC-per-lot box and the expiry time (HH:MM UTC)."; return; }
@@ -3267,7 +3264,7 @@ $("dbgo").onclick = async () => {
           `<div class="kpi" style="margin:6px 0"><div>Finished in profit<b class="${winsA >= ok.length / 2 ? "g" : "l"}">${winsA} (${f(winsA / ok.length * 100, 0)}%)</b><span class="note">before ${wins.length}</span></div><div>Total P&amp;L<b class="${sg(totA)}">${usd(totA)}</b><span class="note">before ${usd(tot)}</span></div><div>Better / worse days<b>${impr} / ${worse}</b></div><div>Loss days only: total<b class="${sg(lossA)}">${usd(lossA)}</b><span class="note">before ${usd(lossB)} on ${lossDays.length} days</span></div><div>Worst day<b class="l">${usd(Math.min(...fa))}</b><span class="note">before ${usd(Math.min(...ok.map(r => r.fin)))}</span></div>` +
         `</div>`;
       }
-      {
+      if (slv.length){
         const fin = slv.map((X, k) => ok.map(r => r.sls[k] ? r.sls[k].fin : r.fin)), tots = fin.map(a => a.reduce((t, v) => t + v, 0)), cnt = slv.map((X, k) => ok.filter(r => r.sls[k]).length);
         const col = (head, vals, tot, n, extra) => `<td><b>${head}</b></td><td class="${sg(tot)}"><b>${usd(tot)}</b></td><td>${usd(tot / n)}</td><td>${vals.filter(v => v > 0).length} (${f(vals.filter(v => v > 0).length / n * 100, 0)}%)</td><td class="l">${usd(Math.min(...vals))}</td>${extra}`;
         const act = ok.map(r => r.fin), capBase = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0;
