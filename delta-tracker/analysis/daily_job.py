@@ -80,8 +80,10 @@ def main():
     summ = []
     for h, g in ok.groupby("hours_before"):
         summ.append(dict(hours_before=h, days=int(len(g)), win_pct=round((g.final > 0).mean() * 100), total=round(g.final.sum()), avg=round(g.final.mean()), worst_final=round(g.final.min()), worst_open=round(g.worst.min()),
+                         lo_pct=round(float(((g.lo / g.spot - 1) * 100).median()), 1), hi_pct=round(float(((g.hi / g.spot - 1) * 100).median()), 1),
+                         width_med=round(float(((g.hi - g.lo) / g.spot * 100).median()), 1), width_min=round(float(((g.hi - g.lo) / g.spot * 100).min()), 1), width_max=round(float(((g.hi - g.lo) / g.spot * 100).max()), 1),
                          hit10=int((g.hit10 > 0).sum()), hit20=int((g.hit20 > 0).sum()), hit30=int((g.hit30 > 0).sum()), margin=round(g.margin.mean())))
-    latest = ok.sort_values("expiry").tail(40)[["expiry", "hours_before", "spot", "settle", "credit", "final", "worst", "worst_pct"]].round(1).to_dict("records") if len(ok) else []
+    latest = ok.sort_values("expiry").tail(40)[["expiry", "hours_before", "spot", "settle", "lo", "hi", "credit", "final", "worst", "worst_pct"]].round(1).to_dict("records") if len(ok) else []
     report = dict(name=name, computed_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), config=CFG, expiries=sorted(E), failed=failed, by_hour=sorted(summ, key=lambda x: -x["hours_before"]), latest=latest)
     print(json.dumps(report["by_hour"], indent=1))
     url, pw = os.environ.get("TRACKER_URL", "").rstrip("/"), os.environ.get("TRACKER_PASSPHRASE", "")
