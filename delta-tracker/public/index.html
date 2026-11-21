@@ -2945,11 +2945,11 @@ $("autoload").onclick = async () => {
     if (!d || !d.by_hour){ m.textContent = "No report for this range yet. Start the 'daily-backtest' workflow from the GitHub Actions tab with the same dates."; return; }
     const ageH = (Date.now() - new Date(d.computed_at).getTime()) / 3600000, c = d.config || {};
     m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + "";
-    const t = document.createElement("table"), hd = ["Entry (h before expiry)", "CET (winter)", "Days", "Win %", "Total $", "Avg $", "Worst final $", "Worst open $", "Hit 10%", "Hit 20%", "Hit 30%"];
+    const t = document.createElement("table"), hd = ["Entry (h before expiry)", "CET (winter)", "Days", "Win %", "Total $", "Avg $", "Worst final $", "Worst open $", "Hit 10%", "Hit 20%", "Hit 30%", "Lower edge vs BTC %", "Upper edge vs BTC %", "Typical width %", "Narrowest %", "Widest %"];
     t.innerHTML = "<tr>" + hd.map(x => "<th>" + x + "</th>").join("") + "</tr>";
     for (const x of d.by_hour){
       const cet = ((13 - x.hours_before) % 24 + 24) % 24, tr = t.insertRow();
-      [x.hours_before, String(Math.floor(cet)).padStart(2, "0") + ":" + String(Math.round((cet % 1) * 60)).padStart(2, "0"), x.days, x.win_pct, x.total, x.avg, x.worst_final, x.worst_open, x.hit10, x.hit20, x.hit30].forEach(v => { tr.insertCell().textContent = v; });
+      [x.hours_before, String(Math.floor(cet)).padStart(2, "0") + ":" + String(Math.round((cet % 1) * 60)).padStart(2, "0"), x.days, x.win_pct, x.total, x.avg, x.worst_final, x.worst_open, x.hit10, x.hit20, x.hit30, x.lo_pct, x.hi_pct, x.width_med, x.width_min, x.width_max].forEach(v => { tr.insertCell().textContent = v; });
     }
     o.appendChild(t);
   }catch(e){ m.textContent = "Could not load: " + e.message; }
