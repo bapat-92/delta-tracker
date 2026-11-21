@@ -36,14 +36,32 @@ async function handleCandles(request, env, url) {
   const code = url.pathname.slice("/api/candles/".length);
   if (!/^\d{6}$/.test(code)) return json({ error: "bad expiry code" }, 400);
   if (request.method === "GET") {
-    const v = await env.STORE.get("candles:" + code);
-    return json(v === null ? null : JSON.parse(v));
+    const v = await env.STORE.get("candles:" + code);          // returned as stored: parsing a multi-MB value would use too much CPU
+    return new Response(v === null ? "null" : v, { headers: HEAD });
   }
   if (request.method === "PUT") {
     const text = await request.text();
-    if (text.length > 8000000) return json({ error: "too large" }, 413);
-    try { JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
+    if (text.length > 20000000) return json({ error: "too large" }, 413);
+    if (text[0] !== "{") return json({ error: "bad json" }, 400);
     await env.STORE.put("candles:" + code, text);
+    return json({ ok: true });
+  }
+  return json({ error: "method not allowed" }, 405);
+}
+
+// Daily backtest report written by the GitHub Actions job (small JSON), read by the page.
+async function handleBacktest(request, env) {
+  const bad = await authorize(request, env);
+  if (bad) return bad;
+  if (request.method === "GET") {
+    const v = await env.STORE.get("backtest:latest");
+    return new Response(v === null ? "null" : v, { headers: HEAD });
+  }
+  if (request.method === "PUT") {
+    const text = await request.text();
+    if (text.length > 900000) return json({ error: "too large" }, 413);
+    try { JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
+    await env.STORE.put("backtest:latest", text);
     return json({ ok: true });
   }
   return json({ error: "method not allowed" }, 405);
@@ -81,6 +99,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/api/state" || url.pathname.startsWith("/api/state/")) {
       return handleState(request, env, url);
+    }
+    if (url.pathname === "/api/backtest") {
+      return handleBacktest(request, env);
     }
     if (url.pathname.startsWith("/api/candles/")) {
       return handleCandles(request, env, url);
