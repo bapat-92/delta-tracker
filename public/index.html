@@ -342,11 +342,8 @@ h1{padding-right:170px}
     <label>Loss level 3 (% of capital used)<input id="dbd2" type="number" min="1" value="30"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbA" type="checkbox" style="width:auto" checked> 15:00 CET day before</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto" checked> Apply the re-center adjustment (trigger point and thresholds from the Re-center planner card)</label>
-    <label>Adjustment must leave at least this much at the new centre ($, negative allows a smaller loss; blank = the Re-center card's minimum)<input id="dbamin" type="number" step="10" placeholder="blank"></label>
-    <label>Accept an adjustment that leaves up to this loss at the new centre (% of capital used, 0 = must break even)<input id="dbapct" type="number" min="0" step="0.5" value="5"></label>
-    <label>Pick the adjustment with<select id="dbrank"><option value="at">the best result at the new centre (loss-cutting)</option><option value="width">the widest profit range</option></select></label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbexit" type="checkbox" style="width:auto" checked> Also test "exit everything when BTC leaves the profit range" (no adjustment)</label>
+    <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
+    <span hidden><input id="dbadj" type="checkbox"><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select><input id="dbexit" type="checkbox"></span>
     <button id="dbgo">Run the backtest</button>
     <button id="dbcsv" type="button" disabled>Download results as CSV</button>
     <button id="dbclr" type="button">Clear saved candles</button>
