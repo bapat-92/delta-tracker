@@ -388,6 +388,8 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="tv1" type="checkbox" style="width:auto"> Time-aware volatility (remaining expected move to expiry, hour-of-day pattern)</label>
     <label>Sold strikes at least this many σ away (0 = only show)<input id="tvmin" type="number" min="0" step="0.1" value="1.5"></label>
     <label>Min profit (% of margin; 0 or negative allows a wider, safer range)<input id="ipct" type="number" min="-100" step="0.5" value="2"></label>
+    <label>Min profit slider (drag; -5% to 10%, in 0.5 steps)<input id="ipsl" type="range" min="-5" max="10" step="0.5" value="2" style="width:100%;max-width:260px"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="ieq" type="checkbox" style="width:auto" checked> Equidistant strikes: sold and bought call and put equally far from BTC (to one strike step)</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="ibal" type="checkbox" style="width:auto"> Balanced range: make the smaller side (down or up from BTC) as large as possible</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
     <label>Max loss in dollars (overrides the %)<input id="imaxd" type="number" min="1" step="10" placeholder="e.g. 900"></label>
@@ -1775,6 +1777,7 @@ $("ifind").onclick = async () => {
     if (!chain.calls.length || !chain.puts.length){ $("imsg").className = "note l"; $("imsg").textContent = "No options found for expiry " + exp + " (it may have expired)."; return; }
     const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot;
     const params = {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct, balanced: $("ibal").checked};
+    if ($("ieq").checked) params.equi = {tol: strikeStep(chain)};
     batTvHtml = ""; let tvRem = null;
     if ($("tv1").checked){
       try {
@@ -2940,6 +2943,7 @@ $("dbxgo").onclick = async () => {
     m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
   } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
 };
+{ const n = $("ipct"), r = $("ipsl"); r.oninput = () => { n.value = r.value; }; n.oninput = () => { if (n.value !== "" && !isNaN(Number(n.value))) r.value = Math.max(-5, Math.min(10, Number(n.value))); }; }
 $("autolist").onclick = async () => {
   const m = $("automsg"), sel = $("autosel"); m.textContent = "Loading the list...";
   try{
@@ -3027,7 +3031,7 @@ $("dbgo").onclick = async () => {
         const calls = [], puts = [];
         syms.forEach(x => { const m = mk(x.c, x.K, r.t0, true); if (!(m > 0)) return; const o = {strike: x.K, bid: m * (1 - spr), ask: m * (1 + spr), mark: m, delta: null, spot: r.spot, symbol: x.sym}; (x.c ? calls : puts).push(o); });
         const row = {day: new Date(E.D * 1000).toISOString().slice(0, 10), sl: r.sl, t0: r.t0, spot: r.spot, settle: E.settle, n: calls.length + puts.length, failN, total: syms.length};
-        const best = calls.length > 2 && puts.length > 2 ? batmanSearch({calls, puts}, r.spot, {sold, bought, lot, lev, minPct, balanced: $("ibal").checked})[0] : null;
+        const best = calls.length > 2 && puts.length > 2 ? batmanSearch({calls, puts}, r.spot, {sold, bought, lot, lev, minPct, balanced: $("ibal").checked, equi: $("ieq").checked ? {tol: step} : undefined})[0] : null;
         if (!best){ row.none = true; results.push(row); return; }
         const L = [{c: true, K: best.callShort.strike, side: -1, n: sold, e: best.callShort.bid}, {c: true, K: best.callLong.strike, side: 1, n: bought, e: best.callLong.ask},
                    {c: false, K: best.putShort.strike, side: -1, n: sold, e: best.putShort.bid}, {c: false, K: best.putLong.strike, side: 1, n: bought, e: best.putLong.ask}];
