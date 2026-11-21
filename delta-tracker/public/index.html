@@ -364,8 +364,15 @@ h1{padding-right:170px}
     <div id="dbxmsg" class="note"></div>
   </details>
   <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
-    <p class="note" style="margin:4px 0 8px">Start it on GitHub (Actions tab, daily-backtest, Run workflow; enter dates or leave blank for the last 30 days), wait a few minutes, then enter the same dates here and press the button.</p>
-    <div class="row"><label>From date (blank = latest 30-day report)<input id="autofrom" type="date"></label><label>To date<input id="autoto" type="date"></label><button id="autoload" type="button">Show the latest report</button></div>
+    <p class="note" style="margin:4px 0 8px">Fill in the boxes (blank = default: last 30 days, $5,000, 100% margin, spread 2%, min profit 3%) and press Run on GitHub. Enter 1,2 as spread to run both. Reports appear in the list.</p>
+    <div class="row">
+      <label>From date<input id="rfrom" type="date"></label><label>To date<input id="rto" type="date"></label>
+      <label>Capital $<input id="rcap" type="number" placeholder="5000"></label><label>Margin share %<input id="rshare" type="number" placeholder="100"></label>
+      <label>Spread % (comma = several runs, e.g. 1,2)<input id="rspr" type="text" placeholder="2"></label><label>Min profit %<input id="rmin" type="number" placeholder="3"></label>
+      <label>Entry hours before expiry<input id="rhrs" type="text" placeholder="9,8,7,6,5,4"></label>
+      <button id="runbt" type="button">Run on GitHub</button>
+    </div>
+    <div class="row"><label>Saved reports<select id="autosel"><option value="latest">Latest 30-day report</option></select></label><button id="autolist" type="button">Refresh list</button><button id="autoload" type="button">Show report</button></div>
     <div id="automsg" class="note"></div><div id="autoout"></div>
   </details>
   <div id="dbprog" class="note"></div>
@@ -2935,14 +2942,47 @@ $("dbxgo").onclick = async () => {
     m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
   } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
 };
+$("runbt").onclick = async () => {
+  const m = $("automsg"); if (!pw){ m.textContent = "Connect with your passphrase first (Cloud sync card)."; return; }
+  const sp = ($("rspr").value || "").split(",").map(x => x.trim()).filter(x => x !== ""), list = sp.length ? sp : [""], t0 = Date.now();
+  m.textContent = "Starting " + list.length + " run(s) on GitHub...";
+  try{
+    for (const spread of list){
+      const r = await fetch("/api/run", {method: "POST", headers: {Authorization: "Bearer " + pw, "Content-Type": "application/json"}, body: JSON.stringify({from_date: $("rfrom").value, to_date: $("rto").value || $("rfrom").value, capital: $("rcap").value, share: $("rshare").value, spread, minpct: $("rmin").value, hours: $("rhrs").value.replace(/\s/g, "")})});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+    }
+    m.textContent = "Started. Waiting for the report (usually 2 to 6 minutes; the list refreshes by itself)...";
+    for (let i = 0; i < 40; i++){
+      await new Promise(res => setTimeout(res, 15000));
+      const r = await fetch("/api/backtest?name=index", {headers: {Authorization: "Bearer " + pw}}); if (!r.ok) continue;
+      const L = await r.json(), fresh = (Array.isArray(L) ? L : []).filter(x => new Date(x.at).getTime() > t0 - 60000);
+      if (fresh.length >= list.length){ await $("autolist").onclick(); $("autosel").value = fresh[fresh.length - 1].name; m.textContent = "Done: " + fresh.length + " report(s) ready. Pick one in the list and press Show report."; return; }
+      m.textContent = "Waiting for the report... (" + fresh.length + " of " + list.length + " ready)";
+    }
+    m.textContent = "Not finished yet. Check the Actions tab, then press Refresh list.";
+  }catch(e){ m.textContent = "Could not start: " + e.message; }
+};
+$("autolist").onclick = async () => {
+  const m = $("automsg"), sel = $("autosel"); m.textContent = "Loading the list...";
+  try{
+    const r = await fetch("/api/backtest?name=index", {headers: {Authorization: "Bearer " + pw}});
+    if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : "HTTP " + r.status);
+    const L = await r.json(); sel.textContent = "";
+    const add = (v, t) => { const o = document.createElement("option"); o.value = v; o.textContent = t; sel.appendChild(o); };
+    add("latest", "Latest 30-day report");
+    (Array.isArray(L) ? L.slice().reverse() : []).forEach(x => { if (x.name !== "latest") add(x.name, x.label || x.name); });
+    m.textContent = "List updated.";
+  }catch(e){ m.textContent = "Could not load the list: " + e.message; }
+};
 $("autoload").onclick = async () => {
   const m = $("automsg"), o = $("autoout"); o.textContent = ""; m.textContent = "Loading...";
   try{
-    const fr = $("autofrom").value, to = $("autoto").value, nm = fr || to ? (fr || to) + "_" + (to || fr) : "latest";
+    const nm = $("autosel").value || "latest";
     const r = await fetch("/api/backtest?name=" + nm, {headers: {Authorization: "Bearer " + pw}});
     if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? await r.json().then(j => j.error, () => "cloud storage not set up") : "HTTP " + r.status);
     const d = await r.json();
-    if (!d || !d.by_hour){ m.textContent = "No report for this range yet. Start the 'daily-backtest' workflow from the GitHub Actions tab with the same dates."; return; }
+    if (!d || !d.by_hour){ m.textContent = "No report with this name yet. Start the 'daily-backtest' workflow on GitHub."; return; }
     const ageH = (Date.now() - new Date(d.computed_at).getTime()) / 3600000, c = d.config || {};
     m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + "";
     const t = document.createElement("table"), hd = ["Entry (h before expiry)", "CET (winter)", "Days", "Win %", "Total $", "Avg $", "Worst final $", "Worst open $", "Hit 10%", "Hit 20%", "Hit 30%", "Lower edge vs BTC %", "Upper edge vs BTC %", "Typical width %", "Narrowest %", "Widest %"];

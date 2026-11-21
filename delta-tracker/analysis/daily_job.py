@@ -19,6 +19,10 @@ import batman_backtest as B
 BASE = os.environ.get("DELTA_BASE", "https://api.india.delta.exchange").rstrip("/")
 DAYS = int(os.environ.get("DAYS", "30")); CACHE = os.environ.get("CACHE_DIR", ".cache/candles"); STEP = 200
 HERE = os.path.dirname(os.path.abspath(__file__)); CFG = json.load(open(os.path.join(HERE, "strategy_config.json")))
+OVER = {}                                       # settings typed into the "Run workflow" form override the frozen file; blank = keep the file's value
+for _k, _e, _t in (("capital", "CAPITAL", float), ("share", "SHARE", float), ("ratio", "RATIO", float), ("spread", "SPREAD", float), ("minpct", "MINPCT", float), ("hours", "HOURS", str)):
+    _v = os.environ.get(_e, "").strip()
+    if _v: OVER[_k] = CFG[_k] = _t(_v)
 S = requests.Session(); S.headers["User-Agent"] = "delta-tracker-backtest/1.0"
 
 def get(path, params, tries=5):
@@ -67,6 +71,8 @@ def main():
         days = days[-DAYS:]
     days = [d for d in days if int(dt.datetime.fromisoformat(d).replace(hour=12, tzinfo=dt.timezone.utc).timestamp()) < now - 1800]
     name = f"{days[0]}_{days[-1]}" if (f or t) and days else "latest"; E = {}; failed = []
+    if OVER:                                     # a run with changed settings gets its own report name so it does not overwrite another
+        import hashlib; name += "_" + hashlib.md5(json.dumps(CFG, sort_keys=True).encode()).hexdigest()[:6]
     for day in days:
         try: E[day] = B.E_from_series(day, fetch_expiry(day)); print("ok", day, len(E[day]["syms"]), "series", flush=True)
         except Exception as e: failed.append(day); print("FAILED", day, e, flush=True)
@@ -92,5 +98,12 @@ def main():
     if os.environ.get("CF_ACCESS_CLIENT_ID"): h.update({"CF-Access-Client-Id": os.environ["CF_ACCESS_CLIENT_ID"], "CF-Access-Client-Secret": os.environ["CF_ACCESS_CLIENT_SECRET"]})
     r = requests.put(url + "/api/backtest?name=" + name, data=json.dumps(report), headers=h, timeout=30)
     print("upload:", r.status_code, r.text[:200]); r.raise_for_status()
+    try:                                         # keep a small list of saved reports so the page can offer them in a menu
+        g = requests.get(url + "/api/backtest?name=index", headers=h, timeout=30); idx = g.json() if g.ok else None
+        idx = idx if isinstance(idx, list) else []
+        label = f"{(days[0] + ' to ' + days[-1]) if days else ''} · ${CFG['capital']:g} · {CFG['share']:g}% margin · spread {CFG['spread']:g}% · min profit {CFG['minpct']:g}% · hours {CFG['hours']}"
+        idx = [x for x in idx if x.get("name") != name] + [dict(name=name, label=label, at=report["computed_at"])]
+        r2 = requests.put(url + "/api/backtest?name=index", data=json.dumps(idx[-60:]), headers=h, timeout=30); print("index:", r2.status_code)
+    except Exception as e: print("could not update the report list:", e)
 
 if __name__ == "__main__": main()
