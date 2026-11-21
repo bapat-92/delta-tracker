@@ -7,6 +7,6 @@
     "binding": "ASSETS"
   },
   "kv_namespaces": [
-    { "binding": "STORE", "id": "PASTE_YOUR_KV_NAMESPACE_ID_HERE" }
+    { "binding": "STORE", "id": "3198476cc60640f1bffe430914c03d99" }
   ]
 }
