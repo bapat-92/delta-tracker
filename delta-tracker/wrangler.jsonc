@@ -1,0 +1,12 @@
+{
+  "name": "delta-tracker",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  "kv_namespaces": [
+    { "binding": "STORE", "id": "PASTE_YOUR_KV_NAMESPACE_ID_HERE" }
+  ]
+}
