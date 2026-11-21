@@ -71,11 +71,16 @@ async function handleBacktest(request, env, url) {
 // Starts the GitHub "daily-backtest" workflow with the settings typed on the page.
 // Needs the Worker secret GH_TOKEN (fine-grained token, only this repo, permission Actions: read and write). Optional variable GH_REPO (default below).
 const RUN_FIELDS = { from_date: /^\d{4}-\d{2}-\d{2}$/, to_date: /^\d{4}-\d{2}-\d{2}$/, capital: /^\d{1,9}(\.\d+)?$/, share: /^\d{1,3}(\.\d+)?$/, ratio: /^\d{1,2}(\.\d+)?$/, spread: /^\d{1,2}(\.\d+)?$/, minpct: /^\d{1,3}(\.\d+)?$/, hours: /^\d{1,2}(\.\d+)?(,\d{1,2}(\.\d+)?){0,11}$/ };
-async function handleRun(request, env) {
+async function handleRun(request, env, url) {
   const bad = await authorize(request, env);
   if (bad) return bad;
-  if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
   if (!env.GH_TOKEN) return json({ error: "Worker is missing: secret GH_TOKEN (see the setup note)" }, 503);
+  const token = String(env.GH_TOKEN).trim();
+  if (url.searchParams.get("check")) {              // diagnosis only: shows what the Worker holds (never the token itself) and what GitHub says to it
+    const g = await fetch("https://api.github.com/rate_limit", { headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "User-Agent": "delta-tracker" } });
+    return json({ token_length: token.length, token_starts_with: token.slice(0, 11), had_spaces_or_newlines: token !== String(env.GH_TOKEN), github_status: g.status, github_says: g.status === 200 ? "token accepted" : (await g.text()).slice(0, 120) });
+  }
+  if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
   let body; try { body = await request.json(); } catch (e) { return json({ error: "bad json" }, 400); }
   const inputs = {};
   for (const [k, re] of Object.entries(RUN_FIELDS)) {
@@ -87,7 +92,7 @@ async function handleRun(request, env) {
   const repo = env.GH_REPO || "bapat-92/delta-tracker";
   const r = await fetch("https://api.github.com/repos/" + repo + "/actions/workflows/daily-backtest.yml/dispatches", {
     method: "POST",
-    headers: { Authorization: "Bearer " + env.GH_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "delta-tracker", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "User-Agent": "delta-tracker", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
     body: JSON.stringify({ ref: env.GH_REF || "main", inputs }),
   });
   if (r.status === 204) return json({ ok: true });
@@ -127,7 +132,7 @@ export default {
     if (url.pathname === "/api/state" || url.pathname.startsWith("/api/state/")) {
       return handleState(request, env, url);
     }
-    if (url.pathname === "/api/run") return handleRun(request, env);
+    if (url.pathname === "/api/run") return handleRun(request, env, url);
     if (url.pathname === "/api/backtest") {
       return handleBacktest(request, env, url);
     }
