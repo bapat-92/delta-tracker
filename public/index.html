@@ -90,7 +90,7 @@ h1{padding-right:170px}
 
 <div class="card" id="dfCard">
   <b>Delta filter (applies to the recommendations)</b>
-  <p class="note" style="margin:4px 0 8px">Keeps sold strikes inside a delta band. Delta is about the chance the option finishes in the money, so 15–25 delta is a strike with roughly a 15–25% chance of being hit at expiry. It filters the Strike finder, strike candidates, Inverted Batman and the Adjustment planner (new sold legs). It does not change your own legs.</p>
+  <p class="note" style="margin:4px 0 8px">Keeps sold strikes within a delta band (default 15–25, roughly a 15–25% chance of being hit). Applies to new sold legs only.</p>
   <div class="row" style="margin:8px 0">
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dfon" type="checkbox" style="width:auto"> Apply the delta filter</label>
     <label>Min delta (%)<input id="dflo" type="number" min="1" max="50" step="1" value="15"></label>
@@ -108,7 +108,7 @@ h1{padding-right:170px}
     <label>BTC spot refresh (sec)<input id="ssec" type="number" min="2" value="5"></label>
     <button id="start">Start / apply</button>
   </div>
-  <p class="note">Public prices only, so no API key is needed. If you get "Failed to fetch", the API may block browser requests (CORS): put a proxy URL in the API base. Entry price is the premium per 1 BTC you got or paid. BTC per lot is an assumption, so check the contract specs.</p>
+  <p class="note">Public prices only, no API key. If you see "Failed to fetch", put a proxy URL in the API base. BTC per lot is an assumption: check the contract specs.</p>
 </div>
 
 <div class="kpi card" id="summaryCard">
@@ -126,7 +126,7 @@ h1{padding-right:170px}
 
 <div class="card" id="impCard">
   <b>Import from Delta order history</b>
-  <p class="note" style="margin:4px 0 8px">Paste the order history you copied from Delta (the CSV text or the table rows). The orders are replayed in time order, and your current position and the journal are built from them: open contracts become legs with their average entry price, and anything closed goes to the journal. Nothing is sent anywhere.</p>
+  <p class="note" style="margin:4px 0 8px">Paste your Delta order history. Orders are replayed in time order to build the current position and the journal. Nothing is sent anywhere.</p>
   <textarea id="impText" rows="5" style="width:100%;font:12px/1.4 ui-monospace,monospace;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)" placeholder="Time,Contract,Qty,Side,Filled/Remaining,Exec.Price,..."></textarea>
   <div class="row" style="margin:8px 0">
     <label>When loading<select id="impMode"><option value="replace">Replace my legs table</option><option value="add">Add to my legs (skip orders already loaded)</option></select></label>
@@ -159,7 +159,7 @@ h1{padding-right:170px}
   </table></div>
   <p>Trade P&amp;L: <b id="ctot">–</b></p>
   <p><button id="csave">Save to journal</button> <button id="ccancel">Cancel</button> <span id="cmsg" class="note"></span></p>
-  <p class="note">Exit prices start at what you'd pay or get closing now (ask for sold legs, bid for bought legs), or at intrinsic value for an expiry using the settlement price. Edit them to your real fills. Fees are not included. Saved legs are removed from the table above.</p>
+  <p class="note">Exit prices default to the closing price now (or intrinsic value at expiry). Edit them to your real fills. Fees not included.</p>
 </div>
 
 <div class="card" id="posCard">
@@ -200,7 +200,7 @@ h1{padding-right:170px}
 
 <div class="card" id="ticketCard">
   <b>Order list (for you to place on Delta)</b>
-  <p class="note" style="margin:4px 0 8px">Turns the changes in the What-if card into an order list: safe order of execution, limit prices from live quotes with a slippage cap, and new sells sized to fit your margin budget. It holds no keys and sends nothing. You place the orders on Delta yourself.</p>
+  <p class="note" style="margin:4px 0 8px">Turns the What-if changes into an order list with safe order, limit prices and margin-fit sizing. You place the orders yourself.</p>
   <div class="row" style="margin:8px 0">
     <label>Available balance (USD)<input id="tbal" type="number" min="0" placeholder="uses Total capital if blank"></label>
     <label>Max margin use (%)<input id="tpct" type="number" min="1" max="100" step="1" value="25"></label>
@@ -215,7 +215,7 @@ h1{padding-right:170px}
 
 <div class="card" id="adjCard">
   <b>Batman adjustment trigger (alert only)</b>
-  <p class="note" style="margin:4px 0 8px">On each side the payoff climbs in a straight line from your bought strike up to the hump at the sold strike. This watches BTC and alerts when it is halfway along that climb (the trigger), so you can adjust early. It never places orders.</p>
+  <p class="note" style="margin:4px 0 8px">Alerts when BTC is halfway along the climb from your bought to your sold strike (the trigger). Never places orders.</p>
   <div class="row" style="margin:8px 0">
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="aon" type="checkbox" style="width:auto"> Watch the triggers</label>
     <label>Trigger point (% of the way from bought to sold strike)<input id="afrac" type="number" min="10" max="100" step="5" value="50"></label>
@@ -229,7 +229,7 @@ h1{padding-right:170px}
 
 <div class="card" id="planCard">
   <b>Adjustment planner (next 0.5% move)</b>
-  <p class="note" style="margin:4px 0 8px">Checks the odds, then for a 0.5% fall and a 0.5% rise tries combinations of keeping, rolling or closing each side, and ranks the three best by the widest profit range at expiry. Planning only: it places no orders.</p>
+  <p class="note" style="margin:4px 0 8px">For a 0.5% fall and a 0.5% rise, ranks keep / roll / close combinations by widest profit range at expiry. Planning only.</p>
   <div class="row" style="margin:8px 0">
     <label>Move step (%)<input id="pstep" type="number" min="0.1" step="0.1" value="0.5"></label>
     <label>History look-back (days)<input id="pdays" type="number" min="3" max="30" value="30"></label>
@@ -249,7 +249,7 @@ h1{padding-right:170px}
 
 <div class="card" id="recCard">
   <b>Re-center planner (when BTC reaches the middle of a shoulder)</b>
-  <p class="note" style="margin:4px 0 8px">Suppose BTC climbs (or falls) to the trigger point on one side, the middle of the climb between your bought and sold strike there. This tries many ways to re-build the <i>opposite</i> side around that new price, so the profit zone is centred on it again and there is a chance of profit from there. It closes the old opposite legs, tries new strikes, lot sizes and bought-to-sold ratios (and optionally rolls the sold leg on the side that was hit), then throws out every combination that fails your thresholds and ranks the rest. Planning only: it places no orders. Prices at the new level are model estimates.</p>
+  <p class="note" style="margin:4px 0 8px">When BTC reaches the trigger on one side, rebuilds the opposite side around the new price and keeps only combinations that pass your thresholds. Planning only; prices are model estimates.</p>
   <div class="row" style="margin:8px 0">
     <label>Trigger point (% of the way from bought to sold strike)<input id="rcfrac" type="number" min="10" max="95" step="5" value="50"></label>
     <label>Min profit at the new centre ($)<input id="rcmin" type="number" step="1" value="0"></label>
@@ -265,7 +265,7 @@ h1{padding-right:170px}
 
 <div class="card" id="guardCard">
   <b>Call-side guard (alert only)</b>
-  <p class="note" style="margin:4px 0 8px">Watches the calls you sold. Fires when BTC reaches your trigger price, when a sold call is worth a set multiple of what you collected, or when BTC gets close to a sold strike. It shows what buying the calls back costs right now (at the ask). It never places orders.</p>
+  <p class="note" style="margin:4px 0 8px">Alerts when BTC reaches your trigger, a sold call hits a multiple of its premium, or BTC nears a sold strike. Shows the buy-back cost. Never places orders.</p>
   <div class="row" style="margin:8px 0">
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="gon" type="checkbox" style="width:auto"> Watch my sold calls</label>
     <label>Trigger BTC price<input id="gprice" type="number" min="0" step="10" placeholder="e.g. 66800"></label>
@@ -317,7 +317,7 @@ h1{padding-right:170px}
 
 <div class="card" id="backCard">
   <b>Day-by-day strike backtest</b>
-  <p class="note" style="margin:4px 0 8px">For each past day: take BTC at your entry time, pick the call and put strikes at each move distance, look up what those daily options traded for at that time, and see what selling them to expiry would have made or lost.</p>
+  <p class="note" style="margin:4px 0 8px">For each past day, sells the call and put at each move distance at your entry time and shows what holding to expiry would have made or lost.</p>
   <div class="row" style="margin:8px 0">
     <label>Days back<input id="bdays" type="number" min="1" max="14" value="7"></label>
     <label>Entry time (UTC)<input id="bent" value="03:30"></label>
@@ -332,7 +332,7 @@ h1{padding-right:170px}
 
 <div class="card" id="dbtCard">
   <b>Daily Inverted Batman backtest (last days, two entry times)</b>
-  <p class="note" style="margin:4px 0 8px">For each past expiry it builds the best Inverted Batman at your entry times (default 15:00 CET the day before, and 06:00 CET on expiry day), using Delta's historical mark prices for those strikes, then follows the position at the step you choose (1, 5 or 15 minutes) to expiry. It reports the final result and whether, at any time before expiry, the open loss reached 20% or 30% of the capital used (estimated margin). Lots come from Initial capital in the Inverted Batman card (or its sold/bought boxes); the minimum profit, expiry time and strike step come from the boxes above. Prices are mark prices with an assumed spread, because Delta keeps no historical bid and ask, so treat the result as an estimate. Planning only: it places no orders.</p>
+  <p class="note" style="margin:4px 0 8px">Best Inverted Batman at 15:00 CET (day before) and 06:00 CET (expiry day), from Delta mark prices plus an assumed spread, followed to expiry. Shows the final result and whether the loss hit your loss levels. Estimate only.</p>
   <div class="row" style="margin:8px 0">
     <label>Days back<input id="dbdays" type="number" min="3" max="45" value="30"></label>
     <label>Option price step<select id="dbres"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></label>
@@ -351,7 +351,7 @@ h1{padding-right:170px}
   </div>
   <div id="dbcache" class="note"></div>
   <details style="margin:6px 0"><summary><b>Export the saved candle data (this browser) as a file</b></summary>
-    <p class="note" style="margin:4px 0 8px">Writes the option price candles saved in this browser to a CSV file (one row per symbol and candle: expiry, symbol, strike, time, open, close). 1-minute data for all strikes and days is very large, so narrow it with the filters. If you need data that is only in the cloud, run the backtest once first (it copies cloud data into this browser).</p>
+    <p class="note" style="margin:4px 0 8px">Saves the candles stored in this browser as CSV. Narrow it with the filters, as 1-minute data is large.</p>
     <div class="row">
       <label>Saved step to read<select id="dbxsrc"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option></select></label>
       <label>Write one row per<select id="dbxout"><option value="1">as saved</option><option value="300">5 minutes</option><option value="900">15 minutes</option><option value="3600">1 hour</option></select></label>
@@ -363,9 +363,9 @@ h1{padding-right:170px}
     </div>
     <div id="dbxmsg" class="note"></div>
   </details>
-  <details open style="margin:6px 0"><summary><b>Daily automatic backtest (GitHub Actions, frozen settings)</b></summary>
-    <p class="note" style="margin:4px 0 8px">A GitHub job runs the Python backtest every day after expiry with the frozen settings and sends the summary here. Nothing is placed or changed on the exchange.</p>
-    <button id="autoload" type="button">Load the latest automatic report</button>
+  <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
+    <p class="note" style="margin:4px 0 8px">Start it on GitHub (Actions tab, daily-backtest, Run workflow), wait a few minutes, then press the button.</p>
+    <button id="autoload" type="button">Show the latest report</button>
     <div id="automsg" class="note"></div><div id="autoout"></div>
   </details>
   <div id="dbprog" class="note"></div>
@@ -374,7 +374,7 @@ h1{padding-right:170px}
 
 <div class="card" id="batCard">
   <b>Inverted Batman: best strike combinations</b>
-  <p class="note" style="margin:4px 0 8px">Sell more of the outer call and put, buy fewer of the inner ones (your 5,000 sold / 1,500 bought structure). It tries many strike combinations from the live chain and ranks them by the BTC price range at expiry where profit stays at or above your minimum share of margin. A second group below shows three more options where the call and put are the same distance from spot.</p>
+  <p class="note" style="margin:4px 0 8px">Sells more outer options, buys fewer inner ones (default 5,000 sold / 1,500 bought). Ranks strikes by the widest BTC range at expiry that keeps your minimum profit.</p>
   <div class="row" style="margin:8px 0">
     <label>Expiry<select id="iexp"></select></label>
     <label>Initial capital (USD)<input id="ifunds" type="number" min="0" placeholder="e.g. 26000 (blank uses Total capital)"></label>
@@ -400,7 +400,7 @@ h1{padding-right:170px}
 <div class="card" id="h24Card">
   <b>Position P&amp;L over the last 24 hours</b>
   <!-- Reference: Takes the legs you hold now and marks them to Delta's mark prices for the past 24 hours, by the minute if you like, so you can see how this position would have moved. It is not a record of what you actually held: before you opened the position, the line shows what it would have been worth. -->
-  <p class="note" style="margin:4px 0 8px">Uses the legs in the position table.<br>Shows their P&amp;L each minute for the last 24 hours, at Delta's mark prices.<br>Before you opened them, it shows what they would have been worth.</p>
+  <p class="note" style="margin:4px 0 8px">Uses the legs in the position table. P&amp;L per minute for the last 24 hours at Delta's mark prices.</p>
   <div class="row" style="margin:8px 0">
     <button id="h24go">Load last 24 hours, by the minute</button>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="h24auto" type="checkbox" style="width:auto"> Refresh every minute</label>
@@ -427,7 +427,7 @@ h1{padding-right:170px}
 
 <div class="card" id="nbCard">
   <b>Not-inverted Batman: back-ratio spreads</b>
-  <p class="note" style="margin:4px 0 8px">The opposite shape to the Inverted Batman. On each side you sell fewer options close to the price and buy more further out, so a big move either way pays and the loss sits in a pocket between the strikes. It tries every strike pair and lot ratio and keeps the ones with the best profit if BTC stays that also keep the pocket loss inside your cap.</p>
+  <p class="note" style="margin:4px 0 8px">Opposite of the Inverted Batman: sell fewer near, buy more far, so a big move pays. Ranks by profit if BTC stays, with the pocket loss inside your cap.</p>
   <div class="row" style="margin:8px 0">
     <label>Expiry<select id="nexp"></select></label>
     <label>Outer bought lots per side<input id="nlots" type="number" min="4" value="5000"></label>
@@ -442,7 +442,7 @@ h1{padding-right:170px}
 
 <div class="card" id="trigCard">
   <b>Move trigger (alerts only, places no orders)</b>
-  <p class="note" style="margin:4px 0 8px">Each time BTC moves by the step from the last trigger price: a rise suggests selling the call, a fall suggests selling the put, at the strike priced nearest your target premium.</p>
+  <p class="note" style="margin:4px 0 8px">Every time BTC moves by the step from the last trigger: a rise suggests selling the call, a fall the put, at the strike nearest your target premium.</p>
   <div class="row" style="margin:8px 0">
     <label>Step (%)<input id="tstep" type="number" min="0.1" step="0.1" value="1"></label>
     <label>Target premium (USD per 1 BTC)<input id="tprem" type="number" min="1" value="100"></label>
@@ -484,7 +484,7 @@ h1{padding-right:170px}
     <div>Max profit as % of margin<b id="mMaxPct" class="g">–</b></div>
     <div>Max loss at expiry<b id="mMaxL" class="l">–</b></div>
   </div>
-  <p class="note">Estimate = short lots × BTC per lot × spot ÷ leverage. Max profit and max loss use your entry prices and lots, assuming everything is held to expiry (position P&amp;L at expiry is worked out from the strikes). It ignores margin scaling for large sizes, offsetting between legs and fees, and I haven't confirmed Delta applies this formula to short options. The order preview on Delta shows the real requirement, so use that.</p>
+  <p class="note">Margin ≈ short lots × BTC per lot × spot ÷ leverage. Max profit/loss assume holding to expiry; fees and offsets ignored. Delta's order preview shows the real requirement.</p>
 </div>
 
 <div class="card" id="slCard">
@@ -504,7 +504,7 @@ h1{padding-right:170px}
     <div>Stop-loss as % of margin<b id="sPct">–</b></div>
     <div>Stop-loss used so far<b id="sUsed">–</b></div>
   </div>
-  <p class="note">Premium value is lots × BTC per lot × option price, in USD. You collect it when you sell; it rises as the options gain value. The trigger is the premium value at which your loss equals the stop-loss (entry value + stop-loss). With the net basis, bought legs are subtracted from both the entry and the current value. Based on mark prices, so it lags and doesn't place any order.</p>
+  <p class="note">Premium value = lots × BTC per lot × option price (USD). The trigger is the value where your loss equals the stop-loss. Uses mark prices and never places orders.</p>
 </div>
 
 <div class="card" id="sizeCard">
@@ -523,7 +523,7 @@ h1{padding-right:170px}
     <div>Premium at these lots<b id="zGot">–</b></div>
   </div>
   <p><button id="applyLots">Apply lots to added sells</button> <span id="zMsg" class="note"></span></p>
-  <p class="note">Lots are sized so the estimated margin (short lots × BTC per lot × spot ÷ leverage, the leverage box above) equals the margin share of your capital, split equally across the sells you added from the finder. The premium target is a share of capital you want to collect, and the premium figures use the entry prices in the table. Capital is in USD, and the margin estimate is rough, so check Delta's order preview before trading.</p>
+  <p class="note">Lots are sized so margin (short lots × BTC per lot × spot ÷ leverage) equals your margin share of capital, split across the sells added. The estimate is rough: check Delta's order preview.</p>
 </div>
 
 <script>
@@ -1380,12 +1380,12 @@ function renderVol(r, hrs, thrPct, days){
     h += `<b>Strike candidates to sell</b> <span class="note">expiry ${esc(r.candMeta.exp)}, spot ${f(r.candMeta.spot, 0)}</span><div class="wrap"><table><thead><tr><th rowspan="2" style="text-align:left">Row</th><th colspan="5" style="text-align:center">Call</th><th colspan="5" style="text-align:center">Put</th></tr><tr>` +
       `<th>Strike</th><th>Away</th><th>Bid / mark</th><th>Reached in ${hrs}h</th><th></th><th>Strike</th><th>Away</th><th>Bid / mark</th><th>Reached in ${hrs}h</th><th></th></tr></thead><tbody>` +
       r.cands.map(row => `<tr><td style="text-align:left">${esc(row.label)}</td>${side(row.call)}${side(row.put)}</tr>`).join("") +
-      `</tbody></table></div><p class="note">Each move row picks the first strike at or beyond that distance from spot. "Reached" is the share of past ${hrs}-hour windows in which price touched the strike, with the number of separate episodes in brackets. Bid / mark are today's prices per 1 BTC.</p>`;
+      `</tbody></table></div><p class="note">"Reached" = share of past ${hrs}-hour windows that touched the strike (episodes in brackets). Bid / mark per 1 BTC.</p>`;
   } else if (r.candErr) h += `<p class="note l">Strike candidates: ${esc(r.candErr)}.</p>`;
   const ds = Object.keys(r.days).sort().reverse();
   h += `<div class="wrap"><table><thead><tr><th>Day (UTC)</th><th>${hrs}h blocks</th><th>Over ${thrPct}%</th><th>Biggest ${hrs}h range</th></tr></thead><tbody>` +
     ds.map(d => `<tr><td>${d}</td><td>${r.days[d].blocks}</td><td class="${r.days[d].over ? "l" : ""}">${r.days[d].over}</td><td>${pc(r.days[d].max)}</td></tr>`).join("") + `</tbody></table></div>` +
-    `<p class="note">${r.candles} candles over ${days} days. "Range" is the high-to-low swing inside the window and "net" is start to end, as a share of the window's opening price. A rolling window starts every 5 minutes, so overlapping windows from one event are merged into episodes. The strike lines apply today's distance to your sold legs to every past window. Past moves don't predict future ones.</p>`;
+    `<p class="note">${r.candles} candles over ${days} days. "Range" = high-to-low swing in the window, "net" = start to end. Past moves don't predict future ones.</p>`;
   $("vout").className = ""; $("vout").innerHTML = h;
 }
 
@@ -1491,7 +1491,7 @@ function renderBack(){
   h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Day (UTC)</th><th>BTC at entry</th><th>BTC at expiry</th><th colspan="4" style="text-align:center">Sold call</th><th colspan="4" style="text-align:center">Sold put</th></tr><tr><th></th><th></th><th></th><th>Strike</th><th>Premium</th><th>Touched</th><th>P&amp;L</th><th>Strike</th><th>Premium</th><th>Touched</th><th>P&amp;L</th></tr></thead><tbody>` +
     days.map(d => { const c = plan.find(x => x.day === d && x.m === sel && x.side === "C"), p = plan.find(x => x.day === d && x.m === sel && x.side === "P");
       return `<tr><td style="text-align:left">${esc(d)}</td><td>${f(c.spot, 0)}</td><td>${f(c.settle, 0)}</td>${cell(c)}${cell(p)}</tr>`; }).join("") + `</tbody></table></div>` +
-    `<p class="note">Premium is the first traded 5-minute candle's opening price for that option at your entry time, per 1 BTC. Expiry P&amp;L is premium minus intrinsic value at the BTC price at your expiry time (the last 5-minute close before it), so it's approximate: Delta's real settlement price, bid-ask spread, fees and any early exit are not included. "Touched" means BTC reached the strike at any point between entry and expiry. Options that didn't trade around your entry time show "no price" and are left out of the totals. Past results don't predict future ones.</p>`;
+    `<p class="note">Premium = opening price at your entry time, per 1 BTC. Expiry P&amp;L = premium minus intrinsic value at expiry (approximate: no spread, fees or early exit). "Touched" = BTC reached the strike before expiry. "no price" rows are left out.</p>`;
   $("bout").innerHTML = h;
 }
 $("bout").addEventListener("change", e => { if (e.target.id === "bsel" && lastBack){ lastBack.sel = Number(e.target.value); renderBack(); } });
@@ -2815,7 +2815,7 @@ const idbCount = () => idbOpen().then(d => new Promise(r => { const q = d.transa
 // Second layer: the same series kept in Cloudflare KV (one key per expiry, behind your passphrase), shared between your devices.
 async function cloudCandles(method, code, body){
   const r = await fetch("/api/candles/" + code, {method, headers: Object.assign({Authorization: "Bearer " + pw}, body !== undefined ? {"Content-Type": "application/json"} : {}), body: body !== undefined ? JSON.stringify(body) : undefined});
-  if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? "cloud storage not set up" : "HTTP " + r.status);
+  if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? await r.json().then(j => j.error, () => "cloud storage not set up") : "HTTP " + r.status);
   return r.json();
 }
 async function candles15(base, sym, a, b, cacheable, cloud, fresh, res){
@@ -2939,11 +2939,11 @@ $("autoload").onclick = async () => {
   const m = $("automsg"), o = $("autoout"); o.textContent = ""; m.textContent = "Loading...";
   try{
     const r = await fetch("/api/backtest", {headers: {Authorization: "Bearer " + pw}});
-    if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? "cloud storage not set up" : "HTTP " + r.status);
+    if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? await r.json().then(j => j.error, () => "cloud storage not set up") : "HTTP " + r.status);
     const d = await r.json();
-    if (!d || !d.by_hour){ m.textContent = "No report yet. Run the 'daily-backtest' workflow once from the GitHub Actions tab."; return; }
+    if (!d || !d.by_hour){ m.textContent = "No report yet. Start the 'daily-backtest' workflow from the GitHub Actions tab."; return; }
     const ageH = (Date.now() - new Date(d.computed_at).getTime()) / 3600000, c = d.config || {};
-    m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + (ageH > 48 ? " · STALE: the daily job may have stopped, check GitHub Actions" : "");
+    m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + "";
     const t = document.createElement("table"), hd = ["Entry (h before expiry)", "CET (winter)", "Days", "Win %", "Total $", "Avg $", "Worst final $", "Worst open $", "Hit 10%", "Hit 20%", "Hit 30%"];
     t.innerHTML = "<tr>" + hd.map(x => "<th>" + x + "</th>").join("") + "</tr>";
     for (const x of d.by_hour){
@@ -3136,7 +3136,7 @@ $("dbgo").onclick = async () => {
         R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${8 + ($("dbadj").checked ? 4 : 0) + ($("dbexit").checked ? 3 : 0)}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
           `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}${$("dbexit").checked ? (r.ex ? `<td>${tz(r.ex.t)} · ${f(r.ex.spot, 0)}</td><td class="${sg(r.ex.fin)}"><b>${usd(r.ex.fin)}</b></td><td class="${sg(r.ex.fin - r.fin)}">${r.ex.fin - r.fin >= 0 ? "+" : ""}${usd(r.ex.fin - r.fin)}</td>` : `<td colspan="3" class="note">stayed in range, held to expiry</td>`) : ""}</tr>`).join("") + `</tbody></table></div>`;
     });
-    h += `<p class="note">How to read this: "Open loss" is the mark-to-market loss of the four legs at any ${resName === "1m" ? "1-minute" : resName === "5m" ? "5-minute" : "15-minute"} step before expiry (before any closing costs), compared with the estimated margin. Delta's history has no bid and ask, so fills are the mark price plus or minus the assumed half-spread, and the delta filter is switched off for this test. Strikes without a historical price at the entry time are skipped. The result at expiry uses BTC's price at the expiry time from Delta's index candles.</p>`;
+    h += `<p class="note">"Open loss" = worst mark-to-market loss of the four legs before expiry, compared with estimated margin. Fills = mark price ± the assumed half-spread. Estimate only.</p>`;
     out.innerHTML = h; prog.className = "note"; prog.textContent = `Done: ${results.filter(r => !r.none).length} setups from ${exps.length} expiries.`;
   } catch (e){ prog.className = "note l"; prog.textContent = "Backtest failed: " + e.message; }
   finally { dfil.on = savedDf; dbRunning = false; }
@@ -3720,7 +3720,7 @@ function tvSweepHtml(c, dPct, tPct){
   return `<p style="margin:12px 0 4px"><b>Entry-hour backtest</b> <span class="note">if you opened at each hour (your local time) and held to the next ${esc($("bexp").value)} UTC expiry, how often did BTC stay inside ±${dPct}%?</span></p>` + svg +
     `<div class="wrap"><table><thead><tr><th style="text-align:left">Entry (local)</th><th>Days</th><th>Hours to expiry</th><th>Stayed inside ±${dPct}%</th><th>Reached ±${tPct}% (trigger)</th><th>Avg biggest move</th></tr></thead><tbody>` +
     list.map(r => `<tr><td style="text-align:left">${String(r.loc).padStart(2, "0")}:00</td><td>${r.n}</td><td>${f(r.hrs, 1)}</td><td class="${r.stay >= 0.8 ? "g" : r.stay < 0.6 ? "l" : ""}"><b>${f(r.stay * 100, 0)}%</b></td><td>${f(r.trig * 100, 0)}%</td><td>${f(r.ex * 100, 2)}%</td></tr>`).join("") + `</tbody></table></div>` +
-    `<p class="note">Best entry hour here: ${String(best.loc).padStart(2, "0")}:00 (${f(best.stay * 100, 0)}% stayed inside); weakest: ${String(worst.loc).padStart(2, "0")}:00 (${f(worst.stay * 100, 0)}%). This looks at BTC's path only, not option prices or premium, and hours closer to expiry naturally look safer because there is less time left, so compare entry hours with similar time to expiry. About ${Math.round(list.reduce((a, r) => a + r.n, 0) / list.length)} days per hour is a thin sample.</p>`;
+    `<p class="note">Best entry hour here: ${String(best.loc).padStart(2, "0")}:00 (${f(best.stay * 100, 0)}% stayed inside); weakest: ${String(worst.loc).padStart(2, "0")}:00 (${f(worst.stay * 100, 0)}%). BTC path only (no option prices); hours nearer expiry look safer. About ${Math.round(list.reduce((a, r) => a + r.n, 0) / list.length)} days per hour is a thin sample.</p>`;
 }
 // remember the tick boxes
 const TV_IDS = ["tv1", "tvmin", "tv2", "tvd", "tvt", "tv3", "tv3b"];
@@ -3877,7 +3877,7 @@ $("hvgo").onclick = async () => {
     const profile = `<p style="margin:12px 0 4px"><b>Quiet and busy times of day</b> <span class="note">average high-to-low range of each hour, by hour of day in your local time (${esc(tzName)})${wkOnly ? ", weekdays only" : ""}</span></p>` + svg +
       `<div class="note" style="margin:2px 0 6px"><span style="color:var(--gain);font-weight:700">■ quietest 3 hours</span> · <span style="color:#c0392b;font-weight:700">■ busiest 3 hours</span> · <span style="font-weight:700">●</span> median hour (less distorted by single big days). Hover a bar for the numbers.</div>` +
       `<div class="kpi"><div>Quietest 3-hour stretch<b class="g">${pad(wq.h)} to ${pad(wq.h + 3)}</b><span class="note">avg range ${f(wq.avg, 2)}% per hour</span></div><div>Busiest 3-hour stretch<b class="l">${pad(wb.h)} to ${pad(wb.h + 3)}</b><span class="note">avg range ${f(wb.avg, 2)}% per hour</span></div><div>Busiest vs quietest hour<b>${f(ranked[23].mean / (ranked[0].mean || 1), 1)}x</b></div></div>` +
-      `<p class="note">Each hour of the day has about ${Math.round(prof.length / 24)} samples, so the pattern is rough: one big news day can lift a bar, which is why the median dots are shown too. Quiet hours say when price tends to sit still; they are not a promise. Weekends are usually calmer, so tick “weekdays only” to see the working-week pattern.</p>`;
+      `<p class="note">About ${Math.round(prof.length / 24)} samples per hour, so the pattern is rough (median dots shown too). Weekends are calmer: tick “weekdays only” for the working week.</p>`;
     const tvSweep = $("tv2").checked ? tvSweepHtml(c, Number($("tvd").value) || 2.4, Number($("tvt").value) || 1.2) : "";
     const up = rows.reduce((a, x) => x.mv > a.mv ? x : a, rows[0]), dn = rows.reduce((a, x) => x.mv < a.mv ? x : a, rows[0]);
     $("hvout").innerHTML = `<div class="kpi" style="margin-top:6px"><div>Biggest hourly rise (open to close)<b class="g">+${f(up.mv, 2)}%</b></div><div>Biggest hourly fall (open to close)<b class="l">${f(dn.mv, 2)}%</b></div><div>Biggest high-to-low range in an hour<b>${f(Math.max(...rng), 2)}%</b></div>` +
