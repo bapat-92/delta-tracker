@@ -348,7 +348,8 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
     <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
     <span hidden><input id="dbadj" type="checkbox"><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select></span>
-    <label>Stop-loss 1 (% of capital used)<input id="dbs1" type="number" min="1" step="1" value="10"></label>
+    <label>Stop-loss % is taken of<select id="dbsb"><option value="cap" selected>Initial capital (Inverted Batman card)</option><option value="mar">Estimated margin of the position</option></select></label>
+    <label>Stop-loss 1 (%)<input id="dbs1" type="number" min="1" step="1" value="10"></label>
     <label>Stop-loss 2 (%)<input id="dbs2" type="number" min="1" step="1" value="15"></label>
     <label>Stop-loss 3 (%)<input id="dbs3" type="number" min="1" step="1" value="20"></label>
     <button id="dbgo">Run the backtest</button>
@@ -3116,8 +3117,9 @@ $("dbgo").onclick = async () => {
         }
 
         // ---- stop-loss exits: close all four legs at the first step where the open loss reaches X% of capital used (closing costs: spread against you + fees) ----
+        const slBase = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : margin;
         const sls = slv.map(X => {
-          const hit = path.find(q => q[1] <= -X / 100 * margin); if (!hit) return null;
+          const hit = path.find(q => q[1] <= -X / 100 * slBase); if (!hit) return null;
           const t = hit[0], cb = byT.get(Math.floor((t - 300) / 300) * 300), sp = cb ? cb.close : r.spot;
           let pv = -fees;
           for (const l of L){ const m = mk(l.c, l.K, t, false), px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); pv += l.side * (px - l.e) * l.n * lot - feeOpt(l.n, px, sp, lot); }
@@ -3128,7 +3130,7 @@ $("dbgo").onclick = async () => {
         results.push(row);
       });
     }
-    window.dbLast = results; window.dbCfg = {days, spr: spr * 100, minPct, sold, bought, lev, lot, step: resName, lv0, lv1, lv2, adj: $("dbadj").checked, stop_loss_pct: slv.join("/"), frac: Number($("rcfrac").value) || 50, amin: $("dbamin").value, apct: $("dbapct").value, rank: $("dbrank").value, cush: $("rccush").value, maxLoss: $("rcloss").value || $("imaxd").value, maxCost: $("rccost").value}; $("dbcsv").disabled = false; dbCacheInfo();
+    window.dbLast = results; window.dbCfg = {days, spr: spr * 100, minPct, sold, bought, lev, lot, step: resName, lv0, lv1, lv2, adj: $("dbadj").checked, stop_loss_pct: slv.join("/"), stop_loss_of: $("dbsb").value, frac: Number($("rcfrac").value) || 50, amin: $("dbamin").value, apct: $("dbapct").value, rank: $("dbrank").value, cush: $("rccush").value, maxLoss: $("rcloss").value || $("imaxd").value, maxCost: $("rccost").value}; $("dbcsv").disabled = false; dbCacheInfo();
     const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0), tz = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
     let h = `<p class="note">${f(sold, 0)} sold / ${f(bought, 0)} bought lots per leg, leverage ${f(lev, 0)}x, minimum profit ${f(minPct, 1)}% of margin, assumed half-spread ${f(spr * 100, 1)}%, fees included (entry fees and settlement fees). Times in CET. Capital used = estimated margin of the sold lots.</p>`;
     slots.forEach(sl => {
@@ -3156,13 +3158,13 @@ $("dbgo").onclick = async () => {
       {
         const fin = slv.map((X, k) => ok.map(r => r.sls[k] ? r.sls[k].fin : r.fin)), tots = fin.map(a => a.reduce((t, v) => t + v, 0)), cnt = slv.map((X, k) => ok.filter(r => r.sls[k]).length);
         const col = (head, vals, tot, n, extra) => `<td><b>${head}</b></td><td class="${sg(tot)}"><b>${usd(tot)}</b></td><td>${usd(tot / n)}</td><td>${vals.filter(v => v > 0).length} (${f(vals.filter(v => v > 0).length / n * 100, 0)}%)</td><td class="l">${usd(Math.min(...vals))}</td>${extra}`;
-        const act = ok.map(r => r.fin);
-        h += `<p style="margin:10px 0 4px"><b>Same days with a stop-loss</b> <span class="note">(close all four legs at the first ${resName} step the open loss reaches the % of capital used; you pay the spread and fees to close; a stop-loss that is never reached leaves the day as it was)</span></p>` +
+        const act = ok.map(r => r.fin), capBase = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0;
+        h += `<p style="margin:10px 0 4px"><b>Same days with a stop-loss</b> <span class="note">(close all four legs at the first ${resName} step the open loss reaches the stop-loss % of ${capBase ? "your initial capital, " + usd(capBase) : "the estimated margin of each position"}; you pay the spread and fees to close; a stop-loss that is never reached leaves the day as it was)</span></p>` +
           `<div class="wrap"><table><thead><tr><th style="text-align:left">Exit rule</th><th>Total P&amp;L</th><th>Average per day</th><th>Finished in profit</th><th>Worst day</th><th>Days stopped out</th><th>Better / worse than actual</th></tr></thead><tbody>` +
           `<tr>${col("Actual (hold to expiry)", act, tot, ok.length, "<td>–</td><td>–</td>").replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>` +
-          slv.map((X, k) => `<tr>${col("Exit at " + X + "% SL", fin[k], tots[k], ok.length, `<td>${cnt[k]} of ${ok.length}</td><td>${ok.filter((r, i) => fin[k][i] > r.fin + 0.5).length} / ${ok.filter((r, i) => fin[k][i] < r.fin - 0.5).length}</td>`).replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>`).join("") + `</tbody></table></div>`;
+          slv.map((X, k) => `<tr>${col("Exit at " + X + "% SL" + (capBase ? " (" + usd(-X / 100 * capBase) + ")" : ""), fin[k], tots[k], ok.length, `<td>${cnt[k]} of ${ok.length}</td><td>${ok.filter((r, i) => fin[k][i] > r.fin + 0.5).length} / ${ok.filter((r, i) => fin[k][i] < r.fin - 0.5).length}</td>`).replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>`).join("") + `</tbody></table></div>`;
       }
-      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${slv.map(X => `<th>Exit at ${X}% SL</th>`).join("")}</tr></thead><tbody>` +
+      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${slv.map(X => `<th>Exit at ${X}% SL${$("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? "<br>(" + usd(-X / 100 * Number($("ifunds").value)) + ")" : ""}</th>`).join("")}</tr></thead><tbody>` +
         R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${8 + ($("dbadj").checked ? 4 : 0) + 3}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
           `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}${slv.map((X, k) => { const q = r.sls[k]; return q ? `<td class="${sg(q.fin)}"><b>${usd(q.fin)}</b><br><span class="note">${tz(q.t)} · ${f(q.spot, 0)}</span></td>` : `<td class="note">not reached: ${usd(r.fin)}</td>`; }).join("")}</tr>`).join("") + `</tbody></table></div>`;
     });
