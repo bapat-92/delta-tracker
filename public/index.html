@@ -348,6 +348,7 @@ h1{padding-right:170px}
     <label>Pick the adjustment with<select id="dbrank"><option value="at">the best result at the new centre (loss-cutting)</option><option value="width">the widest profit range</option></select></label>
     <button id="dbgo">Run the backtest</button>
     <button id="dbclr" type="button">Clear saved candles</button>
+    <button id="dbsync" type="button">Upload this browser's saved candles to the cloud</button>
   </div>
   <div id="dbcache" class="note"></div>
   <div id="dbprog" class="note"></div>
@@ -2834,6 +2835,27 @@ async function dbCacheInfo(){
   $("dbcache").textContent = (n ? `Saved in this browser: ${n} option price series (finished expiries only). They load instantly next time.` : "Nothing saved yet. The first run downloads everything; later runs reuse it.") +
     (pw ? ` Cloud copy: on (${dbCache.up} expiries uploaded this session${dbCache.cloud ? ", " + dbCache.cloud + " series fetched from the cloud" : ""}).` : " Cloud copy: off (enter your passphrase in the cloud sync section to share it across devices).") + (dbCache.err ? " Cloud problem: " + dbCache.err + "." : "");
 }
+const idbKeys = () => idbOpen().then(d => new Promise(r => { const q = d.transaction("c").objectStore("c").getAllKeys(); q.onsuccess = () => r(q.result || []); q.onerror = () => r([]); })).catch(() => []);
+$("dbsync").onclick = async () => {
+  const m = $("dbprog"); m.className = "note";
+  if (!pw){ m.className = "note l"; m.textContent = "Enter your passphrase in the cloud sync section first."; return; }
+  try {
+    const keys = (await idbKeys()).filter(k => /^\d+m\|[CP]-BTC-\d+-\d{6}$/.test(k)), by = {};
+    keys.forEach(k => { const code = k.slice(-6); (by[code] = by[code] || []).push(k); });
+    const codes = Object.keys(by); let n = 0, up = 0;
+    for (const code of codes){
+      n++; m.textContent = `Uploading expiry ${code} (${n}/${codes.length})…`;
+      const cloud = (await cloudCandles("GET", code)) || {}, add = {};
+      for (const k of by[code]){
+        const have = cloud[k], v = await idbGet(k); if (!v) continue;
+        if (have && have.from <= v.from && have.to >= v.to) continue;
+        add[k] = {from: v.from, to: v.to, d: v.data.map(x => [x.t, x.o, x.c])};
+      }
+      if (Object.keys(add).length){ await cloudCandles("PUT", code, Object.assign({}, cloud, add)); up++; }
+    }
+    m.textContent = `Done: ${up} of ${codes.length} expiries needed an upload.`; dbCache.up += up; dbCacheInfo();
+  } catch (e){ m.className = "note l"; m.textContent = "Upload failed: " + e.message; }
+};
 $("dbclr").onclick = async () => { await idbClear(); dbCache.hits = dbCache.miss = 0; dbCacheInfo(); };
 dbCacheInfo();
 $("dbgo").onclick = async () => {
