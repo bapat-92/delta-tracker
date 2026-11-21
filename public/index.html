@@ -347,7 +347,8 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbA" type="checkbox" style="width:auto" checked> 15:00 CET day before</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
     <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
-    <span hidden><input id="dbadj" type="checkbox"><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select><input id="dbexit" type="checkbox"></span>
+    <span hidden><input id="dbadj" type="checkbox"><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select></span>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbexit" type="checkbox" style="width:auto"> Also test: exit everything the first time BTC leaves the profit range (compared with holding to expiry)</label>
     <button id="dbgo">Run the backtest</button>
     <button id="dbcsv" type="button" disabled>Download results as CSV</button>
     <button id="dbclr" type="button">Clear saved candles</button>
