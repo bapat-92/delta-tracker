@@ -2784,7 +2784,7 @@ function berlinUtc(y, mo, d, h){            // seconds (UTC) of Europe/Berlin lo
   return t / 1000;
 }
 // Saved candles (IndexedDB in this browser): prices of an expired option never change, so they are fetched once and reused.
-const dbCache = {hits: 0, cloud: 0, miss: 0, up: 0, err: "", db: null};
+const dbCache = {hits: 0, cloud: 0, miss: 0, fail: 0, up: 0, err: "", db: null};
 function idbOpen(){
   if (dbCache.db) return Promise.resolve(dbCache.db);
   return new Promise((res, rej) => { try { const q = indexedDB.open("dtcache", 1); q.onupgradeneeded = () => q.result.createObjectStore("c"); q.onsuccess = () => { dbCache.db = q.result; res(q.result); }; q.onerror = () => rej(q.error); } catch (e) { rej(e); } });
@@ -2802,22 +2802,31 @@ async function cloudCandles(method, code, body){
 async function candles15(base, sym, a, b, cacheable, cloud, fresh, res){
   res = res || "15m"; const ck = res + "|" + sym;
   if (cacheable){
-    const hit = await idbGet(ck); if (hit && hit.from <= a && hit.to >= b){ dbCache.hits++; return hit.data; }
+    // an empty saved series only counts if it was saved after a successful answer (ok); older empty ones may be failed downloads, so they are fetched again
+    const good = v => v && (v.ok || (v.data || v.d || []).length >= 3);
+    const hit = await idbGet(ck); if (good(hit) && hit.from <= a && hit.to >= b){ dbCache.hits++; return hit.data; }
     const cl = cloud && cloud[ck];
-    if (cl && cl.from <= a && cl.to >= b){ const data = cl.d.map(x => ({t: x[0], o: x[1], c: x[2]})); dbCache.cloud++; idbPut(ck, {from: cl.from, to: cl.to, data}); return data; }
+    if (good(cl) && cl.from <= a && cl.to >= b){ const data = cl.d.map(x => ({t: x[0], o: x[1], c: x[2]})); dbCache.cloud++; idbPut(ck, {from: cl.from, to: cl.to, data, ok: true}); return data; }
   }
   const out = await candles15net(base, sym, a, b, res);
-  if (cacheable){ dbCache.miss++; idbPut(ck, {from: a, to: b, data: out}); if (fresh) fresh[ck] = {from: a, to: b, d: out.map(x => [x.t, x.o, x.c])}; }
+  if (out.failed){ dbCache.fail++; return out; }       // never save a failed download
+  if (cacheable){ dbCache.miss++; idbPut(ck, {from: a, to: b, data: out, ok: true}); if (fresh) fresh[ck] = {from: a, to: b, d: out.map(x => [x.t, x.o, x.c]), ok: true}; }
   return out;
 }
 async function candles15net(base, sym, a, b, res){
   const get = async s => {
     const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", res || "15m"); u.searchParams.set("symbol", s); u.searchParams.set("start", a); u.searchParams.set("end", b);
-    const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
+    let r, last = null;
+    for (let k = 0; k < 4; k++){                       // retry on rate limits and server errors
+      try { r = await fetch(u); if (r.ok) break; last = new Error("HTTP " + r.status); if (r.status !== 429 && r.status < 500) break; } catch (e) { last = e; }
+      await new Promise(z => setTimeout(z, 700 * (k + 1))); r = null;
+    }
+    if (!r || !r.ok) throw last || new Error("failed");
     return ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), o: Number(c.open), c: Number(c.close)})).filter(c => c.c > 0 || c.o > 0).sort((x, y) => x.t - y.t);
   };
-  let r = []; try { r = await get("MARK:" + sym); } catch (e) {}
-  if (r.length < 3){ try { r = await get(sym); } catch (e) {} }
+  let r = [], failed = false; try { r = await get("MARK:" + sym); } catch (e) { failed = true; }
+  if (r.length < 3){ try { r = await get(sym); failed = failed && false; } catch (e) { failed = true; } }
+  r.failed = failed && r.length < 3;
   return r;
 }
 const dbMark = (arr, t, useOpen, rs) => {        // price at time t: candle starting at t (open) or the candle that ended at t (close); carries forward
@@ -2847,9 +2856,9 @@ $("dbsync").onclick = async () => {
       n++; m.textContent = `Uploading expiry ${code} (${n}/${codes.length})…`;
       const cloud = (await cloudCandles("GET", code)) || {}, add = {};
       for (const k of by[code]){
-        const have = cloud[k], v = await idbGet(k); if (!v) continue;
+        const have = cloud[k], v = await idbGet(k); if (!v || (!v.ok && v.data.length < 3)) continue;
         if (have && have.from <= v.from && have.to >= v.to) continue;
-        add[k] = {from: v.from, to: v.to, d: v.data.map(x => [x.t, x.o, x.c])};
+        add[k] = {from: v.from, to: v.to, d: v.data.map(x => [x.t, x.o, x.c]), ok: !!v.ok || v.data.length >= 3};
       }
       if (Object.keys(add).length){ await cloudCandles("PUT", code, Object.assign({}, cloud, add)); up++; }
     }
@@ -2891,19 +2900,20 @@ $("dbgo").onclick = async () => {
       done++; prog.textContent = `Expiry ${E.code} (${done}/${exps.length}): loading option prices… (${dbCache.hits} from this browser, ${dbCache.cloud} from cloud, ${dbCache.miss} downloaded from Delta)`;
       const sp = E.rows.map(r => r.spot), loK = Math.floor(Math.min(...sp) * 0.9 / step) * step, hiK = Math.ceil(Math.max(...sp) * 1.1 / step) * step, tmin = Math.min(...E.rows.map(r => r.t0));
       const syms = []; for (let K = loK; K <= hiK; K += step){ syms.push({K, c: true, sym: `C-BTC-${K}-${E.code}`}); syms.push({K, c: false, sym: `P-BTC-${K}-${E.code}`}); }
-      const ser = new Map(), cacheable = E.tx + rs < now - 3600, wa = Math.max(E.D - 43200, E.tx - 1900 * rs), wb = E.tx + rs, fresh = {};
+      dbCache.fail = 0; const ser = new Map(), cacheable = E.tx + rs < now - 3600, wa = Math.max(E.D - 43200, E.tx - 1900 * rs), wb = E.tx + rs, fresh = {};
       let cloud = null;
       if (cacheable && pw){
         const local = await Promise.all(syms.map(x => idbGet(resName + "|" + x.sym)));
         if (local.some(h => !(h && h.from <= wa && h.to >= wb))){ try { cloud = await cloudCandles("GET", E.code); } catch (e) { dbCache.err = e.message; } }
       }
-      await runPool(syms, 5, async x => { ser.set(x.sym, await candles15(base, x.sym, wa, wb, cacheable, cloud, fresh, resName)); });
+      await runPool(syms, 3, async x => { ser.set(x.sym, await candles15(base, x.sym, wa, wb, cacheable, cloud, fresh, resName)); });
       if (cacheable && pw && Object.keys(fresh).length){ try { await cloudCandles("PUT", E.code, Object.assign({}, cloud || {}, fresh)); dbCache.up++; } catch (e) { dbCache.err = e.message; } }
+      const failN = dbCache.fail;
       E.rows.forEach(r => {
         const mk = (isCall, K, t, o) => dbMark(ser.get(`${isCall ? "C" : "P"}-BTC-${K}-${E.code}`), t, o, rs);
         const calls = [], puts = [];
         syms.forEach(x => { const m = mk(x.c, x.K, r.t0, true); if (!(m > 0)) return; const o = {strike: x.K, bid: m * (1 - spr), ask: m * (1 + spr), mark: m, delta: null, spot: r.spot, symbol: x.sym}; (x.c ? calls : puts).push(o); });
-        const row = {day: new Date(E.D * 1000).toISOString().slice(0, 10), sl: r.sl, t0: r.t0, spot: r.spot, settle: E.settle, n: calls.length + puts.length};
+        const row = {day: new Date(E.D * 1000).toISOString().slice(0, 10), sl: r.sl, t0: r.t0, spot: r.spot, settle: E.settle, n: calls.length + puts.length, failN, total: syms.length};
         const best = calls.length > 2 && puts.length > 2 ? batmanSearch({calls, puts}, r.spot, {sold, bought, lot, lev, minPct})[0] : null;
         if (!best){ row.none = true; results.push(row); return; }
         const L = [{c: true, K: best.callShort.strike, side: -1, n: sold, e: best.callShort.bid}, {c: true, K: best.callLong.strike, side: 1, n: bought, e: best.callLong.ask},
@@ -3009,7 +3019,7 @@ $("dbgo").onclick = async () => {
           `<div>Open loss reached ${lv0}%<b>${cnt("b0")} of ${ok.length}</b><span class="note">before ${h0.length}</span></div><div>Open loss reached ${lv1}%<b>${cnt("b1")} of ${ok.length}</b><span class="note">before ${h1.length}</span></div><div>Open loss reached ${lv2}%<b>${cnt("b2")} of ${ok.length}</b><span class="note">before ${h2.length}</span></div></div>`;
       }
       h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}</tr></thead><tbody>` +
-        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${$("dbadj").checked ? 12 : 8}" class="note">no combination met the minimum (${r.n} priced strikes)</td></tr>` :
+        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${$("dbadj").checked ? 12 : 8}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
           `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}</tr>`).join("") + `</tbody></table></div>`;
     });
     h += `<p class="note">How to read this: "Open loss" is the mark-to-market loss of the four legs at any ${resName === "1m" ? "1-minute" : resName === "5m" ? "5-minute" : "15-minute"} step before expiry (before any closing costs), compared with the estimated margin. Delta's history has no bid and ask, so fills are the mark price plus or minus the assumed half-spread, and the delta filter is switched off for this test. Strikes without a historical price at the entry time are skipped. The result at expiry uses BTC's price at the expiry time from Delta's index candles.</p>`;
