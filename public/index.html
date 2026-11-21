@@ -349,10 +349,14 @@ h1{padding-right:170px}
     <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
     <span hidden><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select></span>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto"> Also test: re-center when BTC reaches the middle of a shoulder (rebuild the other side around the new price, accept up to 5% loss at the new centre), then apply the stop-losses below</label>
+    <label>Loss-day test "out of range": trigger, % of BTC beyond the profit range<input id="lrtrig" type="number" min="0" step="0.05" value="0.2"></label>
+    <label>…new profit range reaches, % of BTC price, in the loss direction<input id="lrdir" type="number" min="0.1" step="0.1" value="1"></label>
+    <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
+    <label>…accepted loss anywhere in that range, % of capital<input id="lracc" type="number" min="0" step="0.5" value="1"></label>
     <label>Stop-loss % is taken of<select id="dbsb"><option value="cap" selected>Initial capital (Inverted Batman card)</option><option value="mar">Estimated margin of the position</option></select></label>
-    <label>Stop-loss 1 (%)<input id="dbs1" type="number" min="1" step="1" value="10"></label>
-    <label>Stop-loss 2 (%)<input id="dbs2" type="number" min="1" step="1" value="15"></label>
-    <label>Stop-loss 3 (%)<input id="dbs3" type="number" min="1" step="1" value="20"></label>
+    <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson1" type="checkbox" style="width:auto" checked> Stop-loss 1 (%)<input id="dbs1" type="number" min="1" step="1" value="10" style="max-width:90px"></label>
+    <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson2" type="checkbox" style="width:auto" checked> Stop-loss 2 (%)<input id="dbs2" type="number" min="1" step="1" value="15" style="max-width:90px"></label>
+    <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson3" type="checkbox" style="width:auto" checked> Stop-loss 3 (%)<input id="dbs3" type="number" min="1" step="1" value="20" style="max-width:90px"></label>
     <button id="dbgo">Run the backtest</button>
     <button id="dbcsv" type="button" disabled>Download results as CSV</button>
     <button id="dbclr" type="button">Clear saved candles</button>
@@ -2907,13 +2911,15 @@ $("dbcsv").onclick = () => {
   const cet = t => t ? new Date(t * 1000).toLocaleString("sv-SE", {timeZone: "Europe/Berlin"}).slice(0, 16) : "";
   const head = ["expiry_day", "entry_slot", "entry_utc", "entry_cet", "btc_at_entry", "btc_at_expiry", "status", "priced_strikes", "failed_downloads", "put_sold_strike", "put_bought_strike", "call_bought_strike", "call_sold_strike", "profit_range_low", "profit_range_high", "net_credit", "margin_est", "fees_entry", "final_pnl", "worst_open_pnl", "worst_open_pct_margin", "worst_open_time_utc", "hit_l1_utc", "hit_l2_utc", "hit_l3_utc",
     "adj_time_utc", "adj_btc", "adj_side", "adj_action", "adj_final_pnl", "adj_change", "sl1_exit_utc", "sl1_btc", "sl1_final_pnl", "sl2_exit_utc", "sl2_btc", "sl2_final_pnl", "sl3_exit_utc", "sl3_btc", "sl3_final_pnl", "recenter_sl1_final_pnl", "recenter_sl2_final_pnl", "recenter_sl3_final_pnl"];
-  const lines = ["# Daily Inverted Batman backtest, saved " + new Date().toISOString(), "# settings: " + Object.keys(C).map(k => k + "=" + C[k]).join("; "), head.join(",")];
+  const nSl = C.stop_loss_pct === undefined ? 3 : String(C.stop_loss_pct).split("/").filter(Boolean).length, slp = String(C.stop_loss_pct || "").split("/");
+  const head2 = head.filter(h => { const m = h.match(/sl(\d)_/); return !m || Number(m[1]) <= nSl; }).map(h => h.replace(/sl(\d)_/, (m, d) => slp[d - 1] ? "sl" + slp[d - 1] + "pct_" : m));
+  const lines = ["# Daily Inverted Batman backtest, saved " + new Date().toISOString(), "# settings: " + Object.keys(C).map(k => k + "=" + C[k]).join("; "), head2.join(",")];
   R.forEach(r => {
     const b = r.best, a = r.adj, sx = r.sls || [];
     lines.push([r.day, r.sl === "A" ? "15:00 CET day before" : "06:00 CET expiry day", iso(r.t0), cet(r.t0), r.spot, r.settle, r.none ? (r.failN ? "download_failed" : r.n === 0 ? "no_prices" : "no_combination") : "ok", r.n, r.failN || 0,
       b ? b.putShort.strike : "", b ? b.putLong.strike : "", b ? b.callLong.strike : "", b ? b.callShort.strike : "", r.lo, r.hi, r.credit, r.margin, r.fees, r.fin, r.minV, r.minV !== null && r.minV !== undefined && r.margin ? r.minV / r.margin * 100 : "", iso(r.minT), iso(r.b0), iso(r.b1), iso(r.b2),
       a ? iso(a.t) : "", a ? a.spot : "", a ? a.side : "", a ? (a.fin !== undefined ? a.desc : "no_valid_adjustment") : "", a && a.fin !== undefined ? a.fin : "", a && a.fin !== undefined ? a.fin - r.fin : "",
-      ...[0, 1, 2].flatMap(k => sx[k] ? [iso(sx[k].t), sx[k].spot, sx[k].fin] : ["", "", r.none ? "" : r.fin]), ...[0, 1, 2].map(k => r.none ? "" : (a && a.sls ? (a.sls[k] ? a.sls[k].fin : a.fin) : (sx[k] ? sx[k].fin : r.fin)))].map(q).join(","));
+      ...Array.from({length: nSl}, (_, k) => k).flatMap(k => sx[k] ? [iso(sx[k].t), sx[k].spot, sx[k].fin] : ["", "", r.none ? "" : r.fin]), ...Array.from({length: nSl}, (_, k) => k).map(k => r.none ? "" : (a && a.sls ? (a.sls[k] ? a.sls[k].fin : a.fin) : (sx[k] ? sx[k].fin : r.fin)))].map(q).join(","));
   });
   const blob = new Blob([lines.join("\n") + "\n"], {type: "text/csv"}), a2 = document.createElement("a");
   a2.href = URL.createObjectURL(blob); a2.download = "batman-backtest-" + new Date().toISOString().slice(0, 10) + ".csv"; document.body.appendChild(a2); a2.click(); setTimeout(() => { URL.revokeObjectURL(a2.href); a2.remove(); }, 1000);
@@ -3000,7 +3006,7 @@ $("dbgo").onclick = async () => {
     if (dTo && !dFrom) fromD = toD - 29 * 86400;
     if (ranged && (toD < fromD || (toD - fromD) / 86400 > 120)){ prog.className = "note l"; prog.textContent = "Choose a From date before the To date, at most 120 days apart."; return; }
     const days = ranged ? Math.round((t0d - fromD) / 86400) : Math.min(45, Math.max(3, Number($("dbdays").value) || 30)), spr = Math.max(0, Number($("dbspr").value) || 0) / 100;
-    const resName = $("dbres").value, rs = {"1m": 60, "5m": 300, "15m": 900}[resName] || 900, lv0 = Number($("dbd0").value) || 10, lv1 = Number($("dbd1").value) || 20, lv2 = Number($("dbd2").value) || 30, slv = [1, 2, 3].map(k => Number($("dbs" + k).value) || [10, 15, 20][k - 1]);
+    const resName = $("dbres").value, rs = {"1m": 60, "5m": 300, "15m": 900}[resName] || 900, lv0 = Number($("dbd0").value) || 10, lv1 = Number($("dbd1").value) || 20, lv2 = Number($("dbd2").value) || 30, slv = [1, 2, 3].filter(k => $("dbson" + k).checked).map(k => Number($("dbs" + k).value) || [10, 15, 20][k - 1]);
     const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, step = Number($("bstep").value) || 200, expSec = hmSec($("bexp").value);
     const minPct = isNaN(Number($("ipct").value)) ? 2 : Number($("ipct").value);
     if (!lot || expSec === null){ prog.className = "note l"; prog.textContent = "Check the BTC-per-lot box and the expiry time (HH:MM UTC)."; return; }
@@ -3047,7 +3053,7 @@ $("dbgo").onclick = async () => {
         const L = [{c: true, K: best.callShort.strike, side: -1, n: sold, e: best.callShort.bid}, {c: true, K: best.callLong.strike, side: 1, n: bought, e: best.callLong.ask},
                    {c: false, K: best.putShort.strike, side: -1, n: sold, e: best.putShort.bid}, {c: false, K: best.putLong.strike, side: 1, n: bought, e: best.putLong.ask}];
         const fees = L.reduce((t, l) => t + feeOpt(l.n, l.e, r.spot, lot), 0), margin = best.margin;
-        const slBase = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : margin;
+        const slBase = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : margin, capBaseLR = Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0;
         const pnlAt = t => { let v = 0; for (const l of L){ const m = mk(l.c, l.K, t, false); if (m === null) return null; v += l.side * (m - l.e) * l.n * lot; } return v - fees; };
         let minV = Infinity, minT = null, b0 = null, b1 = null, b2 = null; const path = [];
         for (let t = r.t0 + rs; t < E.tx; t += rs){
@@ -3134,7 +3140,7 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, rec: fin, recN: 0, trig: null};
+        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, trig: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
           const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2;
@@ -3185,36 +3191,30 @@ $("dbgo").onclick = async () => {
               }
             }
           }
-          // keep halving: every time BTC newly reaches the middle of a shoulder, close the side it is moving away from and re-sell it at half its current width (max 8 times)
+          // out of range: when BTC is X% beyond the profit range, close the side it is moving away from and rebuild that side so the new profit range is Y% (loss direction) / Z% (opposite) around the new price
           {
+            const trig = (Number($("lrtrig").value) || 0) / 100, dL = (Number($("lrdir").value) || 1) / 100, dO = (Number($("lropp").value) || 2) / 100, acc = (Number($("lracc").value) || 0) / 100 * (capBaseLR || margin);
             const iv = (c, K, S) => c ? Math.max(S - K, 0) : Math.max(K - S, 0);
-            let cur = L.slice(), cash = -fees, n = 0, armC = true, armP = true;
-            const shoulder = (legs, c) => { const lg = legs.find(l => l.c === c && l.side === 1), sh = legs.find(l => l.c === c && l.side === -1); return lg && sh ? [lg.K, sh.K] : null; };
-            for (const q of path){
-              const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue;
-              const sc = shoulder(cur, true), spp = shoulder(cur, false); if (!sc || !spp) break;
-              const cT3 = sc[0] + (sc[1] - sc[0]) * frac2, pT3 = spp[0] - (spp[0] - spp[1]) * frac2;
-              if (sp < cT3) armC = true; if (sp > pT3) armP = true;
-              let hit = null; if (sp >= cT3 && armC){ hit = "C"; armC = false; } else if (sp <= pT3 && armP){ hit = "P"; armP = false; }
-              if (!hit || n >= 8) continue;
-              const farCall = hit === "P", dirF = farCall ? 1 : -1, farL = cur.filter(l => l.c === farCall), nearL = cur.filter(l => l.c !== farCall), cf = closeV(farL, t, sp);
-              const fS = farL.find(l => l.side === -1), fB = farL.find(l => l.side === 1);
-              const av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, t, true)})).filter(x => x.m > 0);
-              if (cf === null || !fS || !fB || av.length < 3) continue;
-              const gap0 = Math.abs(fS.K - fB.K), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestH = null;
-              [0, 0.0025, 0.005, 0.01].forEach(a => {
-                const Kb = nr(sp * (1 + dirF * a)); if (!Kb) return; const Ks = nr(Kb.K + dirF * gap0 / 2);
-                if (!Ks || (farCall ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
-                const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(fS.n, pS, sp, lot) + feeOpt(fB.n, pB, sp, lot);
-                const nw = [{c: farCall, K: Ks.K, side: -1, n: fS.n, e: pS}, {c: farCall, K: Kb.K, side: 1, n: fB.n, e: pB}], all2 = nearL.concat(nw);
-                const Pc = cash + cf - fee2 + all2.reduce((tt, l) => tt + l.side * (iv(l.c, l.K, sp) - l.e) * l.n * lot, 0);
-                if (!bestH || Pc > bestH.Pc) bestH = {Pc, all2, fee2};
-              });
-              if (!bestH) continue;                       // width can no longer be halved on the strike grid: keep what we have
-              cash += cf - bestH.fee2; cur = bestH.all2; n++;
-              if (farCall){ armC = sp < (shoulder(cur, true)[0] + (shoulder(cur, true)[1] - shoulder(cur, true)[0]) * frac2); } else { const z = shoulder(cur, false); armP = sp > z[0] - (z[0] - z[1]) * frac2; }
+            let tO = null, up = null;
+            for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; if (sp > best.hi * (1 + trig)){ tO = t; up = true; break; } if (sp < best.lo * (1 - trig)){ tO = t; up = false; break; } }
+            if (tO !== null){
+              const sp = spotAt(tO), farCall = !up, dirF = farCall ? 1 : -1, farL = L.filter(l => l.c === farCall), nearL = L.filter(l => l.c !== farCall), cf = closeV(farL, tO, sp);
+              const fS = farL.find(l => l.side === -1), av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tO, true)})).filter(x => x.m > 0);
+              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin;        // if no acceptable rebuild exists the position is simply held
+              if (cf !== null && fS && av.length > 2){
+                const tLo = sp * (1 - (up ? dO : dL)), tHi = sp * (1 + (up ? dL : dO)), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestO = null;
+                [0, 0.0025, 0.005, 0.01, 0.015].forEach(a => [0.01, 0.015, 0.02, 0.03, 0.04].forEach(g => [1, 0.75, 0.5, 0.35].forEach(k => [0.2, 0.3, 0.4, 0.5, 0.7].forEach(rt => {
+                  const Kb = nr(sp * (1 + dirF * a)), Ks = nr(sp * (1 + dirF * (a + g))); if (!Kb || !Ks || (farCall ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
+                  const sl = Math.max(1, Math.round(fS.n * k)), bl = Math.max(1, Math.round(sl * rt)); if (bl >= sl) return;
+                  const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(sl, pS, sp, lot) + feeOpt(bl, pB, sp, lot);
+                  const nw = [{c: farCall, K: Ks.K, side: -1, n: sl, e: pS}, {c: farCall, K: Kb.K, side: 1, n: bl, e: pB}], all2 = nearL.concat(nw);
+                  const P = S => -fees + cf - fee2 + all2.reduce((t, l) => t + l.side * (iv(l.c, l.K, S) - l.e) * l.n * lot, 0);
+                  const worst = Math.min(P(sp), P(tLo), P(tHi)); if (worst < -acc) return;
+                  if (!bestO || worst > bestO.worst) bestO = {worst, all2, fee2, desc: `${farCall ? "calls" : "puts"}: buy ${Kb.K} ×${bl}, sell ${Ks.K} ×${sl}`};
+                }))));
+                if (bestO){ rv.outFin = -fees + cf - bestO.fee2 + settleV(bestO.all2); rv.outDesc = bestO.desc; }
+              }
             }
-            rv.rec = cash + settleV(cur); rv.recN = n;
           }
         }
         Object.assign(row, {sls, adj, rv, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
@@ -3265,7 +3265,7 @@ $("dbgo").onclick = async () => {
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin]];
         slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half], ["Same, repeated every time BTC reaches a mid-shoulder again (max 8)", r => r.rv.rec]);
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge], ["At mid-shoulder: close all", r => r.rv.all], ["At mid-shoulder: close only the threatened side", r => r.rv.side], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin]);
         if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin]);
         const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
@@ -3276,7 +3276,7 @@ $("dbgo").onclick = async () => {
               return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(t)}"><b>${usd(t)}</b></td><td class="l">${usd(Math.min(...v))}</td><td class="${sg(lt)}">${usd(lt)}</td><td>${lv.filter(x => x > 0).length} of ${LD.length}</td><td>${LD.filter((r, i) => lv[i] > r.fin + 0.5).length}</td><td>${ok.filter((r, i) => v[i] > r.fin + 0.5).length} / ${ok.filter((r, i) => v[i] < r.fin - 0.5).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
-              return `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)} → ${f(r.settle, 0)}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${r.rv.trig ? tz(r.rv.trig.t) + " · " + f(r.rv.trig.spot, 0) : "no"}${r.rv.recN ? "<br><span class=\"note\">" + r.rv.recN + " halvings</span>" : ""}</td>${vals.map((v, i) => `<td class="${sg(v)}">${usd(v)}</td>`).join("")}<td><b>${RL[bi][0]}</b><br><span class="note">${usd(vals[bi])}</span></td></tr>`; }).join("") + `</tbody></table></div>`;
+              return `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)} → ${f(r.settle, 0)}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${r.rv.trig ? tz(r.rv.trig.t) + " · " + f(r.rv.trig.spot, 0) : "no"}${r.rv.out ? "<br><span class=\"note\">out of range " + tz(r.rv.out.t) + " · " + f(r.rv.out.spot, 0) + (r.rv.outDesc ? ": " + r.rv.outDesc : ": no rebuild fits") + "</span>" : ""}</td>${vals.map((v, i) => `<td class="${sg(v)}">${usd(v)}</td>`).join("")}<td><b>${RL[bi][0]}</b><br><span class="note">${usd(vals[bi])}</span></td></tr>`; }).join("") + `</tbody></table></div>`;
         }
       }
       h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${$("dbadj").checked ? slv.map(X => `<th>Re-center + ${X}% SL</th>`).join("") : ""}${slv.map(X => `<th>Exit at ${X}% SL${$("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? "<br>(" + usd(-X / 100 * Number($("ifunds").value)) + ")" : ""}</th>`).join("")}</tr></thead><tbody>` +
