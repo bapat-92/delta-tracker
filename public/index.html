@@ -366,6 +366,11 @@ h1{padding-right:170px}
     </div>
     <div id="dbxmsg" class="note"></div>
   </details>
+  <details open style="margin:6px 0"><summary><b>Daily automatic backtest (GitHub Actions, frozen settings)</b></summary>
+    <p class="note" style="margin:4px 0 8px">A GitHub job runs the Python backtest every day after expiry with the frozen settings and sends the summary here. Nothing is placed or changed on the exchange.</p>
+    <button id="autoload" type="button">Load the latest automatic report</button>
+    <div id="automsg" class="note"></div><div id="autoout"></div>
+  </details>
   <div id="dbprog" class="note"></div>
   <div id="dbout"></div>
 </div>
@@ -2932,6 +2937,24 @@ $("dbxgo").onclick = async () => {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} a.remove(); }, 1500);
     m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
   } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
+};
+$("autoload").onclick = async () => {
+  const m = $("automsg"), o = $("autoout"); o.textContent = ""; m.textContent = "Loading...";
+  try{
+    const r = await fetch("/api/backtest", {headers: {Authorization: "Bearer " + pw}});
+    if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? "cloud storage not set up" : "HTTP " + r.status);
+    const d = await r.json();
+    if (!d || !d.by_hour){ m.textContent = "No report yet. Run the 'daily-backtest' workflow once from the GitHub Actions tab."; return; }
+    const ageH = (Date.now() - new Date(d.computed_at).getTime()) / 3600000, c = d.config || {};
+    m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + (ageH > 48 ? " · STALE: the daily job may have stopped, check GitHub Actions" : "");
+    const t = document.createElement("table"), hd = ["Entry (h before expiry)", "CET (winter)", "Days", "Win %", "Total $", "Avg $", "Worst final $", "Worst open $", "Hit 10%", "Hit 20%", "Hit 30%"];
+    t.innerHTML = "<tr>" + hd.map(x => "<th>" + x + "</th>").join("") + "</tr>";
+    for (const x of d.by_hour){
+      const cet = ((13 - x.hours_before) % 24 + 24) % 24, tr = t.insertRow();
+      [x.hours_before, String(Math.floor(cet)).padStart(2, "0") + ":" + String(Math.round((cet % 1) * 60)).padStart(2, "0"), x.days, x.win_pct, x.total, x.avg, x.worst_final, x.worst_open, x.hit10, x.hit20, x.hit30].forEach(v => { tr.insertCell().textContent = v; });
+    }
+    o.appendChild(t);
+  }catch(e){ m.textContent = "Could not load: " + e.message; }
 };
 $("dbclr").onclick = async () => { await idbClear(); dbCache.hits = dbCache.miss = 0; dbCacheInfo(); };
 dbCacheInfo();
