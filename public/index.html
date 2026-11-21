@@ -382,7 +382,8 @@ h1{padding-right:170px}
 
 <div class="card" id="h24Card">
   <b>Position P&amp;L over the last 24 hours</b>
-  <p class="note" style="margin:4px 0 8px">Takes the legs you hold now and marks them to Delta's mark prices for the past 24 hours, by the minute if you like, so you can see how this position would have moved. It is not a record of what you actually held: before you opened the position, the line shows what it would have been worth.</p>
+  <!-- Reference: Takes the legs you hold now and marks them to Delta's mark prices for the past 24 hours, by the minute if you like, so you can see how this position would have moved. It is not a record of what you actually held: before you opened the position, the line shows what it would have been worth. -->
+  <p class="note" style="margin:4px 0 8px">Uses the legs in the position table.<br>Shows their P&amp;L each minute for the last 24 hours, at Delta's mark prices.<br>Before you opened them, it shows what they would have been worth.</p>
   <div class="row" style="margin:8px 0">
     <button id="h24go">Load last 24 hours, by the minute</button>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="h24auto" type="checkbox" style="width:auto"> Refresh every minute</label>
