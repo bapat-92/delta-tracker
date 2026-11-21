@@ -7,6 +7,15 @@ on:
     inputs:
       from_date: { description: "From date YYYY-MM-DD (blank = last 30 days)", required: false, default: "" }
       to_date: { description: "To date YYYY-MM-DD (blank = same as from)", required: false, default: "" }
+      capital: { description: "Capital in USD (blank = file value, 5000)", required: false, default: "" }
+      share: { description: "Margin share of capital in % (blank = 100)", required: false, default: "" }
+      ratio: { description: "Bought / sold lots (blank = 0.3)", required: false, default: "" }
+      spread: { description: "Half-spread in % (blank = 2)", required: false, default: "" }
+      minpct: { description: "Minimum profit at spot, % of margin (blank = 3)", required: false, default: "" }
+      hours: { description: "Entry hours before expiry, e.g. 9,8,7,6,5,4 (blank = file value)", required: false, default: "" }
+concurrency:
+  group: backtest
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
@@ -29,6 +38,12 @@ jobs:
         env:
           FROM_DATE: ${{ inputs.from_date }}
           TO_DATE: ${{ inputs.to_date }}
+          CAPITAL: ${{ inputs.capital }}
+          SHARE: ${{ inputs.share }}
+          RATIO: ${{ inputs.ratio }}
+          SPREAD: ${{ inputs.spread }}
+          MINPCT: ${{ inputs.minpct }}
+          HOURS: ${{ inputs.hours }}
           TRACKER_URL: ${{ secrets.TRACKER_URL }}
           TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
