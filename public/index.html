@@ -370,7 +370,7 @@ h1{padding-right:170px}
       <label>Capital $<input id="rcap" type="number" placeholder="5000"></label><label>Margin share %<input id="rshare" type="number" placeholder="100"></label>
       <label>Spread % (comma = several runs, e.g. 1,2)<input id="rspr" type="text" placeholder="2"></label><label>Min profit %<input id="rmin" type="number" placeholder="3"></label>
       <label>Entry hours before expiry<input id="rhrs" type="text" placeholder="9,8,7,6,5,4"></label>
-      <button id="runbt" type="button">Run on GitHub</button>
+      <button id="runbt" type="button">Run on GitHub</button><button id="runchk" type="button">Test GitHub token</button>
     </div>
     <div class="row"><label>Saved reports<select id="autosel"><option value="latest">Latest 30-day report</option></select></label><button id="autolist" type="button">Refresh list</button><button id="autoload" type="button">Show report</button></div>
     <div id="automsg" class="note"></div><div id="autoout"></div>
@@ -2941,6 +2941,10 @@ $("dbxgo").onclick = async () => {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} a.remove(); }, 1500);
     m.textContent = `Downloaded ${name}: ${f(rows, 0)} rows from ${used} series, ${f(blob.size / 1048576, 1)} MB.`;
   } catch (e){ m.className = "note l"; m.textContent = "Export failed: " + e.message; }
+};
+$("runchk").onclick = async () => {
+  const m = $("automsg"); if (!pw){ m.textContent = "Connect with your passphrase first (Cloud sync card)."; return; }
+  try{ const r = await fetch("/api/run?check=1", {headers: {Authorization: "Bearer " + pw}}); m.textContent = "Token check: " + JSON.stringify(await r.json()); }catch(e){ m.textContent = "Check failed: " + e.message; }
 };
 $("runbt").onclick = async () => {
   const m = $("automsg"); if (!pw){ m.textContent = "Connect with your passphrase first (Cloud sync card)."; return; }
