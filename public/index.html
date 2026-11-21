@@ -352,7 +352,6 @@ h1{padding-right:170px}
     <label>Loss-day test "out of range": trigger, % of BTC beyond the profit range<input id="lrtrig" type="number" min="0" step="0.05" value="0.2"></label>
     <label>…new profit range reaches, % of BTC price, in the loss direction<input id="lrdir" type="number" min="0.1" step="0.1" value="1"></label>
     <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
-    <label>…accepted loss anywhere in that range, % of capital<input id="lracc" type="number" min="0" step="0.5" value="1"></label>
     <label>Stop-loss % is taken of<select id="dbsb"><option value="cap" selected>Initial capital (Inverted Batman card)</option><option value="mar">Estimated margin of the position</option></select></label>
     <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson1" type="checkbox" style="width:auto" checked> Stop-loss 1 (%)<input id="dbs1" type="number" min="1" step="1" value="10" style="max-width:90px"></label>
     <label style="flex-direction:row;align-items:center;gap:8px"><input id="dbson2" type="checkbox" style="width:auto" checked> Stop-loss 2 (%)<input id="dbs2" type="number" min="1" step="1" value="15" style="max-width:90px"></label>
@@ -3193,7 +3192,7 @@ $("dbgo").onclick = async () => {
           }
           // out of range: when BTC is X% beyond the profit range, close the side it is moving away from and rebuild that side so the new profit range is Y% (loss direction) / Z% (opposite) around the new price
           {
-            const trig = (Number($("lrtrig").value) || 0) / 100, dL = (Number($("lrdir").value) || 1) / 100, dO = (Number($("lropp").value) || 2) / 100, acc = (Number($("lracc").value) || 0) / 100 * (capBaseLR || margin);
+            const trig = (Number($("lrtrig").value) || 0) / 100, dL = (Number($("lrdir").value) || 1) / 100, dO = (Number($("lropp").value) || 2) / 100;
             const iv = (c, K, S) => c ? Math.max(S - K, 0) : Math.max(K - S, 0);
             let tO = null, up = null;
             for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; if (sp > best.hi * (1 + trig)){ tO = t; up = true; break; } if (sp < best.lo * (1 - trig)){ tO = t; up = false; break; } }
@@ -3209,7 +3208,7 @@ $("dbgo").onclick = async () => {
                   const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(sl, pS, sp, lot) + feeOpt(bl, pB, sp, lot);
                   const nw = [{c: farCall, K: Ks.K, side: -1, n: sl, e: pS}, {c: farCall, K: Kb.K, side: 1, n: bl, e: pB}], all2 = nearL.concat(nw);
                   const P = S => -fees + cf - fee2 + all2.reduce((t, l) => t + l.side * (iv(l.c, l.K, S) - l.e) * l.n * lot, 0);
-                  const worst = Math.min(P(sp), P(tLo), P(tHi)); if (worst < -acc) return;
+                  const worst = Math.min(P(sp), P(tLo), P(tHi));
                   if (!bestO || worst > bestO.worst) bestO = {worst, all2, fee2, desc: `${farCall ? "calls" : "puts"}: buy ${Kb.K} ×${bl}, sell ${Ks.K} ×${sl}`};
                 }))));
                 if (bestO){ rv.outFin = -fees + cf - bestO.fee2 + settleV(bestO.all2); rv.outDesc = bestO.desc; }
