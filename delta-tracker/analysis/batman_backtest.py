@@ -64,7 +64,7 @@ def spot_series(E):
     return KK[j] + C[r, j] - P[r, j]          # spot at the END of each minute row (candle close)
 
 # ---------------------------------------------------------------- search (port of batmanSearch)
-def search(E, row, S, sold, bought, lev, minpct, spr, balanced=False):
+def search(E, row, S, sold, bought, lev, minpct, spr, balanced=False, equi=None):
     typ, K, o = E["typ"], E["strike"], E["op"][row]
     ok = ~np.isnan(o) & (o > 0)
     bid, ask = o * (1 - spr), o * (1 + spr)
@@ -87,10 +87,13 @@ def search(E, row, S, sold, bought, lev, minpct, spr, balanced=False):
     if not cps or not pps: return None
     margin = sold * 2 * Q * S / lev; thr = margin * minpct / 100
     PA = np.stack([p[3] for p in pps]); G = len(grid); best = None
+    if equi is not None:                       # equidistant: sold call/put equally far from spot, and the bought legs too (within `equi` dollars)
+        psh = np.array([K[p[1]] for p in pps]); plg = np.array([K[p[0]] for p in pps])
     for (clg, csh, ccr, carr) in cps:
         T = carr[None, :] + PA
         m = T >= thr
         good = m[:, iS]
+        if equi is not None: good = good & (np.abs((K[csh] - S) - (S - psh)) <= equi) & (np.abs((K[clg] - S) - (S - plg)) <= equi)
         if not good.any(): continue
         idx = np.where(good)[0]; mm = m[idx]
         left = mm[:, :iS][:, ::-1]; right = mm[:, iS + 1:]
@@ -105,13 +108,13 @@ def search(E, row, S, sold, bought, lev, minpct, spr, balanced=False):
     return best
 
 # ---------------------------------------------------------------- simulate one entry
-def simulate(E, spot, row, sold, bought, lev, minpct, spr, levels=(10, 20, 30), cap=None, balanced=False):
+def simulate(E, spot, row, sold, bought, lev, minpct, spr, levels=(10, 20, 30), cap=None, balanced=False, equi=None):
     S = spot[row - 1] if row > 0 else spot[row]        # spot at the entry minute (end of previous candle)
     if cap:                                            # size the lots from capital like the tracker: margin = capital * share%
         per = Q * S / lev; sold = int(cap["capital"] * cap["share"] / 100 / (2 * per) / 10) * 10
         if sold < 10: return None
         bought = max(1, round(sold * cap["ratio"]))
-    b = search(E, row, S, sold, bought, lev, minpct, spr, balanced)
+    b = search(E, row, S, sold, bought, lev, minpct, spr, balanced, equi)
     if b is None: return None
     K, typ, o, cl = E["strike"], E["typ"], E["op"][row], E["cl"]
     legs = [(b["c"][1], -1, sold, o[b["c"][1]] * (1 - spr)), (b["c"][0], 1, bought, o[b["c"][0]] * (1 + spr)),
@@ -142,12 +145,12 @@ def simulate(E, spot, row, sold, bought, lev, minpct, spr, levels=(10, 20, 30), 
     return res
 
 def work(args):
-    day, E, hours, sold, bought, lev, minpct, spr, cap = args[:9]; balanced = bool(args[9]) if len(args) > 9 else False
+    day, E, hours, sold, bought, lev, minpct, spr, cap = args[:9]; balanced = bool(args[9]) if len(args) > 9 else False; equi = args[10] if len(args) > 10 else None
     spot = spot_series(E); res = []
     for h in hours:            # h = entry time as hours before expiry (12:00 UTC)
         t0 = E["tx"] - int(h * 3600); row = int((t0 - E["times"][0]) // 60)
         if row < 1 or row >= len(E["times"]) - 5: continue
-        r = simulate(E, spot, row, sold, bought, lev, minpct, spr, cap=cap, balanced=balanced)
+        r = simulate(E, spot, row, sold, bought, lev, minpct, spr, cap=cap, balanced=balanced, equi=equi)
         res.append(dict(expiry=day, hours_before=h, entry_utc=pd.Timestamp(t0, unit="s").strftime("%Y-%m-%d %H:%M"), **(r or {"none": True})))
     return res
 
@@ -160,7 +163,7 @@ def main():
     ap.add_argument("--hours", default="22,7", help="comma list of hours before expiry (12:00 UTC) or 'all'")
     ap.add_argument("--capital", type=float, default=0, help="size lots from this capital (USD), like the tracker's Auto-size")
     ap.add_argument("--share", type=float, default=25, help="margin share of capital in %% (tracker default 25)"); ap.add_argument("--ratio", type=float, default=0.30, help="bought / sold")
-    ap.add_argument("--balanced", action="store_true", help="prefer the smaller side of the profit range as large as possible"); ap.add_argument("--last", type=int, default=0, help="only the last N expiries"); ap.add_argument("--out", default="/tmp/bt_out.csv"); ap.add_argument("--procs", type=int, default=4)
+    ap.add_argument("--balanced", action="store_true", help="prefer the smaller side of the profit range as large as possible"); ap.add_argument("--equi", type=float, default=None, help="equidistant strikes: sold/bought call and put equally far from spot, within this many dollars (e.g. 200)"); ap.add_argument("--last", type=int, default=0, help="only the last N expiries"); ap.add_argument("--out", default="/tmp/bt_out.csv"); ap.add_argument("--procs", type=int, default=4)
     a = ap.parse_args()
     if a.config:                                   # frozen parameters from the file, unless given on the command line
         import json; C = json.load(open(a.config)); given = {x.lstrip("-").split("=")[0].replace("-", "_") for x in sys.argv[1:] if x.startswith("--")}
@@ -170,7 +173,7 @@ def main():
     days = sorted(D)[-a.last:] if a.last else sorted(D)
     hours = list(range(22, 1, -1)) if a.hours == "all" else [float(x) for x in a.hours.split(",")]
     cap = dict(capital=a.capital, share=a.share, ratio=a.ratio) if a.capital else None
-    jobs = [(d, D[d], hours, a.sold, a.bought, a.lev, a.minpct, a.spread / 100, cap, a.balanced) for d in days]
+    jobs = [(d, D[d], hours, a.sold, a.bought, a.lev, a.minpct, a.spread / 100, cap, a.balanced, a.equi) for d in days]
     with Pool(a.procs) as p: rs = [r for chunk in p.imap(work, jobs) for r in chunk]
     df = pd.DataFrame(rs); df.to_csv(a.out, index=False); print("wrote", a.out, len(rs), "rows in", round(time.time() - t, 1), "s")
     if a.summary and "final" in df:
