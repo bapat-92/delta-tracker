@@ -342,11 +342,8 @@ h1{padding-right:170px}
     <label>Loss level 3 (% of capital used)<input id="dbd2" type="number" min="1" value="30"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbA" type="checkbox" style="width:auto" checked> 15:00 CET day before</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto" checked> Apply the re-center adjustment (trigger point and thresholds from the Re-center planner card)</label>
-    <label>Adjustment must leave at least this much at the new centre ($, negative allows a smaller loss; blank = the Re-center card's minimum)<input id="dbamin" type="number" step="10" placeholder="blank"></label>
-    <label>Accept an adjustment that leaves up to this loss at the new centre (% of capital used, 0 = must break even)<input id="dbapct" type="number" min="0" step="0.5" value="5"></label>
-    <label>Pick the adjustment with<select id="dbrank"><option value="at">the best result at the new centre (loss-cutting)</option><option value="width">the widest profit range</option></select></label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbexit" type="checkbox" style="width:auto" checked> Also test "exit everything when BTC leaves the profit range" (no adjustment)</label>
+    <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
+    <span hidden><input id="dbadj" type="checkbox"><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select><input id="dbexit" type="checkbox"></span>
     <button id="dbgo">Run the backtest</button>
     <button id="dbcsv" type="button" disabled>Download results as CSV</button>
     <button id="dbclr" type="button">Clear saved candles</button>
@@ -366,9 +363,9 @@ h1{padding-right:170px}
     </div>
     <div id="dbxmsg" class="note"></div>
   </details>
-  <details open style="margin:6px 0"><summary><b>Daily automatic backtest (GitHub Actions, frozen settings)</b></summary>
-    <p class="note" style="margin:4px 0 8px">A GitHub job runs the Python backtest every day after expiry with the frozen settings and sends the summary here. Nothing is placed or changed on the exchange.</p>
-    <button id="autoload" type="button">Load the latest automatic report</button>
+  <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
+    <p class="note" style="margin:4px 0 8px">Start it only when you want it: GitHub repo, Actions tab, daily-backtest, Run workflow. When it finishes (a few minutes), press the button below to see the result.</p>
+    <button id="autoload" type="button">Show the latest report</button>
     <div id="automsg" class="note"></div><div id="autoout"></div>
   </details>
   <div id="dbprog" class="note"></div>
@@ -2944,9 +2941,9 @@ $("autoload").onclick = async () => {
     const r = await fetch("/api/backtest", {headers: {Authorization: "Bearer " + pw}});
     if (!r.ok) throw new Error(r.status === 401 ? "wrong passphrase" : r.status === 503 ? "cloud storage not set up" : "HTTP " + r.status);
     const d = await r.json();
-    if (!d || !d.by_hour){ m.textContent = "No report yet. Run the 'daily-backtest' workflow once from the GitHub Actions tab."; return; }
+    if (!d || !d.by_hour){ m.textContent = "No report yet. Start the 'daily-backtest' workflow from the GitHub Actions tab."; return; }
     const ageH = (Date.now() - new Date(d.computed_at).getTime()) / 3600000, c = d.config || {};
-    m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + (ageH > 48 ? " · STALE: the daily job may have stopped, check GitHub Actions" : "");
+    m.textContent = `Computed ${ageH < 48 ? Math.round(ageH) + " hours" : Math.round(ageH / 24) + " days"} ago · ${d.expiries.length} expiries (${d.expiries[0]} to ${d.expiries[d.expiries.length - 1]}) · capital $${c.capital}, ${c.share}% margin, ratio ${c.ratio}, spread ${c.spread}%, min profit ${c.minpct}%` + (d.failed && d.failed.length ? ` · failed downloads: ${d.failed.join(", ")}` : "") + "";
     const t = document.createElement("table"), hd = ["Entry (h before expiry)", "CET (winter)", "Days", "Win %", "Total $", "Avg $", "Worst final $", "Worst open $", "Hit 10%", "Hit 20%", "Hit 30%"];
     t.innerHTML = "<tr>" + hd.map(x => "<th>" + x + "</th>").join("") + "</tr>";
     for (const x of d.by_hour){
