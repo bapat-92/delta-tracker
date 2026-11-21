@@ -8,7 +8,7 @@
   },
   "vars": {
     "APP_PASSPHRASE": "418344043831",
-    "GH_TOKEN": "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"
+    "GH_TOKEN": "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"
   },
   "kv_namespaces": [
     { "binding": "STORE", "id": "3198476cc60640f1bffe430914c03d99" }
