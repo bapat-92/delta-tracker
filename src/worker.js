@@ -50,21 +50,48 @@ async function handleCandles(request, env, url) {
 }
 
 // Daily backtest report written by the GitHub Actions job (small JSON), read by the page.
-async function handleBacktest(request, env) {
+async function handleBacktest(request, env, url) {
   const bad = await authorize(request, env);
   if (bad) return bad;
+  const name = (url.searchParams.get("name") || "latest").replace(/[^0-9A-Za-z_-]/g, "").slice(0, 40) || "latest";   // "latest" or a date range like 2026-05-01_2026-05-31
   if (request.method === "GET") {
-    const v = await env.STORE.get("backtest:latest");
+    const v = await env.STORE.get("backtest:" + name);
     return new Response(v === null ? "null" : v, { headers: HEAD });
   }
   if (request.method === "PUT") {
     const text = await request.text();
     if (text.length > 900000) return json({ error: "too large" }, 413);
     try { JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
-    await env.STORE.put("backtest:latest", text);
+    await env.STORE.put("backtest:" + name, text);
     return json({ ok: true });
   }
   return json({ error: "method not allowed" }, 405);
+}
+
+// Starts the GitHub "daily-backtest" workflow with the settings typed on the page.
+// Needs the Worker secret GH_TOKEN (fine-grained token, only this repo, permission Actions: read and write). Optional variable GH_REPO (default below).
+const RUN_FIELDS = { from_date: /^\d{4}-\d{2}-\d{2}$/, to_date: /^\d{4}-\d{2}-\d{2}$/, capital: /^\d{1,9}(\.\d+)?$/, share: /^\d{1,3}(\.\d+)?$/, ratio: /^\d{1,2}(\.\d+)?$/, spread: /^\d{1,2}(\.\d+)?$/, minpct: /^\d{1,3}(\.\d+)?$/, hours: /^\d{1,2}(\.\d+)?(,\d{1,2}(\.\d+)?){0,11}$/ };
+async function handleRun(request, env) {
+  const bad = await authorize(request, env);
+  if (bad) return bad;
+  if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
+  if (!env.GH_TOKEN) return json({ error: "Worker is missing: secret GH_TOKEN (see the setup note)" }, 503);
+  let body; try { body = await request.json(); } catch (e) { return json({ error: "bad json" }, 400); }
+  const inputs = {};
+  for (const [k, re] of Object.entries(RUN_FIELDS)) {
+    const v = String(body[k] ?? "").trim();
+    if (v === "") continue;
+    if (!re.test(v)) return json({ error: "bad value for " + k }, 400);
+    inputs[k] = v;
+  }
+  const repo = env.GH_REPO || "bapat-92/delta-tracker";
+  const r = await fetch("https://api.github.com/repos/" + repo + "/actions/workflows/daily-backtest.yml/dispatches", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + env.GH_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "delta-tracker", "X-GitHub-Api-Version": "2022-11-28", "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: env.GH_REF || "main", inputs }),
+  });
+  if (r.status === 204) return json({ ok: true });
+  return json({ error: "GitHub answered " + r.status + ": " + (await r.text()).slice(0, 200) }, 502);
 }
 
 async function handleState(request, env, url) {
@@ -100,8 +127,9 @@ export default {
     if (url.pathname === "/api/state" || url.pathname.startsWith("/api/state/")) {
       return handleState(request, env, url);
     }
+    if (url.pathname === "/api/run") return handleRun(request, env);
     if (url.pathname === "/api/backtest") {
-      return handleBacktest(request, env);
+      return handleBacktest(request, env, url);
     }
     if (url.pathname.startsWith("/api/candles/")) {
       return handleCandles(request, env, url);
