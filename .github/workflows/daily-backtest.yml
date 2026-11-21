@@ -25,7 +25,7 @@ jobs:
           key: candles-${{ github.run_id }}
           restore-keys: candles-
       - name: Run backtest
-        run: python analysis/daily_job.py
+        run: python delta-tracker/analysis/daily_job.py.
         env:
           FROM_DATE: ${{ inputs.from_date }}
           TO_DATE: ${{ inputs.to_date }}
