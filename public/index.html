@@ -346,6 +346,7 @@ h1{padding-right:170px}
     <label>Adjustment must leave at least this much at the new centre ($, negative allows a smaller loss; blank = the Re-center card's minimum)<input id="dbamin" type="number" step="10" placeholder="blank"></label>
     <label>Accept an adjustment that leaves up to this loss at the new centre (% of capital used, 0 = must break even)<input id="dbapct" type="number" min="0" step="0.5" value="5"></label>
     <label>Pick the adjustment with<select id="dbrank"><option value="at">the best result at the new centre (loss-cutting)</option><option value="width">the widest profit range</option></select></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbexit" type="checkbox" style="width:auto" checked> Also test "exit everything when BTC leaves the profit range" (no adjustment)</label>
     <button id="dbgo">Run the backtest</button>
     <button id="dbclr" type="button">Clear saved candles</button>
     <button id="dbsync" type="button">Upload this browser's saved candles to the cloud</button>
@@ -389,6 +390,7 @@ h1{padding-right:170px}
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="h24auto" type="checkbox" style="width:auto"> Refresh every minute</label>
   </div>
   <div id="h24msg" class="note"></div>
+  <div id="h24legs"></div>
   <div id="h24out"></div>
 </div>
 
@@ -2989,7 +2991,24 @@ $("dbgo").onclick = async () => {
             }
           }
         }
-        Object.assign(row, {adj, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
+
+        // ---- optional simple rule: close all four legs at the first step where BTC is outside the profit range ----
+        let ex = null;
+        if ($("dbexit").checked){
+          let mV2 = Infinity, c0 = null, c1 = null, c2 = null;
+          for (let t = r.t0 + rs; t < E.tx; t += rs){
+            const v = pnlAt(t); if (v !== null){ if (v < mV2) mV2 = v; if (c0 === null && v <= -lv0 / 100 * margin) c0 = t; if (c1 === null && v <= -lv1 / 100 * margin) c1 = t; if (c2 === null && v <= -lv2 / 100 * margin) c2 = t; }
+            const cb = byT.get(Math.floor((t - 300) / 300) * 300); if (!cb || !(cb.close < best.lo || cb.close > best.hi)) continue;
+            let pv = -fees, okc = true;
+            for (const l of L){ const m = mk(l.c, l.K, t, false); if (m === null){ okc = false; break; } const px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); pv += l.side * (px - l.e) * l.n * lot - feeOpt(l.n, px, cb.close, lot); }
+            if (!okc) continue;
+            if (pv < mV2) mV2 = pv;
+            if (c0 === null && pv <= -lv0 / 100 * margin) c0 = t; if (c1 === null && pv <= -lv1 / 100 * margin) c1 = t; if (c2 === null && pv <= -lv2 / 100 * margin) c2 = t;
+            ex = {t, spot: cb.close, fin: pv, minV: mV2, b0: c0, b1: c1, b2: c2};
+            break;
+          }
+        }
+        Object.assign(row, {ex, adj, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
           strikes: `${best.putShort.strike}/${best.putLong.strike} · ${best.callLong.strike}/${best.callShort.strike}`});
         results.push(row);
       });
@@ -3019,9 +3038,18 @@ $("dbgo").onclick = async () => {
           `<div class="kpi" style="margin:6px 0"><div>Finished in profit<b class="${winsA >= ok.length / 2 ? "g" : "l"}">${winsA} (${f(winsA / ok.length * 100, 0)}%)</b><span class="note">before ${wins.length}</span></div><div>Total P&amp;L<b class="${sg(totA)}">${usd(totA)}</b><span class="note">before ${usd(tot)}</span></div><div>Better / worse days<b>${impr} / ${worse}</b></div><div>Loss days only: total<b class="${sg(lossA)}">${usd(lossA)}</b><span class="note">before ${usd(lossB)} on ${lossDays.length} days</span></div><div>Worst day<b class="l">${usd(Math.min(...fa))}</b><span class="note">before ${usd(Math.min(...ok.map(r => r.fin)))}</span></div>` +
           `<div>Open loss reached ${lv0}%<b>${cnt("b0")} of ${ok.length}</b><span class="note">before ${h0.length}</span></div><div>Open loss reached ${lv1}%<b>${cnt("b1")} of ${ok.length}</b><span class="note">before ${h1.length}</span></div><div>Open loss reached ${lv2}%<b>${cnt("b2")} of ${ok.length}</b><span class="note">before ${h2.length}</span></div></div>`;
       }
-      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}</tr></thead><tbody>` +
-        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${$("dbadj").checked ? 12 : 8}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
-          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}</tr>`).join("") + `</tbody></table></div>`;
+      if ($("dbexit").checked){
+        const fe = ok.map(r => r.ex ? r.ex.fin : r.fin), nEx = ok.filter(r => r.ex).length, totE = fe.reduce((t, v) => t + v, 0), winsE = fe.filter(v => v > 0).length;
+        const imp = ok.filter((r, i) => fe[i] > r.fin + 0.5).length, wor = ok.filter((r, i) => fe[i] < r.fin - 0.5).length;
+        const cntE = k => ok.filter(r => (r.ex ? r.ex[k] : r[k]) !== null).length;
+        const lossD = ok.filter(r => r.fin < 0), lB = lossD.reduce((t, r) => t + r.fin, 0), lE = lossD.reduce((t, r) => t + (r.ex ? r.ex.fin : r.fin), 0);
+        h += `<p style="margin:10px 0 4px"><b>Same days, exiting when BTC leaves the profit range</b> <span class="note">(close all four legs at the first ${resName} step BTC is below the lower or above the upper end of the profit range; no adjustment; ${nEx} of ${ok.length} days exited, the others ran to expiry as before)</span></p>` +
+          `<div class="kpi" style="margin:6px 0"><div>Finished in profit<b class="${winsE >= ok.length / 2 ? "g" : "l"}">${winsE} (${f(winsE / ok.length * 100, 0)}%)</b><span class="note">holding: ${wins.length}</span></div><div>Total P&amp;L<b class="${sg(totE)}">${usd(totE)}</b><span class="note">holding: ${usd(tot)}</span></div><div>Average per day<b class="${sg(totE)}">${usd(totE / ok.length)}</b></div><div>Better / worse than holding<b>${imp} / ${wor}</b></div><div>Loss days only: total<b class="${sg(lE)}">${usd(lE)}</b><span class="note">holding ${usd(lB)} on ${lossD.length} days</span></div><div>Worst day<b class="l">${usd(Math.min(...fe))}</b><span class="note">holding ${usd(Math.min(...ok.map(r => r.fin)))}</span></div>` +
+          `<div>Open loss reached ${lv0}%<b>${cntE("b0")} of ${ok.length}</b><span class="note">holding ${h0.length}</span></div><div>Open loss reached ${lv1}%<b>${cntE("b1")} of ${ok.length}</b><span class="note">holding ${h1.length}</span></div><div>Open loss reached ${lv2}%<b>${cntE("b2")} of ${ok.length}</b><span class="note">holding ${h2.length}</span></div></div>`;
+      }
+      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Final P&amp;L</th><th>Worst open loss (% of margin)</th><th>${lv0}% reached</th><th>${lv1}% reached</th><th>${lv2}% reached</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${$("dbexit").checked ? "<th>Exit at (CET) · BTC</th><th>Final if exited</th><th>Change vs holding</th>" : ""}</tr></thead><tbody>` +
+        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${8 + ($("dbadj").checked ? 4 : 0) + ($("dbexit").checked ? 3 : 0)}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
+          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td><td>${r.b0 ? tz(r.b0) : "–"}</td><td>${r.b1 ? tz(r.b1) : "–"}</td><td>${r.b2 ? tz(r.b2) : "–"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}${$("dbexit").checked ? (r.ex ? `<td>${tz(r.ex.t)} · ${f(r.ex.spot, 0)}</td><td class="${sg(r.ex.fin)}"><b>${usd(r.ex.fin)}</b></td><td class="${sg(r.ex.fin - r.fin)}">${r.ex.fin - r.fin >= 0 ? "+" : ""}${usd(r.ex.fin - r.fin)}</td>` : `<td colspan="3" class="note">stayed in range, held to expiry</td>`) : ""}</tr>`).join("") + `</tbody></table></div>`;
     });
     h += `<p class="note">How to read this: "Open loss" is the mark-to-market loss of the four legs at any ${resName === "1m" ? "1-minute" : resName === "5m" ? "5-minute" : "15-minute"} step before expiry (before any closing costs), compared with the estimated margin. Delta's history has no bid and ask, so fills are the mark price plus or minus the assumed half-spread, and the delta filter is switched off for this test. Strikes without a historical price at the entry time are skipped. The result at expiry uses BTC's price at the expiry time from Delta's index candles.</p>`;
     out.innerHTML = h; prog.className = "note"; prog.textContent = `Done: ${results.filter(r => !r.none).length} setups from ${exps.length} expiries.`;
@@ -3665,6 +3693,8 @@ async function h24Load(){
   try {
     m.className = "note"; m.textContent = "Loading minute prices for the legs…";
     const D = await h24Data(true), {pts, usable, missing, res} = D; h24Shown = D.key;
+    $("h24legs").innerHTML = `<div class="wrap"><table><thead><tr><th style="text-align:left">Leg</th><th>Side</th><th>Lots</th><th>Entry</th><th>Price data</th></tr></thead><tbody>` +
+      legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)).map(L => `<tr><td style="text-align:left">${esc(L.s)}</td><td>${L.side === -1 ? "Sold" : "Bought"}</td><td>${f(Number(L.lots), 0)}</td><td>${f(Number(L.entry) || 0, 2)}</td><td class="${missing.includes(L.s) ? "l" : ""}">${missing.includes(L.s) ? "missing" : "ok"}</td></tr>`).join("") + `</tbody></table></div>`;
     const W = 900, H = 260, L0 = 56, R = 12, T = 12, B = 30, vals = pts.map(p => p.pnl), lo = Math.min(...vals, 0), hi = Math.max(...vals, 0), span = (hi - lo) || 1;
     const xx = i => L0 + (W - L0 - R) * i / (pts.length - 1), yy = v => T + (H - T - B) * (1 - (v - lo) / span), tm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
     const dots = pts.length <= 120;
@@ -3702,7 +3732,7 @@ setInterval(() => {
   if (k !== h24Last){ h24Last = k; return; }                    // wait until the legs have stopped changing
   if (k === h24Tried) return; h24Tried = k;                      // one attempt per set of legs
   if (!k){
-    if ($("h24out").innerHTML){ $("h24out").innerHTML = ""; $("h24msg").className = "note"; $("h24msg").textContent = "No open legs with lots, so there is nothing to chart."; h24Shown = null; }
+    if ($("h24out").innerHTML){ $("h24out").innerHTML = ""; $("h24legs").innerHTML = ""; $("h24msg").className = "note"; $("h24msg").textContent = "No open legs with lots, so there is nothing to chart."; h24Shown = null; }
     drawPosition(); return;
   }
   if ($("h24out").innerHTML && h24Shown !== k && !h24Busy) h24Load();
