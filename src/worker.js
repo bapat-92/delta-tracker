@@ -70,7 +70,7 @@ async function handleBacktest(request, env, url) {
 
 // Starts the GitHub "daily-backtest" workflow with the settings typed on the page.
 // Needs the Worker secret GH_TOKEN (fine-grained token, only this repo, permission Actions: read and write). Optional variable GH_REPO (default below).
-const RUN_FIELDS = { from_date: /^\d{4}-\d{2}-\d{2}$/, to_date: /^\d{4}-\d{2}-\d{2}$/, capital: /^\d{1,9}(\.\d+)?$/, share: /^\d{1,3}(\.\d+)?$/, ratio: /^\d{1,2}(\.\d+)?$/, spread: /^\d{1,2}(\.\d+)?$/, minpct: /^\d{1,3}(\.\d+)?$/, hours: /^\d{1,2}(\.\d+)?(,\d{1,2}(\.\d+)?){0,11}$/ };
+const RUN_FIELDS = { from_date: /^\d{4}-\d{2}-\d{2}$/, to_date: /^\d{4}-\d{2}-\d{2}$/, capital: /^\d{1,9}(\.\d+)?$/, share: /^\d{1,3}(\.\d+)?$/, ratio: /^\d{1,2}(\.\d+)?$/, spread: /^\d{1,2}(\.\d+)?$/, minpct: /^\d{1,3}(\.\d+)?$/, balanced: /^(1|true)$/, hours: /^\d{1,2}(\.\d+)?(,\d{1,2}(\.\d+)?){0,11}$/ };
 async function handleRun(request, env, url) {
   const bad = await authorize(request, env);
   if (bad) return bad;

@@ -368,7 +368,7 @@ h1{padding-right:170px}
     <div class="row">
       <label>From date<input id="rfrom" type="date"></label><label>To date<input id="rto" type="date"></label>
       <label>Capital $<input id="rcap" type="number" placeholder="5000"></label><label>Margin share %<input id="rshare" type="number" placeholder="100"></label>
-      <label>Spread % (comma = several runs, e.g. 1,2)<input id="rspr" type="text" placeholder="2"></label><label>Min profit %<input id="rmin" type="number" placeholder="3"></label>
+      <label>Spread % (comma = several runs, e.g. 1,2)<input id="rspr" type="text" placeholder="2"></label><label>Min profit %<input id="rmin" type="number" placeholder="3"></label><label style="flex-direction:row;align-items:center;gap:6px"><input id="rbal" type="checkbox" style="width:auto"> Balanced range</label>
       <label>Entry hours before expiry<input id="rhrs" type="text" placeholder="9,8,7,6,5,4"></label>
       <button id="runbt" type="button">Run on GitHub</button><button id="runchk" type="button">Test GitHub token</button>
     </div>
@@ -392,7 +392,8 @@ h1{padding-right:170px}
     <label>Bought lots per leg<input id="ibought" type="number" min="1" value="1500"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="tv1" type="checkbox" style="width:auto"> Time-aware volatility (remaining expected move to expiry, hour-of-day pattern)</label>
     <label>Sold strikes at least this many σ away (0 = only show)<input id="tvmin" type="number" min="0" step="0.1" value="1.5"></label>
-    <label>Min profit (% of margin)<input id="ipct" type="number" min="0" step="0.5" value="2"></label>
+    <label>Min profit (% of margin; 0 or negative allows a wider, safer range)<input id="ipct" type="number" min="-100" step="0.5" value="2"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="ibal" type="checkbox" style="width:auto"> Balanced range: make the smaller side (down or up from BTC) as large as possible</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="iprot" type="checkbox" style="width:auto"> Add protection (outside wings)</label>
     <label>Max loss in dollars (overrides the %)<input id="imaxd" type="number" min="1" step="10" placeholder="e.g. 900"></label>
     <label>Allowed worst loss (% of total funds)<input id="iplim" type="number" min="0.5" step="0.5" value="15"></label>
@@ -1561,6 +1562,8 @@ function batmanSearch(chain, spot, p){
   lps.forEach(lg => sps.forEach(sh => { if (sh.strike < lg.strike) pps.push(pair(sh, lg, false)); }));
   const margin = p.sold * 2 * q * spot / p.lev, thr = margin * p.minPct / 100;
   const excl = p.exclude || new Set(), best = new Map();
+  // ranking: widest range (default), or "balanced": the smaller of the two sides (distance from spot to each edge) as large as possible, then width, then credit
+  const better = (a, b) => p.balanced ? (a.bal !== b.bal ? a.bal > b.bal : a.width !== b.width ? a.width > b.width : a.credit > b.credit) : (a.width !== b.width ? a.width > b.width : a.credit > b.credit);
   cps.forEach(c => pps.forEach(pp => {
     if (p.equi){      // sold call and sold put equally far from spot, and the bought legs too
       const dSc = c.sh.strike - spot, dSp = spot - pp.sh.strike, dLc = c.lg.strike - spot, dLp = spot - pp.lg.strike;
@@ -1571,11 +1574,11 @@ function batmanSearch(chain, spot, p){
     let l = iS, r = iS;
     while (l > 0 && c.arr[l - 1] + pp.arr[l - 1] >= thr) l--;
     while (r < grid.length - 1 && c.arr[r + 1] + pp.arr[r + 1] >= thr) r++;
-    const width = grid[r] - grid[l], key = c.sh.strike + "|" + pp.sh.strike;
+    const width = grid[r] - grid[l], key = c.sh.strike + "|" + pp.sh.strike, bal = Math.min(spot - grid[l], grid[r] - spot);
     const cur = best.get(key), credit = c.credit + pp.credit;
-    if (!cur || width > cur.width || (width === cur.width && credit > cur.credit)) best.set(key, {c, pp, l, r, width, credit});
+    if (!cur || better({width, credit, bal}, cur)) best.set(key, {c, pp, l, r, width, credit, bal});
   }));
-  const top = [...best.values()].sort((a, b) => b.width - a.width || b.credit - a.credit).slice(0, 3);
+  const top = [...best.values()].sort((a, b) => better(a, b) ? -1 : better(b, a) ? 1 : 0).slice(0, 3);
   return top.map(t => {
     const tot = grid.map((S, i) => t.c.arr[i] + t.pp.arr[i]);
     let be1 = iS, be2 = iS;
@@ -1776,7 +1779,7 @@ $("ifind").onclick = async () => {
     const chain = await fetchChain(exp);
     if (!chain.calls.length || !chain.puts.length){ $("imsg").className = "note l"; $("imsg").textContent = "No options found for expiry " + exp + " (it may have expired)."; return; }
     const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot;
-    const params = {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct};
+    const params = {sold, bought, lot, lev, minPct: isNaN(minPct) ? 2 : minPct, balanced: $("ibal").checked};
     batTvHtml = ""; let tvRem = null;
     if ($("tv1").checked){
       try {
@@ -2952,7 +2955,7 @@ $("runbt").onclick = async () => {
   m.textContent = "Starting " + list.length + " run(s) on GitHub...";
   try{
     for (const spread of list){
-      const r = await fetch("/api/run", {method: "POST", headers: {Authorization: "Bearer " + pw, "Content-Type": "application/json"}, body: JSON.stringify({from_date: $("rfrom").value, to_date: $("rto").value || $("rfrom").value, capital: $("rcap").value, share: $("rshare").value, spread, minpct: $("rmin").value, hours: $("rhrs").value.replace(/\s/g, "")})});
+      const r = await fetch("/api/run", {method: "POST", headers: {Authorization: "Bearer " + pw, "Content-Type": "application/json"}, body: JSON.stringify({from_date: $("rfrom").value, to_date: $("rto").value || $("rfrom").value, capital: $("rcap").value, share: $("rshare").value, spread, minpct: $("rmin").value, balanced: $("rbal").checked ? "1" : "", hours: $("rhrs").value.replace(/\s/g, "")})});
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
     }
@@ -3047,7 +3050,7 @@ $("dbgo").onclick = async () => {
         const calls = [], puts = [];
         syms.forEach(x => { const m = mk(x.c, x.K, r.t0, true); if (!(m > 0)) return; const o = {strike: x.K, bid: m * (1 - spr), ask: m * (1 + spr), mark: m, delta: null, spot: r.spot, symbol: x.sym}; (x.c ? calls : puts).push(o); });
         const row = {day: new Date(E.D * 1000).toISOString().slice(0, 10), sl: r.sl, t0: r.t0, spot: r.spot, settle: E.settle, n: calls.length + puts.length, failN, total: syms.length};
-        const best = calls.length > 2 && puts.length > 2 ? batmanSearch({calls, puts}, r.spot, {sold, bought, lot, lev, minPct})[0] : null;
+        const best = calls.length > 2 && puts.length > 2 ? batmanSearch({calls, puts}, r.spot, {sold, bought, lot, lev, minPct, balanced: $("ibal").checked})[0] : null;
         if (!best){ row.none = true; results.push(row); return; }
         const L = [{c: true, K: best.callShort.strike, side: -1, n: sold, e: best.callShort.bid}, {c: true, K: best.callLong.strike, side: 1, n: bought, e: best.callLong.ask},
                    {c: false, K: best.putShort.strike, side: -1, n: sold, e: best.putShort.bid}, {c: false, K: best.putLong.strike, side: 1, n: bought, e: best.putLong.ask}];

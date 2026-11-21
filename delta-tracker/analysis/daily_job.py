@@ -23,6 +23,7 @@ OVER = {}                                       # settings typed into the "Run w
 for _k, _e, _t in (("capital", "CAPITAL", float), ("share", "SHARE", float), ("ratio", "RATIO", float), ("spread", "SPREAD", float), ("minpct", "MINPCT", float), ("hours", "HOURS", str)):
     _v = os.environ.get(_e, "").strip()
     if _v: OVER[_k] = CFG[_k] = _t(_v)
+if os.environ.get("BALANCED", "").strip().lower() in ("1", "true"): OVER["balanced"] = CFG["balanced"] = True
 S = requests.Session(); S.headers["User-Agent"] = "delta-tracker-backtest/1.0"
 
 def get(path, params, tries=5):
@@ -80,7 +81,7 @@ def main():
     hours = [float(x) for x in str(CFG["hours"]).split(",")]
     cap = dict(capital=CFG["capital"], share=CFG["share"], ratio=CFG["ratio"]) if CFG.get("capital") else None
     rows = []
-    for day, e in E.items(): rows += B.work((day, e, hours, 0, 0, CFG["lev"], CFG["minpct"], CFG["spread"] / 100, cap))
+    for day, e in E.items(): rows += B.work((day, e, hours, 0, 0, CFG["lev"], CFG["minpct"], CFG["spread"] / 100, cap, bool(CFG.get("balanced"))))
     import pandas as pd
     df = pd.DataFrame(rows); ok = df[df["final"].notna()] if "final" in df else df.iloc[0:0]
     summ = []
@@ -101,7 +102,7 @@ def main():
     try:                                         # keep a small list of saved reports so the page can offer them in a menu
         g = requests.get(url + "/api/backtest?name=index", headers=h, timeout=30); idx = g.json() if g.ok else None
         idx = idx if isinstance(idx, list) else []
-        label = f"{(days[0] + ' to ' + days[-1]) if days else ''} · ${CFG['capital']:g} · {CFG['share']:g}% margin · spread {CFG['spread']:g}% · min profit {CFG['minpct']:g}% · hours {CFG['hours']}"
+        label = f"{(days[0] + ' to ' + days[-1]) if days else ''} · ${CFG['capital']:g} · {CFG['share']:g}% margin · spread {CFG['spread']:g}% · min profit {CFG['minpct']:g}% · hours {CFG['hours']}" + (" · balanced range" if CFG.get("balanced") else "")
         idx = [x for x in idx if x.get("name") != name] + [dict(name=name, label=label, at=report["computed_at"])]
         r2 = requests.put(url + "/api/backtest?name=index", data=json.dumps(idx[-60:]), headers=h, timeout=30); print("index:", r2.status_code)
     except Exception as e: print("could not update the report list:", e)
