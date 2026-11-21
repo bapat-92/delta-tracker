@@ -2008,7 +2008,7 @@ function drawPosition(){
   const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
   const minP = Math.min(...pr.P, 0), maxP = Math.max(...pr.P, 0), pad = (maxP - minP || 1) * 0.08;
   let trail = [];
-  if ($("trailOn").checked && h24Cache){
+  if ($("trailOn").checked && h24Cache && h24Cache.key === h24Key()){
     trail = h24Cache.pts.filter(p => p.btc && p.btc >= pr.lo && p.btc <= pr.hi).map(p => ({t: p.t, btc: p.btc, v: p.pnl + pr.off, live: p.live}));
   }
   const tv = trail.map(p => p.v);
@@ -3620,11 +3620,15 @@ if ($("tv3").checked || $("tv3b").checked) tvLoad().then(() => { tvBanner(); adj
 
 // ---------- Position P&L over the last 24 hours (current legs marked to Delta mark prices, by the minute or hour) ----------
 let h24Busy = false;
-let h24Cache = null, h24Fetching = null;
+let h24Cache = null, h24Fetching = null, h24Shown = null;
+function h24Key(){
+  const open = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s));
+  return open.length ? open.map(L => [L.s, L.side, L.lots, L.entry].join(":")).join("|") + "@" + feeNow.i.toFixed(2) : "";
+}
 async function h24Data(force){
   const open = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s));
   if (!open.length) throw new Error("Add legs with lots first.");
-  const key = open.map(L => [L.s, L.side, L.lots, L.entry].join(":")).join("|") + "@" + feeNow.i.toFixed(2);
+  const key = h24Key();
   if (!force && h24Cache && h24Cache.key === key && Date.now() - h24Cache.at < 55000) return h24Cache;
   if (h24Fetching) return h24Fetching;
   h24Fetching = (async () => {
@@ -3659,7 +3663,7 @@ async function h24Load(){
   const m = $("h24msg"), out = $("h24out");
   try {
     m.className = "note"; m.textContent = "Loading minute prices for the legs…";
-    const D = await h24Data(true), {pts, usable, missing, res} = D;
+    const D = await h24Data(true), {pts, usable, missing, res} = D; h24Shown = D.key;
     const W = 900, H = 260, L0 = 56, R = 12, T = 12, B = 30, vals = pts.map(p => p.pnl), lo = Math.min(...vals, 0), hi = Math.max(...vals, 0), span = (hi - lo) || 1;
     const xx = i => L0 + (W - L0 - R) * i / (pts.length - 1), yy = v => T + (H - T - B) * (1 - (v - lo) / span), tm = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
     const dots = pts.length <= 120;
@@ -3690,6 +3694,19 @@ async function h24Load(){
   finally { h24Busy = false; }
 }
 $("h24go").onclick = h24Load;
+// When the legs change (new position, edited lots or entry), refresh the 24h chart and the trail by themselves
+let h24Last = null, h24Tried = null;
+setInterval(() => {
+  const k = h24Key();
+  if (k !== h24Last){ h24Last = k; return; }                    // wait until the legs have stopped changing
+  if (k === h24Tried) return; h24Tried = k;                      // one attempt per set of legs
+  if (!k){
+    if ($("h24out").innerHTML){ $("h24out").innerHTML = ""; $("h24msg").className = "note"; $("h24msg").textContent = "No open legs with lots, so there is nothing to chart."; h24Shown = null; }
+    drawPosition(); return;
+  }
+  if ($("h24out").innerHTML && h24Shown !== k && !h24Busy) h24Load();
+  if ($("trailOn").checked && (!h24Cache || h24Cache.key !== k)) trailRefresh(true);
+}, 1500);
 async function trailRefresh(force){
   const m = $("trailMsg"); if (!$("trailOn").checked){ m.textContent = ""; drawPosition(); return; }
   try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(purple path: BTC price vs P&L at mark, faint = older)"; }
