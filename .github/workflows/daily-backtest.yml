@@ -12,6 +12,8 @@ on:
       ratio: { description: "Bought / sold lots (blank = 0.3)", required: false, default: "" }
       spread: { description: "Half-spread in % (blank = 2)", required: false, default: "" }
       minpct: { description: "Minimum profit at spot, % of margin (blank = 3)", required: false, default: "" }
+      balanced: { description: "Balanced range: type 1 to maximise the smaller side (blank = widest range)", required: false, default: "" }
+      equi: { description: "Equidistant strikes: tolerance in USD, e.g. 200 (blank = off)", required: false, default: "" }
       hours: { description: "Entry hours before expiry, e.g. 9,8,7,6,5,4 (blank = file value)", required: false, default: "" }
 concurrency:
   group: backtest
@@ -26,7 +28,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - run: pip install numpy pandas requests
+      - run: pip install numpy pandas requests pyarrow
+      - name: Get the stored monthly data files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download data-feed --dir .feed --pattern "*.parquet" || echo "no stored data files yet, will download from Delta"
       - name: Restore downloaded candles
         uses: actions/cache@v4
         with:
@@ -36,6 +42,7 @@ jobs:
       - name: Run backtest
         run: python delta-tracker/analysis/daily_job.py
         env:
+          FEED_DIR: .feed
           FROM_DATE: ${{ inputs.from_date }}
           TO_DATE: ${{ inputs.to_date }}
           CAPITAL: ${{ inputs.capital }}
@@ -44,6 +51,8 @@ jobs:
           SPREAD: ${{ inputs.spread }}
           MINPCT: ${{ inputs.minpct }}
           HOURS: ${{ inputs.hours }}
+          BALANCED: ${{ inputs.balanced }}
+          EQUI: ${{ inputs.equi }}
           TRACKER_URL: ${{ secrets.TRACKER_URL }}
           TRACKER_PASSPHRASE: ${{ secrets.TRACKER_PASSPHRASE }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
