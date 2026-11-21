@@ -7,7 +7,7 @@ Daily backtest job (run by GitHub Actions, see .github/workflows/daily-backtest.
 3. Sends the summary to your tracker (PUT /api/backtest, behind your passphrase) so the page can show it.
 
 Environment: TRACKER_URL, TRACKER_PASSPHRASE (GitHub secrets); optional CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET if the site sits behind Cloudflare Access;
-optional DELTA_BASE (default https://api.india.delta.exchange), DAYS (default 30), CACHE_DIR (default .cache/candles).
+optional FROM_DATE / TO_DATE (YYYY-MM-DD, a fixed range; blank = the last DAYS days), optional DELTA_BASE (default https://api.india.delta.exchange), DAYS (default 30), CACHE_DIR (default .cache/candles).
 Nothing here places orders or needs an exchange key: it only reads public prices.
 """
 import os, sys, json, gzip, time, math, datetime as dt
@@ -54,11 +54,19 @@ def fetch_expiry(day):
     return series
 
 def main():
-    now = int(time.time()); today = dt.datetime.now(dt.timezone.utc).date(); days = []
-    for k in range(DAYS, -1, -1):
-        d = today - dt.timedelta(days=k); tx = int(dt.datetime(d.year, d.month, d.day, 12, tzinfo=dt.timezone.utc).timestamp())
-        if tx < now - 1800: days.append(d.isoformat())
-    days = days[-DAYS:]; E = {}; failed = []
+    now = int(time.time()); today = dt.datetime.now(dt.timezone.utc).date()
+    f, t = os.environ.get("FROM_DATE", "").strip(), os.environ.get("TO_DATE", "").strip(); days = []
+    if f or t:                                   # a chosen date range, e.g. 2026-05-01 to 2026-05-31
+        d0 = dt.date.fromisoformat(f or t); d1 = dt.date.fromisoformat(t or f)
+        if d1 < d0: raise SystemExit("TO_DATE is before FROM_DATE")
+        if (d1 - d0).days > 120: raise SystemExit("range too long (max 120 days per run)")
+        d = d0
+        while d <= d1: days.append(d.isoformat()); d += dt.timedelta(days=1)
+    else:
+        for k in range(DAYS, -1, -1): days.append((today - dt.timedelta(days=k)).isoformat())
+        days = days[-DAYS:]
+    days = [d for d in days if int(dt.datetime.fromisoformat(d).replace(hour=12, tzinfo=dt.timezone.utc).timestamp()) < now - 1800]
+    name = f"{days[0]}_{days[-1]}" if (f or t) and days else "latest"; E = {}; failed = []
     for day in days:
         try: E[day] = B.E_from_series(day, fetch_expiry(day)); print("ok", day, len(E[day]["syms"]), "series", flush=True)
         except Exception as e: failed.append(day); print("FAILED", day, e, flush=True)
@@ -74,13 +82,13 @@ def main():
         summ.append(dict(hours_before=h, days=int(len(g)), win_pct=round((g.final > 0).mean() * 100), total=round(g.final.sum()), avg=round(g.final.mean()), worst_final=round(g.final.min()), worst_open=round(g.worst.min()),
                          hit10=int((g.hit10 > 0).sum()), hit20=int((g.hit20 > 0).sum()), hit30=int((g.hit30 > 0).sum()), margin=round(g.margin.mean())))
     latest = ok.sort_values("expiry").tail(40)[["expiry", "hours_before", "spot", "settle", "credit", "final", "worst", "worst_pct"]].round(1).to_dict("records") if len(ok) else []
-    report = dict(computed_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), config=CFG, expiries=sorted(E), failed=failed, by_hour=sorted(summ, key=lambda x: -x["hours_before"]), latest=latest)
+    report = dict(name=name, computed_at=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), config=CFG, expiries=sorted(E), failed=failed, by_hour=sorted(summ, key=lambda x: -x["hours_before"]), latest=latest)
     print(json.dumps(report["by_hour"], indent=1))
     url, pw = os.environ.get("TRACKER_URL", "").rstrip("/"), os.environ.get("TRACKER_PASSPHRASE", "")
     if not url or not pw: print("TRACKER_URL / TRACKER_PASSPHRASE not set: report not uploaded"); return
     h = {"Authorization": "Bearer " + pw, "Content-Type": "application/json"}
     if os.environ.get("CF_ACCESS_CLIENT_ID"): h.update({"CF-Access-Client-Id": os.environ["CF_ACCESS_CLIENT_ID"], "CF-Access-Client-Secret": os.environ["CF_ACCESS_CLIENT_SECRET"]})
-    r = requests.put(url + "/api/backtest", data=json.dumps(report), headers=h, timeout=30)
+    r = requests.put(url + "/api/backtest?name=" + name, data=json.dumps(report), headers=h, timeout=30)
     print("upload:", r.status_code, r.text[:200]); r.raise_for_status()
 
 if __name__ == "__main__": main()

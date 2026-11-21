@@ -50,18 +50,19 @@ async function handleCandles(request, env, url) {
 }
 
 // Daily backtest report written by the GitHub Actions job (small JSON), read by the page.
-async function handleBacktest(request, env) {
+async function handleBacktest(request, env, url) {
   const bad = await authorize(request, env);
   if (bad) return bad;
+  const name = (url.searchParams.get("name") || "latest").replace(/[^0-9A-Za-z_-]/g, "").slice(0, 40) || "latest";   // "latest" or a date range like 2026-05-01_2026-05-31
   if (request.method === "GET") {
-    const v = await env.STORE.get("backtest:latest");
+    const v = await env.STORE.get("backtest:" + name);
     return new Response(v === null ? "null" : v, { headers: HEAD });
   }
   if (request.method === "PUT") {
     const text = await request.text();
     if (text.length > 900000) return json({ error: "too large" }, 413);
     try { JSON.parse(text); } catch (e) { return json({ error: "bad json" }, 400); }
-    await env.STORE.put("backtest:latest", text);
+    await env.STORE.put("backtest:" + name, text);
     return json({ ok: true });
   }
   return json({ error: "method not allowed" }, 405);
@@ -101,7 +102,7 @@ export default {
       return handleState(request, env, url);
     }
     if (url.pathname === "/api/backtest") {
-      return handleBacktest(request, env);
+      return handleBacktest(request, env, url);
     }
     if (url.pathname.startsWith("/api/candles/")) {
       return handleCandles(request, env, url);
