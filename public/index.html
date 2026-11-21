@@ -348,6 +348,7 @@ h1{padding-right:170px}
     <label>Pick the adjustment with<select id="dbrank"><option value="at">the best result at the new centre (loss-cutting)</option><option value="width">the widest profit range</option></select></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbexit" type="checkbox" style="width:auto" checked> Also test "exit everything when BTC leaves the profit range" (no adjustment)</label>
     <button id="dbgo">Run the backtest</button>
+    <button id="dbcsv" type="button" disabled>Download results as CSV</button>
     <button id="dbclr" type="button">Clear saved candles</button>
     <button id="dbsync" type="button">Upload this browser's saved candles to the cloud</button>
   </div>
@@ -2868,6 +2869,25 @@ $("dbsync").onclick = async () => {
     m.textContent = `Done: ${up} of ${codes.length} expiries needed an upload.`; dbCache.up += up; dbCacheInfo();
   } catch (e){ m.className = "note l"; m.textContent = "Upload failed: " + e.message; }
 };
+
+$("dbcsv").onclick = () => {
+  const R = window.dbLast || [], C = window.dbCfg || {}; if (!R.length) return;
+  const q = v => { if (v === null || v === undefined) return ""; if (typeof v === "number") return Number.isFinite(v) ? String(Math.round(v * 100) / 100) : ""; v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const iso = t => t ? new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ") : "";
+  const cet = t => t ? new Date(t * 1000).toLocaleString("sv-SE", {timeZone: "Europe/Berlin"}).slice(0, 16) : "";
+  const head = ["expiry_day", "entry_slot", "entry_utc", "entry_cet", "btc_at_entry", "btc_at_expiry", "status", "priced_strikes", "failed_downloads", "put_sold_strike", "put_bought_strike", "call_bought_strike", "call_sold_strike", "profit_range_low", "profit_range_high", "net_credit", "margin_est", "fees_entry", "final_pnl", "worst_open_pnl", "worst_open_pct_margin", "worst_open_time_utc", "hit_l1_utc", "hit_l2_utc", "hit_l3_utc",
+    "adj_time_utc", "adj_btc", "adj_side", "adj_action", "adj_final_pnl", "adj_change", "exit_time_utc", "exit_btc", "exit_final_pnl", "exit_change"];
+  const lines = ["# Daily Inverted Batman backtest, saved " + new Date().toISOString(), "# settings: " + Object.keys(C).map(k => k + "=" + C[k]).join("; "), head.join(",")];
+  R.forEach(r => {
+    const b = r.best, a = r.adj, x = r.ex;
+    lines.push([r.day, r.sl === "A" ? "15:00 CET day before" : "06:00 CET expiry day", iso(r.t0), cet(r.t0), r.spot, r.settle, r.none ? (r.failN ? "download_failed" : r.n === 0 ? "no_prices" : "no_combination") : "ok", r.n, r.failN || 0,
+      b ? b.putShort.strike : "", b ? b.putLong.strike : "", b ? b.callLong.strike : "", b ? b.callShort.strike : "", r.lo, r.hi, r.credit, r.margin, r.fees, r.fin, r.minV, r.minV !== null && r.minV !== undefined && r.margin ? r.minV / r.margin * 100 : "", iso(r.minT), iso(r.b0), iso(r.b1), iso(r.b2),
+      a ? iso(a.t) : "", a ? a.spot : "", a ? a.side : "", a ? (a.fin !== undefined ? a.desc : "no_valid_adjustment") : "", a && a.fin !== undefined ? a.fin : "", a && a.fin !== undefined ? a.fin - r.fin : "",
+      x ? iso(x.t) : "", x ? x.spot : "", x ? x.fin : "", x ? x.fin - r.fin : ""].map(q).join(","));
+  });
+  const blob = new Blob([lines.join("\n") + "\n"], {type: "text/csv"}), a2 = document.createElement("a");
+  a2.href = URL.createObjectURL(blob); a2.download = "batman-backtest-" + new Date().toISOString().slice(0, 10) + ".csv"; document.body.appendChild(a2); a2.click(); setTimeout(() => { URL.revokeObjectURL(a2.href); a2.remove(); }, 1000);
+};
 $("dbclr").onclick = async () => { await idbClear(); dbCache.hits = dbCache.miss = 0; dbCacheInfo(); };
 dbCacheInfo();
 $("dbgo").onclick = async () => {
@@ -3013,7 +3033,7 @@ $("dbgo").onclick = async () => {
         results.push(row);
       });
     }
-    window.dbLast = results; dbCacheInfo();
+    window.dbLast = results; window.dbCfg = {days, spr: spr * 100, minPct, sold, bought, lev, lot, step: resName, lv0, lv1, lv2, adj: $("dbadj").checked, exit: $("dbexit").checked, frac: Number($("rcfrac").value) || 50, amin: $("dbamin").value, apct: $("dbapct").value, rank: $("dbrank").value, cush: $("rccush").value, maxLoss: $("rcloss").value || $("imaxd").value, maxCost: $("rccost").value}; $("dbcsv").disabled = false; dbCacheInfo();
     const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0), tz = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
     let h = `<p class="note">${f(sold, 0)} sold / ${f(bought, 0)} bought lots per leg, leverage ${f(lev, 0)}x, minimum profit ${f(minPct, 1)}% of margin, assumed half-spread ${f(spr * 100, 1)}%, fees included (entry fees and settlement fees). Times in CET. Capital used = estimated margin of the sold lots.</p>`;
     slots.forEach(sl => {
