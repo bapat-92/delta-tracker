@@ -24,6 +24,8 @@ for _k, _e, _t in (("capital", "CAPITAL", float), ("share", "SHARE", float), ("r
     _v = os.environ.get(_e, "").strip()
     if _v: OVER[_k] = CFG[_k] = _t(_v)
 if os.environ.get("BALANCED", "").strip().lower() in ("1", "true"): OVER["balanced"] = CFG["balanced"] = True
+if os.environ.get("EQUI", "").strip():                       # equidistant strikes, within this many dollars (200 = one strike step)
+    OVER["equi"] = CFG["equi"] = float(os.environ["EQUI"])
 S = requests.Session(); S.headers["User-Agent"] = "delta-tracker-backtest/1.0"
 
 def get(path, params, tries=5):
@@ -41,10 +43,10 @@ def candles(sym, a, b, res="1m"):
     if out is not None and len(out) < 3: out = get("/v2/history/candles", dict(resolution=res, symbol=sym, start=a, end=b)) or out
     return [[int(c["time"]), float(c["open"]), float(c["close"])] for c in sorted(out or [], key=lambda c: c["time"]) if float(c["close"]) > 0]
 
-def fetch_expiry(day):
+def fetch_expiry(day, window_h=24):
     """All strikes within +-10% of BTC at the start of the window (12:00 UTC the day before) for one expiry."""
-    d = dt.date.fromisoformat(day); code = d.strftime("%d%m%y"); tx = int(dt.datetime(d.year, d.month, d.day, 12, tzinfo=dt.timezone.utc).timestamp()); wa = tx - 86400
-    path = os.path.join(CACHE, code + ".json.gz")
+    d = dt.date.fromisoformat(day); code = d.strftime("%d%m%y"); tx = int(dt.datetime(d.year, d.month, d.day, 12, tzinfo=dt.timezone.utc).timestamp()); wa = tx - int(window_h * 3600)
+    path = os.path.join(CACHE, code + ("" if window_h == 24 else f"_{window_h}") + ".json.gz")
     if os.path.exists(path):
         with gzip.open(path, "rt") as f: return json.load(f)
     btc = get("/v2/history/candles", dict(resolution="5m", symbol="BTCUSD", start=wa, end=wa + 3600))
@@ -57,6 +59,19 @@ def fetch_expiry(day):
     os.makedirs(CACHE, exist_ok=True)
     with gzip.open(path, "wt") as f: json.dump(series, f)
     return series
+
+FEED_DIR = os.environ.get("FEED_DIR", ".feed"); FEED_WINDOW_H = 24; _FEED = {}
+def feed_series(day):
+    """One expiry from the stored monthly file (downloaded from the 'data-feed' release), or None if it isn't there."""
+    ym = day[:7]
+    if ym not in _FEED:
+        p = os.path.join(FEED_DIR, ym + ".parquet"); d = {}
+        if os.path.exists(p):
+            import pandas as pd
+            df = pd.read_parquet(p)
+            for (ex, sym), g in df.groupby(["expiry", "symbol"], sort=False): d.setdefault(ex, {})[sym] = g[["t", "o", "c"]].astype(float).values.tolist()
+        _FEED[ym] = d
+    return _FEED[ym].get(day)
 
 def main():
     now = int(time.time()); today = dt.datetime.now(dt.timezone.utc).date()
@@ -74,14 +89,18 @@ def main():
     name = f"{days[0]}_{days[-1]}" if (f or t) and days else "latest"; E = {}; failed = []
     if OVER:                                     # a run with changed settings gets its own report name so it does not overwrite another
         import hashlib; name += "_" + hashlib.md5(json.dumps(CFG, sort_keys=True).encode()).hexdigest()[:6]
+    use_feed = max(float(x) for x in str(CFG["hours"]).split(",")) <= FEED_WINDOW_H - 1     # the stored files hold the last 24 hours before expiry
     for day in days:
-        try: E[day] = B.E_from_series(day, fetch_expiry(day)); print("ok", day, len(E[day]["syms"]), "series", flush=True)
+        try:
+            ser = feed_series(day) if use_feed else None
+            src = "stored file" if ser else "Delta"
+            E[day] = B.E_from_series(day, ser or fetch_expiry(day)); print("ok", day, len(E[day]["syms"]), "series from", src, flush=True)
         except Exception as e: failed.append(day); print("FAILED", day, e, flush=True)
     if not E: raise SystemExit("no data downloaded; check that this runner can reach " + BASE)
     hours = [float(x) for x in str(CFG["hours"]).split(",")]
     cap = dict(capital=CFG["capital"], share=CFG["share"], ratio=CFG["ratio"]) if CFG.get("capital") else None
     rows = []
-    for day, e in E.items(): rows += B.work((day, e, hours, 0, 0, CFG["lev"], CFG["minpct"], CFG["spread"] / 100, cap, bool(CFG.get("balanced"))))
+    for day, e in E.items(): rows += B.work((day, e, hours, 0, 0, CFG["lev"], CFG["minpct"], CFG["spread"] / 100, cap, bool(CFG.get("balanced")), CFG.get("equi")))
     import pandas as pd
     df = pd.DataFrame(rows); ok = df[df["final"].notna()] if "final" in df else df.iloc[0:0]
     summ = []
@@ -102,7 +121,7 @@ def main():
     try:                                         # keep a small list of saved reports so the page can offer them in a menu
         g = requests.get(url + "/api/backtest?name=index", headers=h, timeout=30); idx = g.json() if g.ok else None
         idx = idx if isinstance(idx, list) else []
-        label = f"{(days[0] + ' to ' + days[-1]) if days else ''} · ${CFG['capital']:g} · {CFG['share']:g}% margin · spread {CFG['spread']:g}% · min profit {CFG['minpct']:g}% · hours {CFG['hours']}" + (" · balanced range" if CFG.get("balanced") else "")
+        label = f"{(days[0] + ' to ' + days[-1]) if days else ''} · ${CFG['capital']:g} · {CFG['share']:g}% margin · spread {CFG['spread']:g}% · min profit {CFG['minpct']:g}% · hours {CFG['hours']}" + (" · balanced range" if CFG.get("balanced") else "") + (f" · equidistant ±${CFG['equi']:g}" if CFG.get("equi") else "")
         idx = [x for x in idx if x.get("name") != name] + [dict(name=name, label=label, at=report["computed_at"])]
         r2 = requests.put(url + "/api/backtest?name=index", data=json.dumps(idx[-60:]), headers=h, timeout=30); print("index:", r2.status_code)
     except Exception as e: print("could not update the report list:", e)
