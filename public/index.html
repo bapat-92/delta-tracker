@@ -355,6 +355,7 @@ h1{padding-right:170px}
     <label>Loss-day test "sell in the money": strike this % in the money (puts if BTC ran up, calls if it fell)<input id="lritm" type="number" min="0" step="0.1" value="0.5"></label>
     <label>Loss-day test "fast move": close at mid-shoulder only if BTC moved at least this % in the last hour<input id="lrspd" type="number" min="0" step="0.1" value="0.8"></label>
     <label>Loss-day test "fast range exit": close all at the first close outside the profit range only if BTC moved at least this % in the last hour<input id="lrspe" type="number" min="0" step="0.1" value="1.0"></label>
+    <label>Fast range exit, optional volume condition: also require BTC volume over the last 15 minutes of at least this many times its 24h average (0 = off; the comparison table always shows it with 3×)<input id="lrvol" type="number" min="0" step="0.5" value="0"></label>
     <label>Split for the fast-exit check: tune on days before this date, test on days from it (blank = halfway)<input id="lrsplit" type="date"></label>
     <span hidden><select id="dbsb"><option value="cap" selected>cap</option></select></span>
     <button id="dbgo">Run the backtest</button>
@@ -1341,7 +1342,7 @@ async function fetchCandles(base, symbol, days, startSec, endSec){
     if (!r.ok) throw new Error("HTTP " + r.status);
     ((await r.json()).result || []).forEach(c => {
       const t = Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time);
-      seen.set(t, {time: t, open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close)});
+      seen.set(t, {time: t, open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close), volume: Number(c.volume) || 0});
     });
   }
   return [...seen.values()].sort((a, b) => a.time - b.time);
@@ -3045,9 +3046,9 @@ window.vfData = d => {                       // every series on one 5-minute tim
   for (let t = d.t0; t < d.tx; t += 300){
     const c = bT.get(t); if (!c) continue; const S = c.o;
     let pnl = 0, ok = true; k4.forEach(k => { const px = dbMark(d.mk[k], t, true, 60); if (!(px > 0) || !(fill[k] > 0)){ ok = false; return; } pnl += (k === "ps" || k === "cs" ? d.sold * (fill[k] - px) : d.bought * (px - fill[k])) * d.lot; });
-    let cv = 0, pv = 0; ["cs", "cl"].forEach(k => (d.vol[k] || []).forEach(x => { if (x.t >= t && x.t < t + 300) cv += x.v; })); ["ps", "pl"].forEach(k => (d.vol[k] || []).forEach(x => { if (x.t >= t && x.t < t + 300) pv += x.v; }));
+    let cv = 0, pv = 0; ["cs", "cl"].forEach(k => (d.vol[k] || []).forEach(x => { if (x.t >= t - 300 && x.t < t) cv += x.v; })); ["ps", "pl"].forEach(k => (d.vol[k] || []).forEach(x => { if (x.t >= t - 300 && x.t < t) pv += x.v; }));
     const ivs = k4.map(k => iv(k, t, S)).filter(x => x !== null);
-    T.push({t, S, pnl: ok ? pnl : null, cv, pv, iv: ivs.length ? ivs.reduce((a, b) => a + b, 0) / ivs.length : null, bv: avg5 > 0 ? c.v / avg5 : null, oi: oiSum(["ps", "cs"], t)});
+    T.push({t, S, pnl: ok ? pnl : null, cv, pv, iv: ivs.length ? ivs.reduce((a, b) => a + b, 0) / ivs.length : null, bv: avg5 > 0 && bT.get(t - 300) ? bT.get(t - 300).v / avg5 : null, oi: oiSum(["ps", "cs"], t)});
   }
   return T;
 };
@@ -3563,12 +3564,12 @@ $("dbgo").onclick = async () => {
             rv.an = {bigMove, mvT, pk, wr, move: (E.settle - r.spot) / r.spot * 100, rangePct: (mx - mn) / r.spot * 100, hM: null, spdM: null, hE: null, pE: null};
             const tMa = (() => { let a = null; for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; if (sp >= cT2 || sp <= pT2){ a = t; break; } } return a; })();
             if (tMa !== null){ rv.an.hM = (E.tx - tMa) / 3600; rv.an.spdM = mv1h(tMa); }
-            if (tE !== null){ rv.an.hE = (E.tx - tE) / 3600; rv.an.pE = pAt(tE); rv.an.spdE = mv1h(tE); { const a15 = spotAt(tE - 900), b15 = spotAt(tE); rv.an.spdE15 = a15 && b15 ? Math.abs(b15 - a15) / a15 * 100 : null; } }
+            if (tE !== null){ rv.an.hE = (E.tx - tE) / 3600; rv.an.pE = pAt(tE); rv.an.spdE = mv1h(tE); { let s3 = 0, n3 = 0, s24 = 0, n24 = 0; for (let k = 1; k <= 3; k++){ const c = byT.get(tE - 300 * k); if (c && c.volume !== undefined){ s3 += c.volume; n3++; } } for (let k = 1; k <= 288; k++){ const c = byT.get(tE - 300 * k - 300); if (c && c.volume !== undefined){ s24 += c.volume; n24++; } } rv.an.volE = n3 === 3 && n24 > 200 && s24 > 0 ? (s3 / 3) / (s24 / n24) : null; } { const a15 = spotAt(tE - 900), b15 = spotAt(tE); rv.an.spdE15 = a15 && b15 ? Math.abs(b15 - a15) / a15 * 100 : null; } }
             const thr = Number($("lrspd").value) || 0;
             rv.fast = tMa !== null && rv.an.spdM !== null && rv.an.spdM >= thr ? "PENDING" : fin;
           }
           if (tE !== null){ const c = closeV(L, tE, spotAt(tE)); if (c !== null) rv.edge = -fees + c; }
-          rv.edgeFast = rv.edge !== fin && rv.an.spdE !== null && rv.an.spdE !== undefined && rv.an.spdE >= (Number($("lrspe").value) || 0) ? rv.edge : fin;
+          rv.edgeFast = rv.edge !== fin && rv.an.spdE !== null && rv.an.spdE !== undefined && rv.an.spdE >= (Number($("lrspe").value) || 0) && !((Number($("lrvol").value) || 0) > 0 && !(rv.an.volE >= Number($("lrvol").value))) ? rv.edge : fin;
           if (tM !== null){
             const sp = spotAt(tM), c = closeV(L, tM, sp);
             if (c !== null){
@@ -3695,7 +3696,7 @@ $("dbgo").onclick = async () => {
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin, "hold"]];
         slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin, "sl" + k]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["Range exit: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.edgeFast, "edge_fast"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.fast, "mid_fast"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"], ["Out of range: sell in-the-money options of the other type against the net-short lots (puts if BTC ran up)", r => r.rv.itm1, "itm1"], ["Mid-shoulder: sell in-the-money options of the other type against the net-short lots", r => r.rv.itm2, "itm2"]);
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["Range exit: close all, only if BTC moved fast in the last hour (and, if set, on heavy volume)", r => r.rv.edgeFast, "edge_fast"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.fast, "mid_fast"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"], ["Out of range: sell in-the-money options of the other type against the net-short lots (puts if BTC ran up)", r => r.rv.itm1, "itm1"], ["Mid-shoulder: sell in-the-money options of the other type against the net-short lots", r => r.rv.itm2, "itm2"]);
         if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin, "recenter"]);
         const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
@@ -3706,15 +3707,19 @@ $("dbgo").onclick = async () => {
               return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(t)}"><b>${usd(t)}</b></td><td class="l">${usd(Math.min(...v))}</td><td class="${sg(lt)}">${usd(lt)}</td><td>${lv.filter(x => x > 0).length} of ${LD.length}</td><td>${LD.filter((r, i) => lv[i] > r.fin + 0.5).length}</td><td>${ok.filter((r, i) => v[i] > r.fin + 0.5).length} / ${ok.filter((r, i) => v[i] < r.fin - 0.5).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
           {   // fast range exit: sweep the speed cut-off, and check it on days it was not tuned on
             const days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl);
-            const val = (r, th) => r.rv.edge !== r.fin && r.rv.an && r.rv.an.spdE !== null && r.rv.an.spdE !== undefined && r.rv.an.spdE >= th ? r.rv.edge : r.fin;
+            let VV = 0; const val = (r, th) => r.rv.edge !== r.fin && r.rv.an && r.rv.an.spdE !== null && r.rv.an.spdE !== undefined && r.rv.an.spdE >= th && (VV <= 0 || r.rv.an.volE >= VV) ? r.rv.edge : r.fin;
             const lost = x => x.fin < 0, left = ok.filter(r => r.rv.an && r.rv.an.spdE !== null && r.rv.an.spdE !== undefined);
             const dl = (arr, th) => arr.reduce((t, r) => t + val(r, th) - r.fin, 0);
             h += `<p style="margin:10px 0 4px"><b>Fast range exit: close all at the first close outside the profit range, only if BTC moved at least X% in the last hour</b> <span class="note">(${left.length} of ${ok.length} days left the range; ${left.filter(lost).length} of those ended as losses. "Change vs hold" is the rule's total minus holding to expiry. Days before ${spl}: ${A.length}; from ${spl}: ${B.length}. A rule that is good only on one half is probably fitted to it.)</span></p>`;
-            h += `<div class="wrap"><table><thead><tr><th>Speed cut-off</th><th>Exits taken</th><th>of which loss days</th><th>of which winners cut</th><th>Change vs hold, all days</th><th>Change, days before ${spl}</th><th>Change, days from ${spl}</th><th>All days total</th></tr></thead><tbody>` +
+            const sweepTbl = () => { return `<div class="wrap"><table><thead><tr><th>Speed cut-off</th><th>Exits taken</th><th>of which loss days</th><th>of which winners cut</th><th>Change vs hold, all days</th><th>Change, days before ${spl}</th><th>Change, days from ${spl}</th><th>All days total</th></tr></thead><tbody>` +
               [0, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(th => { const ex = left.filter(r => val(r, th) !== r.fin), tot = ok.reduce((t, r) => t + val(r, th), 0), d = dl(ok, th), a = dl(A, th), b = dl(B, th);
-                return `<tr><td>${th === 0 ? "0 (always exit)" : "≥ " + th + "%"}</td><td>${ex.length}</td><td>${ex.filter(lost).length}</td><td>${ex.filter(r => !lost(r)).length}</td><td class="${sg(d)}"><b>${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}</b></td><td class="${sg(a)}">${a >= 0 ? "+" : "-"}${usd(Math.abs(a))}</td><td class="${sg(b)}">${b >= 0 ? "+" : "-"}${usd(Math.abs(b))}</td><td class="${sg(tot)}">${usd(tot)}</td></tr>`; }).join("") + `</tbody></table></div>`;
-            const lv = left.filter(r => r.rv.an.spdE !== null).map(r => ({d: r.day, s: r.rv.an.spdE, fin: r.fin, e: r.rv.edge})).sort((x, y) => y.s - x.s);
-            h += `<p class="note" style="margin:4px 0">Every day that left the range, fastest first (hour speed %, final result if held, result if closed at the exit): ` + lv.map(x => `${x.d} ${f(x.s, 2)}% ${usd(x.fin)} → ${usd(x.e)}`).join(" · ") + `</p>`;
+                return `<tr><td>${th === 0 ? "0 (always exit)" : "≥ " + th + "%"}</td><td>${ex.length}</td><td>${ex.filter(lost).length}</td><td>${ex.filter(r => !lost(r)).length}</td><td class="${sg(d)}"><b>${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}</b></td><td class="${sg(a)}">${a >= 0 ? "+" : "-"}${usd(Math.abs(a))}</td><td class="${sg(b)}">${b >= 0 ? "+" : "-"}${usd(Math.abs(b))}</td><td class="${sg(tot)}">${usd(tot)}</td></tr>`; }).join("") + `</tbody></table></div>`; };
+            VV = 0; h += sweepTbl();
+            { const vv = Number($("lrvol").value) || 3; VV = vv; const haveVol = left.some(r => r.rv.an.volE !== null && r.rv.an.volE !== undefined);
+              if (haveVol){ h += `<p class="note" style="margin:8px 0 2px"><b>The same, but also requiring BTC volume over the last 15 minutes ≥ ${vv}× its 24h average</b> (${left.filter(r => r.rv.an.volE >= vv).length} of the ${left.length} days that left the range had that much volume)</p>` + sweepTbl(); } else h += `<p class="note">No BTC volume came back from Delta for these days, so the volume version is not shown.</p>`;
+              VV = Number($("lrvol").value) || 0; }
+            const lv = left.filter(r => r.rv.an.spdE !== null).map(r => ({d: r.day, s: r.rv.an.spdE, v: r.rv.an.volE, fin: r.fin, e: r.rv.edge})).sort((x, y) => y.s - x.s);
+            h += `<p class="note" style="margin:4px 0">Every day that left the range, fastest first (hour speed %, 15-minute volume vs 24h average, final result if held, result if closed at the exit): ` + lv.map(x => `${x.d} ${f(x.s, 2)}% ${x.v !== null && x.v !== undefined ? f(x.v, 1) + "×" : "–"} ${usd(x.fin)} → ${usd(x.e)}`).join(" · ") + `</p>`;
           }
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
