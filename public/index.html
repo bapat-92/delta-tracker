@@ -384,6 +384,17 @@ h1{padding-right:170px}
     </div>
     <div id="ldmsg" class="note"></div>
   </details>
+  <details style="margin:6px 0"><summary><b>Market features: profit days vs loss days (volume, IV, BTC moves before entry)</b></summary>
+    <p class="note" style="margin:4px 0 8px">Run the backtest first (it gives the days, entry times, strikes and results). This then downloads 1-minute traded volume for the four strikes of each trade, BTC 5-minute volume and prices, and optionally open interest, and compares profit days with loss days over the 5 minutes, 15 minutes, 1 hour and 2 hours before entry. Features: BTC move, range and volume spike, option volume at the sold and bought strikes (and how many of your sold lots that covers), and implied volatility level and change (worked out from the mark prices). Click a loss day in the loss tables to see its volume strip under the chart. Large tables of past days take a few minutes to download the first time; later runs use the saved copy.</p>
+    <div class="row">
+      <label>Entry slot<select id="vfslot"><option value="all">all</option><option value="A">15:00 CET day before (A)</option><option value="B">06:00 CET expiry day (B)</option></select></label>
+      <label style="flex-direction:row;align-items:center;gap:6px"><input id="vfoi" type="checkbox" style="width:auto" checked> Also try open interest history</label>
+      <button id="vfgo" type="button">Fetch data and compare</button>
+      <button id="vfcsv" type="button" disabled>Download features (CSV)</button>
+      <button id="vfraw" type="button" disabled>Download raw volume (CSV)</button>
+    </div>
+    <div id="vfmsg" class="note"></div><div id="vfout"></div>
+  </details>
   <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
     <p class="note" style="margin:4px 0 8px">Start a run on GitHub yourself (Actions tab, daily-backtest, Run workflow), wait a few minutes, then refresh the list and pick the report.</p>
     <div class="row"><label>Saved reports<select id="autosel"><option value="latest">Latest 30-day report</option></select></label><button id="autolist" type="button">Refresh list</button><button id="autoload" type="button">Show report</button></div>
@@ -2982,6 +2993,113 @@ $("ldgo").onclick = async () => {
     if (typeof dbCacheInfo === "function") dbCacheInfo();
   } catch (e){ m.className = "note l"; m.textContent = "Could not load: " + e.message; }
 };
+
+async function vfSeries(base, sym, a, b, res, pref){
+  const ck = pref + "|" + res + "|" + sym, hit = await idbGet(ck);
+  if (hit && hit.ok && hit.from <= a && hit.to >= b) return hit.data;
+  const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", res); u.searchParams.set("symbol", pref === "OI" ? "OI:" + sym : sym); u.searchParams.set("start", a); u.searchParams.set("end", b);
+  let r = null;
+  for (let k = 0; k < 4; k++){ try { r = await fetch(u); if (r.ok) break; if (r.status !== 429 && r.status < 500) break; } catch (e) { r = null; } await new Promise(z => setTimeout(z, 700 * (k + 1))); r = null; }
+  if (!r || !r.ok) return null;
+  const data = ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), o: Number(c.open), h: Number(c.high), l: Number(c.low), c: Number(c.close), v: Number(c.volume) || 0})).sort((x, y) => x.t - y.t);
+  idbPut(ck, {from: a, to: b, data, ok: true}); return data;
+}
+async function vfBtc(base, a, b){
+  const seen = new Map(), step = 1800 * 300;
+  for (let t = a; t < b; t += step){
+    const u = new URL(base + "/v2/history/candles"); u.searchParams.set("resolution", "5m"); u.searchParams.set("symbol", "BTCUSD"); u.searchParams.set("start", t); u.searchParams.set("end", Math.min(t + step, b));
+    const r = await fetch(u); if (!r.ok) throw new Error("BTC prices: HTTP " + r.status);
+    ((await r.json()).result || []).forEach(c => { const tt = Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time); seen.set(tt, {t: tt, o: Number(c.open), h: Number(c.high), l: Number(c.low), c: Number(c.close), v: Number(c.volume) || 0}); });
+  }
+  return [...seen.values()].sort((x, y) => x.t - y.t);
+}
+const vfWin = [["5m", 300], ["15m", 900], ["1h", 3600], ["2h", 7200]];
+window.vfCase = {}; window.vfRows = []; window.vfRaw = [];
+window.vfStrip = r => {
+  const d = window.vfCase[r.day + "|" + r.sl]; if (!d) return "";
+  const W = 720, H = 120, L = 56, Rr = 16, T = 10, B = 20, t0 = d.t0, t1 = d.tx, X = t => L + (t - t0) / (t1 - t0) * (W - L - Rr);
+  const bin = 300, nb = Math.ceil((t1 - t0) / bin), cv = new Array(nb).fill(0), pv = new Array(nb).fill(0);
+  const add = (sym, arr) => (d.vol[sym] || []).forEach(c => { const i = Math.floor((c.t - t0) / bin); if (i >= 0 && i < nb) arr[i] += c.v; });
+  add(d.sym.cs, cv); add(d.sym.cl, cv); add(d.sym.ps, pv); add(d.sym.pl, pv);
+  const mx = Math.max(1, ...cv, ...pv), mid = T + (H - T - B) / 2, hh = (H - T - B) / 2 - 2;
+  let bars = ""; for (let i = 0; i < nb; i++){ const x = X(t0 + i * bin), w = Math.max(1, (W - L - Rr) / nb - 1), tt = new Date((t0 + i * bin) * 1000).toISOString().slice(11, 16) + " UTC";
+    if (cv[i]) bars += `<rect x="${x.toFixed(1)}" y="${(mid - cv[i] / mx * hh).toFixed(1)}" width="${w.toFixed(1)}" height="${(cv[i] / mx * hh).toFixed(1)}" fill="#e08a1e"><title>${tt} calls ${f(cv[i], 0)}</title></rect>`;
+    if (pv[i]) bars += `<rect x="${x.toFixed(1)}" y="${mid}" width="${w.toFixed(1)}" height="${(pv[i] / mx * hh).toFixed(1)}" fill="#3b82c4"><title>${tt} puts ${f(pv[i], 0)}</title></rect>`; }
+  let br = null; for (const c of d.btc){ if (c.t > t0 && c.t < t1 && (c.c < r.lo || c.c > r.hi)){ br = c.t; break; } }
+  const ln = (t, col, lab) => `<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="${col}" stroke-dasharray="3 3"/><text x="${(X(t) + 3).toFixed(1)}" y="${T + 9}" font-size="10" fill="${col}">${lab}</text>`;
+  const hrs = []; for (let t = Math.ceil(t0 / 7200) * 7200; t < t1; t += 7200) hrs.push(`<text x="${X(t).toFixed(1)}" y="${H - 6}" font-size="10" fill="var(--mut)" text-anchor="middle">${new Date(t * 1000).toISOString().slice(11, 13)}h</text>`);
+  return `<div class="wrap" style="margin-top:4px"><div class="note">Traded volume per 5 minutes at your four strikes (calls up in orange, puts down in blue; busiest bar ${f(mx, 0)} contracts)${br ? ", dashed red = first 5-minute close outside the profit range" : ""}.</div><svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px"><line x1="${L}" x2="${W - Rr}" y1="${mid}" y2="${mid}" stroke="var(--mut)"/>${bars}${br ? ln(br, "#d33", "out of range") : ""}${hrs.join("")}</svg></div>`;
+};
+$("vfgo").onclick = async () => {
+  const m = $("vfmsg"), out = $("vfout"); m.className = "note"; out.innerHTML = "";
+  const C = window.dbCfg || {}, slot = $("vfslot").value;
+  const R = (window.dbLast || []).filter(r => !r.none && typeof r.fin === "number" && r.strikes && r.tx && (slot === "all" || r.sl === slot));
+  if (!R.length){ m.className = "note l"; m.textContent = "Run the backtest first (and make sure the entry slot you chose was included)."; return; }
+  const base = $("base").value.replace(/\/$/, ""), lots = C.sold || 5000, want = $("vfoi").checked; let oiOn = want, oiSeen = 0, noVol = 0;
+  try {
+    m.textContent = "Loading BTC prices and volume…";
+    const btc = await vfBtc(base, Math.min(...R.map(r => r.t0)) - 2 * 86400, Math.max(...R.map(r => r.tx)) + 600), bT = new Map(btc.map(c => [c.t, c]));
+    const spotAt = t => { const c = bT.get(Math.floor(t / 300) * 300); return c ? c.o : null; };
+    const rows = []; window.vfCase = {}; window.vfRaw = []; let done = 0;
+    for (const r of R){
+      done++; m.textContent = `Trade ${done}/${R.length} (${r.day} ${r.sl}): option volume…`;
+      const g = r.strikes.match(/(\d+)\/(\d+)\D+(\d+)\/(\d+)/); if (!g) continue;
+      const K = {ps: +g[1], pl: +g[2], cl: +g[3], cs: +g[4]}, sym = {}; const code = new Date(r.tx * 1000).toISOString().slice(8, 10) + new Date(r.tx * 1000).toISOString().slice(5, 7) + new Date(r.tx * 1000).toISOString().slice(2, 4);
+      sym.ps = `P-BTC-${K.ps}-${code}`; sym.pl = `P-BTC-${K.pl}-${code}`; sym.cl = `C-BTC-${K.cl}-${code}`; sym.cs = `C-BTC-${K.cs}-${code}`;
+      const D = Date.parse(r.day + "T00:00:00Z") / 1000, wa = Math.max(D - 43200, r.tx - 1900 * 60), wb = r.tx + 60, va = r.t0 - 7200 - 600;
+      const vol = {}, mk = {}, oi = {};
+      await runPool(Object.keys(sym), 4, async k => {
+        mk[k] = await candles15(base, sym[k], wa, wb, true, null, null, "1m");
+        const v = await vfSeries(base, sym[k], va, r.tx, "1m", "V"); vol[k] = v || [];
+        if (oiOn){ const o = await vfSeries(base, sym[k], va, r.tx, "5m", "OI"); oi[k] = o || []; }
+      });
+      if (!Object.values(vol).some(a => a.length)) noVol++;
+      if (oiOn){ const n = Object.values(oi).reduce((a, b) => a + b.length, 0); if (n) oiSeen++; else if (done >= 3 && !oiSeen) oiOn = false; }
+      Object.keys(sym).forEach(k => window.vfRaw.push({sym: sym[k], data: vol[k]}));
+      const vsum = (ks, a, b) => ks.reduce((t, k) => t + vol[k].reduce((q, c) => q + (c.t >= a && c.t < b ? c.v : 0), 0), 0);
+      const ivAt = (k, t) => { const S = spotAt(t), px = dbMark(mk[k], t, true, 60); if (!(S > 0 && px > 0)) return null; const T = (r.tx - t) / 31536000; if (T <= 0) return null; const call = k[0] === "c", Kk = K[k], tp = call ? "C" : "P"; let lo = 0.05, hi = 4; if (bsPx(S, Kk, T, lo, tp) > px || bsPx(S, Kk, T, hi, tp) < px) return null; for (let i = 0; i < 40; i++){ const md = (lo + hi) / 2; if (bsPx(S, Kk, T, md, tp) < px) lo = md; else hi = md; } return (lo + hi) / 2; };
+      const ivAvg = t => { const a = ["ps", "pl", "cl", "cs"].map(k => ivAt(k, t)).filter(x => x !== null); return a.length ? a.reduce((x, y) => x + y, 0) / a.length * 100 : null; };
+      const oiAt = (ks, t) => { let tot = 0, any = false; ks.forEach(k => { const a = (oi[k] || []).filter(c => c.t <= t); if (a.length){ tot += a[a.length - 1].c; any = true; } }); return any ? tot : null; };
+      const fe = {day: r.day, slot: r.sl, fin: r.fin, spot: r.spot, width: r.width, credit: r.credit, iv_entry: ivAvg(r.t0)};
+      const avg5 = btc.filter(c => c.t >= r.t0 - 86400 && c.t < r.t0).reduce((q, c) => q + c.v, 0) / 288;
+      for (const [nm, W] of vfWin){
+        const a = r.t0 - W, bc = btc.filter(c => c.t >= a && c.t < r.t0), s0 = spotAt(a), s1 = spotAt(r.t0);
+        fe["btc_absmove_pct_" + nm] = s0 > 0 && s1 > 0 ? Math.abs(s1 / s0 - 1) * 100 : null;
+        fe["btc_range_pct_" + nm] = bc.length ? (Math.max(...bc.map(c => c.h)) - Math.min(...bc.map(c => c.l))) / r.spot * 100 : null;
+        fe["btc_volume_vs_24h_avg_" + nm] = bc.length && avg5 > 0 ? bc.reduce((q, c) => q + c.v, 0) / bc.length / avg5 : null;
+        const sv = vsum(["ps", "cs"], a, r.t0), bv = vsum(["pl", "cl"], a, r.t0);
+        fe["opt_vol_sold_" + nm] = sv; fe["opt_vol_bought_" + nm] = bv; fe["sold_vol_over_lots_" + nm] = sv / lots;
+        const i0 = ivAvg(a); fe["iv_change_pts_" + nm] = fe.iv_entry !== null && i0 !== null ? fe.iv_entry - i0 : null;
+        if (oiSeen){ const o1 = oiAt(["ps", "cs"], r.t0), o0 = oiAt(["ps", "cs"], a); fe["oi_sold_change_" + nm] = o1 !== null && o0 !== null ? o1 - o0 : null; }
+      }
+      if (oiSeen){ const os = oiAt(["ps", "cs"], r.t0), ob = oiAt(["pl", "cl"], r.t0); fe.oi_sold = os; fe.oi_bought = ob; fe.oi_sold_over_bought = os !== null && ob > 0 ? os / ob : null; }
+      rows.push(fe);
+      window.vfCase[r.day + "|" + r.sl] = {t0: r.t0, tx: r.tx, sym, vol, btc};
+    }
+    window.vfRows = rows;
+    const loss = rows.filter(x => x.fin < 0), win = rows.filter(x => x.fin >= 0);
+    if (loss.length < 3 || win.length < 3){ m.className = "note l"; m.textContent = `Need at least 3 loss trades and 3 profit trades to compare (have ${loss.length} loss, ${win.length} profit).`; }
+    const feats = Object.keys(rows[0] || {}).filter(k => !["day", "slot", "fin", "spot"].includes(k));
+    const med = a => { if (!a.length) return null; const z = [...a].sort((x, y) => x - y), h = z.length >> 1; return z.length % 2 ? z[h] : (z[h - 1] + z[h]) / 2; };
+    const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+    const sd = a => { const mu = mean(a); return a.length > 1 ? Math.sqrt(a.reduce((q, x) => q + (x - mu) ** 2, 0) / (a.length - 1)) : 0; };
+    const stats = feats.map(k => {
+      const L2 = loss.map(x => x[k]).filter(x => x !== null && isFinite(x)), W2 = win.map(x => x[k]).filter(x => x !== null && isFinite(x));
+      if (L2.length < 3 || W2.length < 3) return null;
+      let gt = 0, eq = 0; L2.forEach(a => W2.forEach(b => { if (a > b) gt++; else if (a === b) eq++; }));
+      const auc = (gt + eq / 2) / (L2.length * W2.length), ps = Math.sqrt(((L2.length - 1) * sd(L2) ** 2 + (W2.length - 1) * sd(W2) ** 2) / (L2.length + W2.length - 2));
+      return {k, ml: mean(L2), mw: mean(W2), dl: med(L2), dw: med(W2), auc, d: ps > 0 ? (mean(L2) - mean(W2)) / ps : 0, nl: L2.length, nw: W2.length};
+    }).filter(Boolean).sort((a, b) => Math.abs(b.auc - 0.5) - Math.abs(a.auc - 0.5));
+    const fm = v => v === null ? "" : Math.abs(v) >= 100 ? f(v, 0) : Math.abs(v) >= 1 ? f(v, 2) : f(v, 4);
+    let h = `<p class="note"><b>${loss.length} loss trades vs ${win.length} profit trades</b>${slot === "all" ? "" : " (slot " + slot + ")"}. "Loss higher" is the share of loss-day/profit-day pairs where the loss day had the larger value: 50% means no difference, above 70% or below 30% is a visible gap. With this few days a gap can be chance, so treat the top rows as leads to test, not rules.${oiSeen ? "" : " Open interest history was not returned by Delta, so OI columns are left out."}${noVol ? ` ${noVol} trades had no traded volume at all at their strikes.` : ""}</p>`;
+    h += `<div class="wrap"><table><thead><tr><th>Feature</th><th>Loss days (average)</th><th>Profit days (average)</th><th>Loss (median)</th><th>Profit (median)</th><th>Loss higher</th><th>Gap (σ)</th></tr></thead><tbody>` + stats.map(x => { const strong = Math.abs(x.auc - 0.5) >= 0.2; return `<tr${strong ? ' style="font-weight:600"' : ""}><td>${x.k}</td><td>${fm(x.ml)}</td><td>${fm(x.mw)}</td><td>${fm(x.dl)}</td><td>${fm(x.dw)}</td><td>${f(x.auc * 100, 0)}%</td><td>${f(x.d, 2)}</td></tr>`; }).join("") + `</tbody></table></div>`;
+    out.innerHTML = h; $("vfcsv").disabled = false; $("vfraw").disabled = false;
+    if (loss.length >= 3 && win.length >= 3){ m.textContent = `Done: ${rows.length} trades. The volume strip now shows under the chart when you click a loss day in the loss tables.`; }
+  } catch (e){ m.className = "note l"; m.textContent = "Failed: " + e.message; }
+};
+const vfDl = (name, text) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type: "text/csv"})); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); };
+$("vfcsv").onclick = () => { const R = window.vfRows || []; if (!R.length) return; const keys = [...new Set(R.flatMap(x => Object.keys(x)))]; vfDl("market-features-" + new Date().toISOString().slice(0, 10) + ".csv", keys.join(",") + "\n" + R.map(x => keys.map(k => x[k] === null || x[k] === undefined ? "" : typeof x[k] === "number" ? Math.round(x[k] * 10000) / 10000 : x[k]).join(",")).join("\n") + "\n"); };
+$("vfraw").onclick = () => { const A = window.vfRaw || [], seen = new Set(), L = ["symbol,time_epoch,time_utc,open,high,low,close,volume"]; A.forEach(x => { if (seen.has(x.sym)) return; seen.add(x.sym); x.data.forEach(c => L.push(`${x.sym},${c.t},${new Date(c.t * 1000).toISOString().slice(0, 19).replace("T", " ")},${c.o},${c.h},${c.l},${c.c},${c.v}`)); }); vfDl("option-volume-1m-" + new Date().toISOString().slice(0, 10) + ".csv", L.join("\n") + "\n"); };
 $("dbxgo").onclick = async () => {
   const m = $("dbxmsg"); m.className = "note";
   try {
@@ -3500,7 +3618,7 @@ const dbPick = ev => {
   const rp = ev.target.closest("[data-replay]"); if (rp){ ev.preventDefault(); $("rpday").value = rp.dataset.replay; $("rpgo").click(); return; }
   const td = ev.target.closest("[data-case]"); if (!td || !window.dbCases) return; const c = window.dbCases[td.dataset.case]; if (!c) return;
   const wrap = td.closest("div.wrap"); if (!wrap) return; let nb = wrap.nextElementSibling; while (nb && !(nb.classList && nb.classList.contains("dbcase"))) nb = nb.nextElementSibling;
-  if (nb){ nb.innerHTML = drawCase(c.r, c.key); }
+  if (nb){ nb.innerHTML = drawCase(c.r, c.key) + (window.vfStrip ? window.vfStrip(c.r) : ""); }
 };
 ["dbout", "rpout"].forEach(id => { $(id).addEventListener("click", dbPick); window.dbBindChart($(id)); });
 $("rpgo").onclick = () => {
