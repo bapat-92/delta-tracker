@@ -352,6 +352,7 @@ h1{padding-right:170px}
     <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
     <label>Loss-day test "cover": buy back the net-short lots this % beyond the sold strike<input id="lrcov" type="number" min="0" step="0.1" value="0.5"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbchart" type="checkbox" style="width:auto"> Also draw every loss day's chart below the table (otherwise click a day or a result in the loss-day table)</label>
+    <label>Loss-day test "fast move": close at mid-shoulder only if BTC moved at least this % in the last hour<input id="lrspd" type="number" min="0" step="0.1" value="0.8"></label>
     <span hidden><select id="dbsb"><option value="cap" selected>cap</option></select></span>
     <button id="dbgo">Run the backtest</button>
     <button id="dbcsv" type="button" disabled>Download results as CSV</button>
@@ -3137,7 +3138,7 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, cov1: fin, cov2: fin, trig: null};
+        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, cov1: fin, cov2: fin, fast: fin, an: null, trig: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
           const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2; rv.cT = cT2; rv.pT = pT2;
@@ -3160,6 +3161,19 @@ $("dbgo").onclick = async () => {
             if (tE !== null && tM !== null) break;
           }
           rv.edgeT = tE;
+          {   // anatomy of the run: how fast, how early, how deep
+            const mv1h = t => { const a = spotAt(t - 3600), b = spotAt(t); return a && b ? Math.abs(b - a) / a * 100 : null; };
+            let bigMove = 0, mvT = null, mn = Infinity, mx = -Infinity;
+            for (let t = r.t0; t <= E.tx; t += 300){ const sp = spotAt(t); if (sp !== null){ if (sp < mn) mn = sp; if (sp > mx) mx = sp; } if (t >= r.t0 + 3600){ const m = mv1h(t); if (m !== null && m > bigMove){ bigMove = m; mvT = t; } } }
+            let pk = {v: -Infinity, t: null}, wr = {v: Infinity, t: null}; path.forEach(q => { if (q[1] > pk.v) pk = {v: q[1], t: q[0]}; if (q[1] < wr.v) wr = {v: q[1], t: q[0]}; });
+            const pAt = t => { const q = path.find(z => z[0] >= t); return q ? q[1] : null; };
+            rv.an = {bigMove, mvT, pk, wr, move: (E.settle - r.spot) / r.spot * 100, rangePct: (mx - mn) / r.spot * 100, hM: null, spdM: null, hE: null, pE: null};
+            const tMa = (() => { let a = null; for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; if (sp >= cT2 || sp <= pT2){ a = t; break; } } return a; })();
+            if (tMa !== null){ rv.an.hM = (E.tx - tMa) / 3600; rv.an.spdM = mv1h(tMa); }
+            if (tE !== null){ rv.an.hE = (E.tx - tE) / 3600; rv.an.pE = pAt(tE); }
+            const thr = Number($("lrspd").value) || 0;
+            rv.fast = tMa !== null && rv.an.spdM !== null && rv.an.spdM >= thr ? "PENDING" : fin;
+          }
           if (tE !== null){ const c = closeV(L, tE, spotAt(tE)); if (c !== null) rv.edge = -fees + c; }
           if (tM !== null){
             const sp = spotAt(tM), c = closeV(L, tM, sp);
@@ -3231,6 +3245,7 @@ $("dbgo").onclick = async () => {
             }
           }
         }
+        if (rv.fast === "PENDING") rv.fast = rv.all;
         let ch = null;
         if (fin < 0){ const pts = []; for (let t = r.t0; t <= E.tx; t += 300){ const cb = byT.get(t); if (cb) pts.push([t, cb.close]); } const st = Math.max(1, Math.round(300 / rs)); ch = {pts, pn: path.filter((q, i) => i % st === 0)}; }
         Object.assign(row, {ch, tx: E.tx, sls, adj, rv, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
@@ -3282,7 +3297,7 @@ $("dbgo").onclick = async () => {
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin, "hold"]];
         slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin, "sl" + k]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"]);
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.fast, "mid_fast"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"]);
         if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin, "recenter"]);
         const drawCase = (r, key) => {
           key = key || "all"; const A = key === "all", rl = RL.find(x => x[2] === key), sk = /^sl\d$/.test(key) ? r.sls[Number(key.slice(2))] : null;
@@ -3337,6 +3352,20 @@ $("dbgo").onclick = async () => {
           h += `<div class="kpi" style="margin:6px 0"><div>Locked result at the new price, average<b class="${sg(avgC)}">${usd(avgC)}</b><span class="note">${OR.filter(r => r.rv.outP.pc >= 0).length} of ${OR.length} at or above zero</span></div><div>Held (BTC stayed inside the new range)<b class="${held.length >= OR.length / 2 ? "g" : "l"}">${held.length} of ${OR.length} (${f(held.length / OR.length * 100, 0)}%)</b></div><div>Final P&amp;L with rebuild<b class="${sg(tot(OR))}">${usd(tot(OR))}</b><span class="note">hold ${usd(totH(OR))} on the same days</span></div><div>Days that held: rebuild vs hold<b class="${sg(tot(held) - totH(held))}">${usd(tot(held))} vs ${usd(totH(held))}</b></div><div>Days that left the range: rebuild vs hold<b class="${sg(tot(left) - totH(left))}">${usd(tot(left))} vs ${usd(totH(left))}</b></div></div>`;
           h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>Out of range at (CET) · BTC</th><th>Rebuilt side</th><th>New profit range (BTC)</th><th>Locked result at the new price</th><th>Lowest – highest in the range</th><th>BTC afterwards (min – max)</th><th>Held?</th><th>Final P&amp;L</th><th>Hold P&amp;L</th><th>Change</th></tr></thead><tbody>` +
             OR.map(r => { const o = r.rv.outP; return `<tr><td style="text-align:left">${r.day}</td><td>${tz(r.rv.out.t)} · ${f(r.rv.out.spot, 0)}</td><td>${esc(r.rv.outDesc)}</td><td>${f(o.tLo, 0)}–${f(o.tHi, 0)}</td><td class="${sg(o.pc)}"><b>${usd(o.pc)}</b></td><td>${usd(o.pmin)} to ${usd(o.pmax)}</td><td>${f(o.mn, 0)} – ${f(o.mx, 0)}</td><td class="${o.inside ? "g" : "l"}">${o.inside ? "yes" : "no, left the range " + (o.brT ? tz(o.brT) + " at " + f(o.brS, 0) : "at expiry (" + f(r.settle, 0) + ")")}</td><td class="${sg(r.rv.outFin)}"><b>${usd(r.rv.outFin)}</b></td><td class="${sg(r.fin)}">${usd(r.fin)}</td><td class="${sg(r.rv.outFin - r.fin)}">${r.rv.outFin - r.fin >= 0 ? "+" : ""}${usd(r.rv.outFin - r.fin)}</td></tr>`; }).join("") + `</tbody></table></div>`;
+        }
+      }
+      {
+        const LDa = ok.filter(r => r.fin < 0 && r.rv.an), OKa = ok.filter(r => r.fin >= 0 && r.rv.an);
+        if (LDa.length){
+          const hb = v => v === null || v === undefined ? "–" : f(v, 1) + " h", pc = v => v === null || v === undefined ? "–" : f(v, 2) + "%", avg = (a, fn) => { const v = a.map(fn).filter(x => x !== null && x !== undefined && isFinite(x)); return v.length ? v.reduce((t, x) => t + x, 0) / v.length : null; };
+          h += `<p style="margin:12px 0 4px"><b>Loss anatomy</b> <span class="note">(what the loss days have in common, versus the days that finished in profit. Times are hours before expiry. "Speed" = BTC move in the hour before the trigger. Use this to find a rule that separates crash days from ordinary days)</span></p>`;
+          h += `<div class="wrap"><table><thead><tr><th style="text-align:left"></th><th>Loss days (${LDa.length})</th><th>Profit days (${OKa.length})</th></tr></thead><tbody>` + [
+            ["Entry to expiry, BTC move (absolute)", a => avg(a, r => Math.abs(r.rv.an.move)), pc], ["Largest 1-hour move during the run", a => avg(a, r => r.rv.an.bigMove), pc], ["Whole-run range, high to low", a => avg(a, r => r.rv.an.rangePct), pc],
+            ["Mid-shoulder reached, hours before expiry", a => avg(a, r => r.rv.an.hM), hb], ["Speed when mid-shoulder was reached", a => avg(a, r => r.rv.an.spdM), pc],
+            ["Left the profit range, hours before expiry", a => avg(a, r => r.rv.an.hE), hb], ["Open P&L when it left the range", a => avg(a, r => r.rv.an.pE), usd], ["Best open P&L before expiry", a => avg(a, r => r.rv.an.pk.v), usd], ["Share of days that reached mid-shoulder", a => a.filter(r => r.rv.an.hM !== null).length / a.length * 100, v => f(v, 0) + "%"]
+          ].map(([nm, fn, fmt]) => `<tr><td style="text-align:left">${nm}</td><td>${fmt(fn(LDa))}</td><td>${OKa.length ? fmt(fn(OKa)) : "–"}</td></tr>`).join("") + `</tbody></table></div>`;
+          h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Loss day</th><th>BTC move</th><th>Largest 1 h move (at)</th><th>Best open P&amp;L (h before expiry)</th><th>Mid-shoulder: h before expiry · speed</th><th>Left range: h before expiry · open P&amp;L then</th><th>Worst open P&amp;L (h before expiry)</th><th>Final</th><th>Extra loss after leaving the range</th></tr></thead><tbody>` +
+            LDa.map(r => { const a = r.rv.an, hh = t => t ? f((r.tx - t) / 3600, 1) + " h" : "–"; return `<tr><td style="text-align:left"><b>${r.day}</b></td><td>${a.move >= 0 ? "+" : ""}${f(a.move, 1)}%</td><td>${f(a.bigMove, 2)}% (${hh(a.mvT)})</td><td class="${sg(a.pk.v)}">${usd(a.pk.v)} (${hh(a.pk.t)})</td><td>${a.hM !== null ? f(a.hM, 1) + " h · " + pc(a.spdM) : "not reached"}</td><td>${a.hE !== null ? f(a.hE, 1) + " h · " + usd(a.pE) : "stayed in range"}</td><td class="l">${usd(a.wr.v)} (${hh(a.wr.t)})</td><td class="l"><b>${usd(r.fin)}</b></td><td class="l">${a.pE !== null ? usd(r.fin - a.pE) : "–"}</td></tr>`; }).join("") + `</tbody></table></div>`;
         }
       }
       h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${$("dbadj").checked ? slv.map(X => `<th>Re-center + ${X}% SL</th>`).join("") : ""}${slv.map(X => `<th>Exit at ${X}% SL${$("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? "<br>(" + usd(-X / 100 * Number($("ifunds").value)) + ")" : ""}</th>`).join("")}</tr></thead><tbody>` +
