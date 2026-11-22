@@ -352,6 +352,7 @@ h1{padding-right:170px}
     <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
     <label>Loss-day test "cover": buy back the net-short lots this % beyond the sold strike<input id="lrcov" type="number" min="0" step="0.1" value="0.5"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbchart" type="checkbox" style="width:auto"> Also draw every loss day's chart below the table (otherwise click a day or a result in the loss-day table)</label>
+    <label>Loss-day test "sell in the money": strike this % in the money (puts if BTC ran up, calls if it fell)<input id="lritm" type="number" min="0" step="0.1" value="0.5"></label>
     <label>Loss-day test "fast move": close at mid-shoulder only if BTC moved at least this % in the last hour<input id="lrspd" type="number" min="0" step="0.1" value="0.8"></label>
     <span hidden><select id="dbsb"><option value="cap" selected>cap</option></select></span>
     <button id="dbgo">Run the backtest</button>
@@ -3004,7 +3005,7 @@ function drawCase(r, key){
   const c = r.ch; if (!c || c.pts.length < 2) return "";
   const RL = window.dbRL || [], usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
   key = key || "all"; const A = key === "all", rl = RL.find(x => x[2] === key), sk = /^sl\d$/.test(key) && r.sls ? r.sls[Number(key.slice(2))] : null;
-  const sMid = A || /^mid_|^cov2$|^recenter$/.test(key), sOut = A || key === "out" || key === "cov1", sEdge = A || key === "edge", sBand = A || key === "out", sCov = (A || key === "cov1") && r.rv.cov1K ? r.rv.cov1K : (key === "cov2" ? r.rv.cov2K : 0), sCovT = key === "cov2" ? (r.rv.trig && r.rv.trig.t) : (r.rv.out && r.rv.out.t);
+  const sMid = A || /^mid_|^cov2$|^itm2$|^recenter$/.test(key), sOut = A || key === "out" || key === "cov1" || key === "itm1", sEdge = A || key === "edge", sBand = A || key === "out", sCov = (A || key === "cov1") && r.rv.cov1K ? r.rv.cov1K : (key === "cov2" ? r.rv.cov2K : key === "itm1" ? r.rv.itm1K : key === "itm2" ? r.rv.itm2K : 0), sCovT = key === "cov2" || key === "itm2" ? (r.rv.trig && r.rv.trig.t) : (r.rv.out && r.rv.out.t);
   const W = 720, H1 = 220, H2 = 120, L = 56, R = 16, T = 14, gap = 34, t0 = r.t0, t1 = r.tx, o = r.rv, op = o.outP;
   const x = t => L + (t - t0) / (t1 - t0) * (W - L - R), clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const pr = c.pts.map(q => q[1]).concat([r.lo, r.hi, r.settle, r.spot]); if (op) pr.push(op.tLo, op.tHi); if (o.cov1K) pr.push(o.cov1K);
@@ -3220,7 +3221,7 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, cov1: fin, cov2: fin, fast: fin, an: null, trig: null};
+        const rv = {edge: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, cov1: fin, cov2: fin, itm1: fin, itm2: fin, fast: fin, an: null, trig: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
           const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2; rv.cT = cT2; rv.pT = pT2;
@@ -3234,6 +3235,15 @@ $("dbgo").onclick = async () => {
             syms.forEach(x => { if (x.c !== isCall) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (isCall ? x.K < sh.K : x.K > sh.K) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
             if (!bc) return null; const e = bc.m * (1 + spr), sp = spotAt(t), intr = isCall ? Math.max(E.settle - bc.K, 0) : Math.max(bc.K - E.settle, 0);
             return {K: bc.K, fin: fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), desc: `${isCall ? "calls" : "puts"} ×${f(q, 0)} at ${bc.K}, paid $${f(q * lot * e, 0)}`};
+          };
+          // sell in the money: against the net-short lots of the threatened side, sell options of the OTHER type that are already in the money (puts when BTC ran up, calls when it fell) and hold to expiry
+          const sellItmAt = (t, threatCall) => {
+            const sh = L.find(l => l.c === threatCall && l.side === -1), lg = L.find(l => l.c === threatCall && l.side === 1); if (!sh || !lg) return null;
+            const q = sh.n - lg.n; if (q <= 0) return null; const sp = spotAt(t); if (sp === null) return null;
+            const off = (Number($("lritm").value) || 0) / 100, selPut = threatCall, tgt = selPut ? sp * (1 + off) : sp * (1 - off); let bc = null;
+            syms.forEach(x => { if (x.c === selPut) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (selPut ? x.K < sp : x.K > sp) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
+            if (!bc) return null; const e = bc.m * (1 - spr), intr = selPut ? Math.max(bc.K - E.settle, 0) : Math.max(E.settle - bc.K, 0);
+            return {K: bc.K, fin: fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), desc: `${selPut ? "puts" : "calls"} ×${f(q, 0)} sold at ${bc.K}, received $${f(q * lot * e, 0)}`};
           };
           let tE = null, tM = null, sideM = null;
           for (const q of path){
@@ -3260,7 +3270,7 @@ $("dbgo").onclick = async () => {
           if (tM !== null){
             const sp = spotAt(tM), c = closeV(L, tM, sp);
             if (c !== null){
-              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c; { const cv = coverAt(tM, sideM === "C"); if (cv){ rv.cov2 = cv.fin; rv.cov2d = cv.desc; rv.cov2K = cv.K; } }
+              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c; { const cv = coverAt(tM, sideM === "C"); if (cv){ rv.cov2 = cv.fin; rv.cov2d = cv.desc; rv.cov2K = cv.K; } const sv = sellItmAt(tM, sideM === "C"); if (sv){ rv.itm2 = sv.fin; rv.itm2d = sv.desc; rv.itm2K = sv.K; } }
               const nearL = L.filter(l => l.c === (sideM === "C")), farL = L.filter(l => l.c !== (sideM === "C")), cn = closeV(nearL, tM, sp);
               if (cn !== null) rv.side = -fees + cn + settleV(farL);
               rv.roll = rv.all; rv.half = rv.side;
@@ -3302,7 +3312,7 @@ $("dbgo").onclick = async () => {
             if (tO !== null){
               const sp = spotAt(tO), farCall = !up, dirF = farCall ? 1 : -1, farL = L.filter(l => l.c === farCall), nearL = L.filter(l => l.c !== farCall), cf = closeV(farL, tO, sp);
               const fS = farL.find(l => l.side === -1), av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tO, true)})).filter(x => x.m > 0);
-              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin; { const cv = coverAt(tO, up); if (cv){ rv.cov1 = cv.fin; rv.cov1d = cv.desc; rv.cov1K = cv.K; } }        // if no acceptable rebuild exists the position is simply held
+              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin; { const cv = coverAt(tO, up); if (cv){ rv.cov1 = cv.fin; rv.cov1d = cv.desc; rv.cov1K = cv.K; } const sv = sellItmAt(tO, up); if (sv){ rv.itm1 = sv.fin; rv.itm1d = sv.desc; rv.itm1K = sv.K; } }        // if no acceptable rebuild exists the position is simply held
               if (cf !== null && fS && av.length > 2){
                 const tLo = sp * (1 - (up ? dO : dL)), tHi = sp * (1 + (up ? dL : dO)), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestO = null;
                 [0, 0.0025, 0.005, 0.01, 0.015].forEach(a => [0.01, 0.015, 0.02, 0.03, 0.04].forEach(g => [1, 0.75, 0.5, 0.35].forEach(k => [0.2, 0.3, 0.4, 0.5, 0.7].forEach(rt => {
@@ -3383,7 +3393,7 @@ $("dbgo").onclick = async () => {
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin, "hold"]];
         slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin, "sl" + k]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.fast, "mid_fast"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"]);
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.fast, "mid_fast"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"], ["Out of range: sell in-the-money options of the other type against the net-short lots (puts if BTC ran up)", r => r.rv.itm1, "itm1"], ["Mid-shoulder: sell in-the-money options of the other type against the net-short lots", r => r.rv.itm2, "itm2"]);
         if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin, "recenter"]);
         const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
