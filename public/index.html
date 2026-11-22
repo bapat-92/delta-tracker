@@ -3530,13 +3530,15 @@ $("dbgo").onclick = async () => {
           const spotAt = t => { const cb = byT.get(Math.floor((t - 300) / 300) * 300); return cb ? cb.close : null; };
           const closeV = (legs, t, sp) => { let v = 0; for (const l of legs){ const m = mk(l.c, l.K, t, false); if (m === null) return null; const px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); v += l.side * (px - l.e) * l.n * lot - feeOpt(l.n, px, sp, lot); } return v; };
           const settleV = legs => { let v = 0; legs.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); v += l.side * (intr - l.e) * l.n * lot; if (intr > 0) v -= settleFee(l.n * lot, intr, E.settle); }); return v; };
+          // worst open profit/loss of the whole run when one extra option leg is added at time tAct (sign -1 = sold, +1 = bought)
+          const worstAfter = (tAct, legCall, K, sign, e, q, feeX) => { let w = Infinity; for (const [t, v] of path){ if (t <= tAct){ if (v < w) w = v; } else { const mh = mk(legCall, K, t, false); if (mh === null) continue; const x = v + sign * (mh - e) * q * lot - feeX; if (x < w) w = x; } } return w; };
           // cover: buy back the net-short lots of the threatened side as options X% beyond the sold strike, then hold to expiry
           const coverAt = (t, isCall) => {
             const sh = L.find(l => l.c === isCall && l.side === -1), lg = L.find(l => l.c === isCall && l.side === 1); if (!sh || !lg) return null;
             const q = sh.n - lg.n; if (q <= 0) return null; const off = (Number($("lrcov").value) || 0) / 100, tgt = isCall ? sh.K * (1 + off) : sh.K * (1 - off); let bc = null;
             syms.forEach(x => { if (x.c !== isCall) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (isCall ? x.K < sh.K : x.K > sh.K) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
             if (!bc) return null; const e = bc.m * (1 + spr), sp = spotAt(t), intr = isCall ? Math.max(E.settle - bc.K, 0) : Math.max(bc.K - E.settle, 0);
-            return {K: bc.K, fin: fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), desc: `${isCall ? "calls" : "puts"} ×${f(q, 0)} at ${bc.K}, paid $${f(q * lot * e, 0)}`};
+            return {K: bc.K, fin: fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), worst: (() => { const fv = fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0); return Math.min(fv, worstAfter(t, isCall, bc.K, 1, e, q, feeOpt(q, e, sp, lot))); })(), desc: `${isCall ? "calls" : "puts"} ×${f(q, 0)} at ${bc.K}, paid $${f(q * lot * e, 0)}`};
           };
           // sell in the money: against the net-short lots of the threatened side, sell options of the OTHER type that are already in the money (puts when BTC ran up, calls when it fell) and hold to expiry
           const sellItmAt = (t, threatCall) => {
@@ -3545,7 +3547,7 @@ $("dbgo").onclick = async () => {
             const off = (Number($("lritm").value) || 0) / 100, selPut = threatCall, tgt = selPut ? sp * (1 + off) : sp * (1 - off); let bc = null;
             syms.forEach(x => { if (x.c === selPut) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (selPut ? x.K < sp : x.K > sp) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
             if (!bc) return null; const e = bc.m * (1 - spr), intr = selPut ? Math.max(bc.K - E.settle, 0) : Math.max(E.settle - bc.K, 0);
-            return {K: bc.K, fin: fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), desc: `${selPut ? "puts" : "calls"} ×${f(q, 0)} sold at ${bc.K}, received $${f(q * lot * e, 0)}`};
+            return {K: bc.K, fin: fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), worst: (() => { const fv = fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0); return Math.min(fv, worstAfter(t, !selPut, bc.K, -1, e, q, feeOpt(q, e, sp, lot))); })(), desc: `${selPut ? "puts" : "calls"} ×${f(q, 0)} sold at ${bc.K}, received $${f(q * lot * e, 0)}`};
           };
           let tE = null, tM = null, sideM = null;
           for (const q of path){
@@ -3574,7 +3576,7 @@ $("dbgo").onclick = async () => {
           if (tM !== null){
             const sp = spotAt(tM), c = closeV(L, tM, sp);
             if (c !== null){
-              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c; { const cv = coverAt(tM, sideM === "C"); if (cv){ rv.cov2 = cv.fin; rv.cov2d = cv.desc; rv.cov2K = cv.K; } const sv = sellItmAt(tM, sideM === "C"); if (sv){ rv.itm2 = sv.fin; rv.itm2d = sv.desc; rv.itm2K = sv.K; } }
+              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c; { const cv = coverAt(tM, sideM === "C"); if (cv){ rv.w2c = cv.worst; rv.cov2 = cv.fin; rv.cov2d = cv.desc; rv.cov2K = cv.K; } const sv = sellItmAt(tM, sideM === "C"); if (sv){ rv.w2i = sv.worst; rv.itm2 = sv.fin; rv.itm2d = sv.desc; rv.itm2K = sv.K; } }
               const nearL = L.filter(l => l.c === (sideM === "C")), farL = L.filter(l => l.c !== (sideM === "C")), cn = closeV(nearL, tM, sp);
               if (cn !== null) rv.side = -fees + cn + settleV(farL);
               rv.roll = rv.all; rv.half = rv.side;
@@ -3616,7 +3618,7 @@ $("dbgo").onclick = async () => {
             if (tO !== null){
               const sp = spotAt(tO), farCall = !up, dirF = farCall ? 1 : -1, farL = L.filter(l => l.c === farCall), nearL = L.filter(l => l.c !== farCall), cf = closeV(farL, tO, sp);
               const fS = farL.find(l => l.side === -1), av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tO, true)})).filter(x => x.m > 0);
-              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin; { const cv = coverAt(tO, up); if (cv){ rv.cov1 = cv.fin; rv.cov1d = cv.desc; rv.cov1K = cv.K; } const sv = sellItmAt(tO, up); if (sv){ rv.itm1 = sv.fin; rv.itm1d = sv.desc; rv.itm1K = sv.K; } }        // if no acceptable rebuild exists the position is simply held
+              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin; { const cv = coverAt(tO, up); if (cv){ rv.w1c = cv.worst; rv.cov1 = cv.fin; rv.cov1d = cv.desc; rv.cov1K = cv.K; } const sv = sellItmAt(tO, up); if (sv){ rv.w1i = sv.worst; rv.itm1 = sv.fin; rv.itm1d = sv.desc; rv.itm1K = sv.K; } }        // if no acceptable rebuild exists the position is simply held
               if (cf !== null && fS && av.length > 2){
                 const tLo = sp * (1 - (up ? dO : dL)), tHi = sp * (1 + (up ? dL : dO)), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestO = null;
                 [0, 0.0025, 0.005, 0.01, 0.015].forEach(a => [0.01, 0.015, 0.02, 0.03, 0.04].forEach(g => [1, 0.75, 0.5, 0.35].forEach(k => [0.2, 0.3, 0.4, 0.5, 0.7].forEach(rt => {
@@ -3643,6 +3645,9 @@ $("dbgo").onclick = async () => {
         }
         if (rv.fast === "PENDING") rv.fast = rv.all;
         rv.combo = rv.fastE ? rv.edge : rv.itm1;
+        { const wH = Math.min(minV, fin), wClose = (tt, val) => { if (tt === null || tt === undefined || val === fin) return wH; let w = Infinity; for (const [t, v] of path){ if (t <= tt && v < w) w = v; } return Math.min(w, val); };
+          rv.w = {hold: wH, edge: wClose(rv.edgeT, rv.edge), itm1: rv.w1i !== undefined ? rv.w1i : wH, itm2: rv.w2i !== undefined ? rv.w2i : wH, cov1: rv.w1c !== undefined ? rv.w1c : wH, cov2: rv.w2c !== undefined ? rv.w2c : wH};
+          rv.w.combo = rv.fastE ? rv.w.edge : rv.w.itm1; }
         let ch = null;
         if (fin < 0 || RP){ const pts = []; for (let t = r.t0; t <= E.tx; t += 300){ const cb = byT.get(t); if (cb) pts.push([t, cb.close]); } const st = Math.max(1, Math.round(300 / rs)); ch = {pts, pn: path.filter((q, i) => i % st === 0)}; }
         Object.assign(row, {ch, tx: E.tx, sls, adj, rv, best, margin, fees, fin, minV: isFinite(minV) ? minV : null, minT, b0, b1, b2, credit: best.credit, lo: best.lo, hi: best.hi, width: best.width,
@@ -3728,6 +3733,17 @@ $("dbgo").onclick = async () => {
             });
             const left = ok.filter(r => an(r).spdE !== null && an(r).spdE !== undefined), lv = left.map(r => ({d: r.day, s: an(r).spdE, v: an(r).volE, fin: r.fin, e: r.rv.edge})).sort((x, y) => y.s - x.s);
             h += `<p class="note" style="margin:6px 0">Every day that left the range, fastest first (hour speed %, 15-minute volume vs 24h average, final result if held, result if closed at the exit): ` + lv.map(x => `${x.d} ${f(x.s, 2)}% ${x.v !== null && x.v !== undefined ? f(x.v, 1) + "×" : "–"} ${usd(x.fin)} → ${usd(x.e)}`).join(" · ") + `</p>`;
+          }
+          {   // worst open loss during the run, as a share of margin, for each rule
+            const WR = [["Hold to expiry", "hold"], ["Exit when BTC leaves the profit range", "edge"], ["Combined (fast range exit, otherwise sell in-the-money options)", "combo"], ["Out of range: sell in-the-money options", "itm1"], ["Mid-shoulder: sell in-the-money options", "itm2"], ["Out of range: buy back net-short lots (cover)", "cov1"]];
+            const pc = (r, k) => { const w = r.rv.w && r.rv.w[k]; return w === undefined || w === null || !(r.margin > 0) ? null : Math.max(0, -w / r.margin * 100); };
+            const levNow = Number($("lev").value) || 100, LV = [levNow, 50, 25, 10].filter((x, i, a) => a.indexOf(x) === i);
+            h += `<p style="margin:12px 0 4px"><b>Worst open loss during the run, as a share of margin</b> <span class="note">(follows the position minute by minute after each rule acts, including the options it adds. Above 100% of margin would mean a margin call or forced liquidation before expiry. Margin shown for ${levNow}x leverage; at lower leverage the same dollar loss is a smaller share: ${LV.slice(1).map(x => x + "x = ×" + f(levNow / x, 2)).join(", ")}.)</span></p>`;
+            h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Rule</th><th>Worst day, ${levNow}x</th>${LV.slice(1).map(x => `<th>Worst day, ${x}x</th>`).join("")}<th>Days beyond 50% (${levNow}x)</th><th>Days beyond 100% (${levNow}x)</th></tr></thead><tbody>` +
+              WR.map(([nm, k]) => { const v = ok.map(r => pc(r, k)).filter(x => x !== null), mx = v.length ? Math.max(...v) : 0; return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${mx > 100 ? "l" : ""}"><b>${f(mx, 0)}%</b></td>${LV.slice(1).map(x => `<td>${f(mx * levNow / x, 0)}%</td>`).join("")}<td>${v.filter(x => x > 50).length}</td><td>${v.filter(x => x > 100).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
+            const risky = ok.filter(r => (pc(r, "hold") || 0) > 50 || r.fin < 0).sort((a, b) => (pc(b, "hold") || 0) - (pc(a, "hold") || 0));
+            h += `<p class="note" style="margin:6px 0 2px">Every loss day, and every day whose open loss went beyond 50% of margin when held (worst open loss as % of margin; the final result is in brackets):</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th>${WR.map(x => `<th>${x[0]}</th>`).join("")}<th>Final if held</th></tr></thead><tbody>` +
+              risky.map(r => `<tr><td style="text-align:left"><b>${r.day}</b></td>${WR.map(([nm, k]) => { const v = pc(r, k), fv = k === "hold" ? r.fin : k === "edge" ? r.rv.edge : k === "combo" ? r.rv.combo : k === "itm1" ? r.rv.itm1 : k === "itm2" ? r.rv.itm2 : r.rv.cov1; return `<td class="${v > 100 ? "l" : ""}">${v === null ? "–" : f(v, 0) + "%"}<br><span class="note">(${usd(fv)})</span></td>`; }).join("")}<td class="${sg(r.fin)}">${usd(r.fin)}</td></tr>`).join("") + `</tbody></table></div>`;
           }
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
