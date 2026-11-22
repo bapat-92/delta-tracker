@@ -391,9 +391,11 @@ h1{padding-right:170px}
       <label style="flex-direction:row;align-items:center;gap:6px"><input id="vfoi" type="checkbox" style="width:auto" checked> Also try open interest history</label>
       <button id="vfgo" type="button">Fetch data and compare</button>
       <button id="vfcsv" type="button" disabled>Download features (CSV)</button>
+      <button id="vfcsv2" type="button" disabled>Download in-trade features (CSV)</button>
       <button id="vfraw" type="button" disabled>Download raw volume (CSV)</button>
     </div>
     <div id="vfmsg" class="note"></div><div id="vfout"></div>
+    <div id="vfpick" style="display:none" class="row"><label>Chart A (default: worst loss)<select id="vfa"></select></label><label>Chart B (default: winner with the biggest BTC swing)<select id="vfb"></select></label><button id="vfshow" type="button">Show charts</button></div><div id="vfpair"></div>
   </details>
   <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
     <p class="note" style="margin:4px 0 8px">Start a run on GitHub yourself (Actions tab, daily-backtest, Run workflow), wait a few minutes, then refresh the list and pick the report.</p>
@@ -3030,6 +3032,123 @@ window.vfStrip = r => {
   const hrs = []; for (let t = Math.ceil(t0 / 7200) * 7200; t < t1; t += 7200) hrs.push(`<text x="${X(t).toFixed(1)}" y="${H - 6}" font-size="10" fill="var(--mut)" text-anchor="middle">${new Date(t * 1000).toISOString().slice(11, 13)}h</text>`);
   return `<div class="wrap" style="margin-top:4px"><div class="note">Traded volume per 5 minutes at your four strikes (calls up in orange, puts down in blue; busiest bar ${f(mx, 0)} contracts)${br ? ", dashed red = first 5-minute close outside the profit range" : ""}.</div><svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px"><line x1="${L}" x2="${W - Rr}" y1="${mid}" y2="${mid}" stroke="var(--mut)"/>${bars}${br ? ln(br, "#d33", "out of range") : ""}${hrs.join("")}</svg></div>`;
 };
+
+window.vfData = d => {                       // every series on one 5-minute time axis, from entry to expiry
+  const T = [], bT = new Map(d.btc.map(c => [c.t, c])), k4 = ["ps", "pl", "cl", "cs"];
+  const m0 = {}; k4.forEach(k => { m0[k] = dbMark(d.mk[k], d.t0, true, 60); });
+  const fill = {ps: m0.ps * (1 - d.spr), cs: m0.cs * (1 - d.spr), pl: m0.pl * (1 + d.spr), cl: m0.cl * (1 + d.spr)};
+  const iv = (k, t, S) => { const px = dbMark(d.mk[k], t, true, 60), Tt = (d.tx - t) / 31536000; if (!(S > 0 && px > 0 && Tt > 0)) return null; const tp = k[0] === "c" ? "C" : "P", Kk = d.K[k]; let lo = 0.05, hi = 4; if (bsPx(S, Kk, Tt, lo, tp) > px || bsPx(S, Kk, Tt, hi, tp) < px) return null; for (let i = 0; i < 36; i++){ const md = (lo + hi) / 2; if (bsPx(S, Kk, Tt, md, tp) < px) lo = md; else hi = md; } return (lo + hi) / 2 * 100; };
+  const avg5 = d.btc.filter(c => c.t >= d.t0 - 86400 && c.t < d.t0).reduce((q, c) => q + c.v, 0) / 288;
+  const oiSum = (ks, t) => { let tot = 0, any = false; ks.forEach(k => { const a = (d.oi && d.oi[k] || []).filter(c => c.t <= t); if (a.length){ tot += a[a.length - 1].c; any = true; } }); return any ? tot : null; };
+  for (let t = d.t0; t < d.tx; t += 300){
+    const c = bT.get(t); if (!c) continue; const S = c.o;
+    let pnl = 0, ok = true; k4.forEach(k => { const px = dbMark(d.mk[k], t, true, 60); if (!(px > 0) || !(fill[k] > 0)){ ok = false; return; } pnl += (k === "ps" || k === "cs" ? d.sold * (fill[k] - px) : d.bought * (px - fill[k])) * d.lot; });
+    let cv = 0, pv = 0; ["cs", "cl"].forEach(k => (d.vol[k] || []).forEach(x => { if (x.t >= t && x.t < t + 300) cv += x.v; })); ["ps", "pl"].forEach(k => (d.vol[k] || []).forEach(x => { if (x.t >= t && x.t < t + 300) pv += x.v; }));
+    const ivs = k4.map(k => iv(k, t, S)).filter(x => x !== null);
+    T.push({t, S, pnl: ok ? pnl : null, cv, pv, iv: ivs.length ? ivs.reduce((a, b) => a + b, 0) / ivs.length : null, bv: avg5 > 0 ? c.v / avg5 : null, oi: oiSum(["ps", "cs"], t)});
+  }
+  return T;
+};
+window.vfChartHtml = (key, id) => {
+  const d = window.vfCase[key]; if (!d) return "";
+  const T = window.vfData(d); if (T.length < 3) return `<div class="note">No BTC data for ${esc(key)}.</div>`;
+  const W = 720, L = 56, Rr = 16, t0 = d.t0, t1 = d.tx, X = t => L + (t - t0) / (t1 - t0) * (W - L - Rr), usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
+  const hasOi = T.some(x => x.oi !== null);
+  const P = [["BTC price (shaded = profit range)", "S", 130], ["Open profit/loss", "pnl", 110], ["Implied volatility, average of the 4 strikes (%)", "iv", 80], ["Option volume per 5 min at the 4 strikes (calls up, puts down)", "vol", 90], ["BTC volume vs its 24h average (1 = normal)", "bv", 70]];
+  if (hasOi) P.push(["Open interest at the sold strikes (contracts)", "oi", 70]);
+  let y = 6, svg = "";
+  const rng = k => { const a = T.map(x => x[k]).filter(v => v !== null && isFinite(v)); if (!a.length) return [0, 1]; let lo = Math.min(...a), hi = Math.max(...a); if (k === "S"){ lo = Math.min(lo, d.lo); hi = Math.max(hi, d.hi); } if (k === "pnl"){ lo = Math.min(lo, 0); hi = Math.max(hi, 0); } if (k === "bv") lo = 0; if (hi - lo < 1e-9){ hi += 1; lo -= 1; } const pd = (hi - lo) * 0.06; return [lo - pd, hi + pd]; };
+  const panels = [];
+  P.forEach(([name, k, h]) => {
+    const top = y + 14, bot = y + h, ym = (v, lo, hi) => bot - (v - lo) / (hi - lo) * (bot - top);
+    svg += `<text x="${L}" y="${y + 10}" font-size="11" fill="var(--mut)">${name}</text><rect x="${L}" y="${top}" width="${W - L - Rr}" height="${bot - top}" fill="none" stroke="var(--line)"/>`;
+    if (k === "vol"){
+      const mx = Math.max(1, ...T.map(x => Math.max(x.cv, x.pv))), mid = (top + bot) / 2, hh = (bot - top) / 2 - 2, w = Math.max(1, (W - L - Rr) / T.length - 1);
+      T.forEach(x => { if (x.cv) svg += `<rect x="${X(x.t).toFixed(1)}" y="${(mid - x.cv / mx * hh).toFixed(1)}" width="${w.toFixed(1)}" height="${(x.cv / mx * hh).toFixed(1)}" fill="#e08a1e"/>`; if (x.pv) svg += `<rect x="${X(x.t).toFixed(1)}" y="${mid}" width="${w.toFixed(1)}" height="${(x.pv / mx * hh).toFixed(1)}" fill="#3b82c4"/>`; });
+      svg += `<line x1="${L}" x2="${W - Rr}" y1="${mid}" y2="${mid}" stroke="var(--mut)"/><text x="${W - Rr - 3}" y="${top + 11}" font-size="10" fill="var(--mut)" text-anchor="end">max ${f(mx, 0)}</text>`;
+    } else if (k === "bv"){
+      const [lo, hi] = rng(k), w = Math.max(1, (W - L - Rr) / T.length - 1);
+      T.forEach(x => { if (x.bv !== null) svg += `<rect x="${X(x.t).toFixed(1)}" y="${ym(x.bv, lo, hi).toFixed(1)}" width="${w.toFixed(1)}" height="${(bot - ym(x.bv, lo, hi)).toFixed(1)}" fill="#8a8a99"/>`; });
+      svg += `<line x1="${L}" x2="${W - Rr}" y1="${ym(1, lo, hi).toFixed(1)}" y2="${ym(1, lo, hi).toFixed(1)}" stroke="var(--mut)" stroke-dasharray="3 3"/><text x="${W - Rr - 3}" y="${top + 11}" font-size="10" fill="var(--mut)" text-anchor="end">max ${f(hi, 1)}×</text>`;
+    } else {
+      const [lo, hi] = rng(k);
+      if (k === "S") svg += `<rect x="${L}" y="${ym(d.hi, lo, hi).toFixed(1)}" width="${W - L - Rr}" height="${(ym(d.lo, lo, hi) - ym(d.hi, lo, hi)).toFixed(1)}" fill="rgba(60,170,90,.15)"/>`;
+      if (k === "pnl") svg += `<line x1="${L}" x2="${W - Rr}" y1="${ym(0, lo, hi).toFixed(1)}" y2="${ym(0, lo, hi).toFixed(1)}" stroke="var(--mut)"/>`;
+      let pth = ""; T.forEach(x => { if (x[k] !== null) pth += (pth ? "L" : "M") + X(x.t).toFixed(1) + " " + ym(x[k], lo, hi).toFixed(1); });
+      svg += `<path d="${pth}" fill="none" stroke="${k === "pnl" ? "#d33" : k === "iv" ? "#9a5bd0" : k === "oi" ? "#2a9d8f" : "#2a6fdb"}" stroke-width="1.4"/><text x="${L - 4}" y="${top + 9}" font-size="10" fill="var(--mut)" text-anchor="end">${k === "pnl" ? usd(hi) : f(hi, k === "S" ? 0 : 1)}</text><text x="${L - 4}" y="${bot - 2}" font-size="10" fill="var(--mut)" text-anchor="end">${k === "pnl" ? usd(lo) : f(lo, k === "S" ? 0 : 1)}</text>`;
+    }
+    panels.push([top, bot]); y = bot + 18;
+  });
+  const H = y; let br = null; for (const x of T){ if (x.S < d.lo || x.S > d.hi){ br = x.t; break; } }
+  let ax = ""; for (let t = Math.ceil(t0 / 7200) * 7200; t < t1; t += 7200) ax += `<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="6" y2="${H - 14}" stroke="var(--line)"/><text x="${X(t).toFixed(1)}" y="${H - 3}" font-size="10" fill="var(--mut)" text-anchor="middle">${new Date(t * 1000).toISOString().slice(11, 13)}h</text>`;
+  if (br) ax += `<line x1="${X(br).toFixed(1)}" x2="${X(br).toFixed(1)}" y1="6" y2="${H - 14}" stroke="#d33" stroke-dasharray="3 3"/>`;
+  window.dbCharts = window.dbCharts || {}; window.dbCharts[id] = {T, X0: L, X1: W - Rr, t0, t1, W, H, usd};
+  return `<div class="wrap" style="margin-top:4px"><div class="note"><b>${esc(key)}</b> · final ${usd(d.fin)} · profit range ${f(d.lo, 0)}–${f(d.hi, 0)}${br ? " · BTC first left the range at " + new Date(br * 1000).toISOString().slice(11, 16) + " UTC (red dashed line)" : " · BTC never left the range"}. The open profit/loss is rebuilt from the four strikes' mark prices, so it is close to but not exactly the backtest line. Hover for values.</div><svg data-vf="${id}" viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;touch-action:none">${ax}${svg}<line class="vfl" y1="6" y2="${H - 14}" stroke="var(--fg,#444)" style="display:none"/></svg><div class="note vft" style="min-height:1.4em">Hover or touch the chart.</div></div>`;
+};
+document.addEventListener("pointermove", ev => {
+  const sv = ev.target.closest && ev.target.closest("svg[data-vf]"); if (!sv) return; const c = window.dbCharts && window.dbCharts[sv.dataset.vf]; if (!c) return;
+  const r = sv.getBoundingClientRect(), x = (ev.clientX - r.left) / r.width * c.W, t = c.t0 + (x - c.X0) / (c.X1 - c.X0) * (c.t1 - c.t0); if (t < c.t0 || t > c.t1) return;
+  let b = c.T[0]; c.T.forEach(q => { if (Math.abs(q.t - t) < Math.abs(b.t - t)) b = q; });
+  const ln = sv.querySelector(".vfl"); ln.style.display = ""; const px = c.X0 + (b.t - c.t0) / (c.t1 - c.t0) * (c.X1 - c.X0); ln.setAttribute("x1", px); ln.setAttribute("x2", px);
+  const tip = sv.parentNode.querySelector(".vft"), fm = (v, n) => v === null || v === undefined ? "–" : f(v, n);
+  tip.textContent = `${new Date(b.t * 1000).toISOString().slice(11, 16)} UTC · BTC ${fm(b.S, 0)} · P&L ${b.pnl === null ? "–" : c.usd(b.pnl)} · IV ${fm(b.iv, 1)}% · calls ${fm(b.cv, 0)} / puts ${fm(b.pv, 0)} · BTC volume ${fm(b.bv, 2)}×${b.oi !== null ? " · OI sold " + fm(b.oi, 0) : ""}`;
+});
+window.vfPair = () => {
+  const keys = Object.keys(window.vfCase); const A = $("vfa").value, B = $("vfb").value, o = $("vfpair");
+  o.innerHTML = (A ? window.vfChartHtml(A, "vfA") : "") + (B ? window.vfChartHtml(B, "vfB") : "");
+};
+
+window.vfTable = (rows, title, note) => {
+  const loss = rows.filter(x => x.fin < 0), win = rows.filter(x => x.fin >= 0);
+  if (loss.length < 2 || win.length < 2) return `<h4 style="margin:12px 0 2px">${title}</h4><p class="note">Only ${loss.length} loss and ${win.length} profit trades qualify here, too few to compare.</p>`;
+  const feats = Object.keys(rows[0]).filter(k => !["day", "slot", "fin", "cp"].includes(k));
+  const med = a => { const z = [...a].sort((x, y) => x - y), h = z.length >> 1; return z.length % 2 ? z[h] : (z[h - 1] + z[h]) / 2; }, mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const sd = a => { const mu = mean(a); return a.length > 1 ? Math.sqrt(a.reduce((q, x) => q + (x - mu) ** 2, 0) / (a.length - 1)) : 0; };
+  const st = feats.map(k => {
+    const L2 = loss.map(x => x[k]).filter(x => x !== null && x !== undefined && isFinite(x)), W2 = win.map(x => x[k]).filter(x => x !== null && x !== undefined && isFinite(x)); if (L2.length < 2 || W2.length < 2) return null;
+    let gt = 0, eq = 0; L2.forEach(a => W2.forEach(b => { if (a > b) gt++; else if (a === b) eq++; }));
+    const auc = (gt + eq / 2) / (L2.length * W2.length), ps = Math.sqrt(((L2.length - 1) * sd(L2) ** 2 + (W2.length - 1) * sd(W2) ** 2) / (L2.length + W2.length - 2));
+    return {k, ml: mean(L2), mw: mean(W2), dl: med(L2), dw: med(W2), auc, d: ps > 0 ? (mean(L2) - mean(W2)) / ps : 0};
+  }).filter(Boolean).sort((a, b) => Math.abs(b.auc - 0.5) - Math.abs(a.auc - 0.5));
+  const fm = v => v === null ? "" : Math.abs(v) >= 100 ? f(v, 0) : Math.abs(v) >= 1 ? f(v, 2) : f(v, 4);
+  return `<h4 style="margin:12px 0 2px">${title} <span class="note">· ${loss.length} end as losses, ${win.length} as profits</span></h4>${note ? `<p class="note" style="margin:0 0 4px">${note}</p>` : ""}<div class="wrap"><table><thead><tr><th>Feature</th><th>Loss (average)</th><th>Profit (average)</th><th>Loss (median)</th><th>Profit (median)</th><th>Loss higher</th><th>Gap (σ)</th></tr></thead><tbody>` +
+    st.map(x => `<tr${Math.abs(x.auc - 0.5) >= 0.2 ? ' style="font-weight:600"' : ""}><td>${x.k}</td><td>${fm(x.ml)}</td><td>${fm(x.mw)}</td><td>${fm(x.dl)}</td><td>${fm(x.dw)}</td><td>${f(x.auc * 100, 0)}%</td><td>${f(x.d, 2)}</td></tr>`).join("") + `</tbody></table></div>`;
+};
+window.vfInTrade = rows => {
+  const out = []; let html = "";
+  const cps = [["+1h after entry", {h: 1}], ["+2h after entry", {h: 2}], ["+4h after entry", {h: 4}], ["+8h after entry", {h: 8}], ["the moment BTC first reached 50% of the way to a profit-range edge", {half: 1}], ["the first 5-minute close outside the profit range", {out: 1}]];
+  const cache = {};
+  for (const [lab, cp] of cps){
+    const recs = [];
+    for (const x of rows){
+      const key = x.day + "|" + x.slot, d = window.vfCase[key]; if (!d) continue; const T = cache[key] || (cache[key] = window.vfData(d)); if (T.length < 14) continue;
+      const mid = (d.lo + d.hi) / 2, half = (d.hi - d.lo) / 2; let i = -1;
+      if (cp.h){ i = Math.round(cp.h * 12); if (i >= T.length) continue; }
+      else if (cp.half){ i = T.findIndex(q => Math.abs(q.S - mid) >= 0.5 * half); if (i < 0) continue; }
+      else { i = T.findIndex(q => q.S < d.lo || q.S > d.hi); if (i < 0) continue; }
+      const q = T[i], at = n => T[Math.max(0, i - n)], win = n => T.slice(Math.max(0, i - n + 1), i + 1), mean = a => a.length ? a.reduce((s2, y) => s2 + y, 0) / a.length : null;
+      const cv1 = win(12).reduce((s2, y) => s2 + y.cv, 0), pv1 = win(12).reduce((s2, y) => s2 + y.pv, 0), cv3 = win(3).reduce((s2, y) => s2 + y.cv, 0), pv3 = win(3).reduce((s2, y) => s2 + y.pv, 0);
+      const bvs = a => a.map(y => y.bv).filter(v => v !== null), mx = Math.max(...T.slice(0, i + 1).map(y => Math.abs(y.S / d.spot - 1))) * 100;
+      const rec = {day: x.day, slot: x.slot, fin: x.fin, cp: lab,
+        minutes_since_entry: i * 5, btc_move_from_entry_pct: (q.S / d.spot - 1) * 100, btc_distance_to_mid_over_half_width: Math.abs(q.S - mid) / half, btc_max_move_so_far_pct: mx,
+        btc_speed_15m_pct: Math.abs(q.S / at(3).S - 1) * 100, btc_speed_1h_pct: Math.abs(q.S / at(12).S - 1) * 100,
+        btc_volume_15m_vs_24h: mean(bvs(win(3))), btc_volume_1h_vs_24h: mean(bvs(win(12))),
+        iv_now: q.iv, iv_jump_since_entry_pts: q.iv !== null && T[0].iv !== null ? q.iv - T[0].iv : null, iv_jump_1h_pts: q.iv !== null && at(12).iv !== null ? q.iv - at(12).iv : null,
+        calls_minus_puts_volume_share_15m: (cv3 - pv3) / (cv3 + pv3 + 1), calls_minus_puts_volume_share_1h: (cv1 - pv1) / (cv1 + pv1 + 1), option_volume_15m: cv3 + pv3, option_volume_1h: cv1 + pv1,
+        open_pnl: q.pnl, open_pnl_over_credit: q.pnl !== null && d.credit > 0 ? q.pnl / d.credit : null};
+      if (q.oi !== null && T[0].oi !== null) rec.oi_sold_change_since_entry = q.oi - T[0].oi;
+      recs.push(rec);
+    }
+    out.push(...recs);
+    html += window.vfTable(recs, "At " + lab, cp.out ? "Of the trades that left the range, which ones ended as losses (stayed out) and which came back in and made a profit? This is the key question for an exit rule." : cp.half ? "Of the trades that got halfway to an edge, which ones ended as losses?" : "");
+  }
+  window.vfInRows = out; return html;
+};
+function vfWeekday(rows){
+  const nm = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], g = {};
+  rows.forEach(x => { const k = x.expiry_weekday; (g[k] = g[k] || {n: 0, l: 0, p: 0})[x.fin < 0 ? "l" : "p"]++; g[k].n++; g[k].s = (g[k].s || 0) + x.fin; });
+  return `<h4 style="margin:12px 0 2px">Expiry weekday</h4><div class="wrap"><table><thead><tr><th>Expiry day</th><th>Trades</th><th>Losses</th><th>Loss rate</th><th>Total result</th></tr></thead><tbody>` + [1, 2, 3, 4, 5, 6, 0].filter(k => g[k]).map(k => `<tr><td>${nm[k]}</td><td>${g[k].n}</td><td>${g[k].l}</td><td>${f(g[k].l / g[k].n * 100, 0)}%</td><td>${g[k].s < 0 ? "-$" : "$"}${f(Math.abs(g[k].s), 0)}</td></tr>`).join("") + `</tbody></table></div>`;
+}
 $("vfgo").onclick = async () => {
   const m = $("vfmsg"), out = $("vfout"); m.className = "note"; out.innerHTML = "";
   const C = window.dbCfg || {}, slot = $("vfslot").value;
@@ -3038,7 +3157,7 @@ $("vfgo").onclick = async () => {
   const base = $("base").value.replace(/\/$/, ""), lots = C.sold || 5000, want = $("vfoi").checked; let oiOn = want, oiSeen = 0, noVol = 0;
   try {
     m.textContent = "Loading BTC prices and volume…";
-    const btc = await vfBtc(base, Math.min(...R.map(r => r.t0)) - 2 * 86400, Math.max(...R.map(r => r.tx)) + 600), bT = new Map(btc.map(c => [c.t, c]));
+    const btc = await vfBtc(base, Math.min(...R.map(r => r.t0)) - 4 * 86400, Math.max(...R.map(r => r.tx)) + 600), bT = new Map(btc.map(c => [c.t, c]));
     const spotAt = t => { const c = bT.get(Math.floor(t / 300) * 300); return c ? c.o : null; };
     const rows = []; window.vfCase = {}; window.vfRaw = []; let done = 0;
     for (const r of R){
@@ -3073,10 +3192,20 @@ $("vfgo").onclick = async () => {
         if (oiSeen){ const o1 = oiAt(["ps", "cs"], r.t0), o0 = oiAt(["ps", "cs"], a); fe["oi_sold_change_" + nm] = o1 !== null && o0 !== null ? o1 - o0 : null; }
       }
       if (oiSeen){ const os = oiAt(["ps", "cs"], r.t0), ob = oiAt(["pl", "cl"], r.t0); fe.oi_sold = os; fe.oi_bought = ob; fe.oi_sold_over_bought = os !== null && ob > 0 ? os / ob : null; }
+      { const a24 = btc.filter(c => c.t >= r.t0 - 86400 && c.t < r.t0), a72 = btc.filter(c => c.t >= r.t0 - 259200 && c.t < r.t0), s24 = spotAt(r.t0 - 86400), s72 = spotAt(r.t0 - 259200), wd = new Date(r.tx * 1000).getUTCDay();
+        const rv = a => { if (a.length < 20) return null; const q = a.map(c => Math.log(c.c / c.o)), mu = q.reduce((x, y) => x + y, 0) / q.length; return Math.sqrt(q.reduce((x, y) => x + (y - mu) ** 2, 0) / q.length) * Math.sqrt(288) * 100; };
+        fe.expiry_weekday = wd; fe.expiry_is_weekend = wd === 0 || wd === 6 ? 1 : 0;
+        fe.prev24h_move_pct = s24 > 0 ? (r.spot / s24 - 1) * 100 : null; fe.prev24h_range_pct = a24.length > 200 ? (Math.max(...a24.map(c => c.h)) - Math.min(...a24.map(c => c.l))) / r.spot * 100 : null; fe.prev24h_daily_vol_pct = rv(a24);
+        fe.prev3d_move_pct = s72 > 0 ? (r.spot / s72 - 1) * 100 : null; fe.prev3d_range_pct = a72.length > 600 ? (Math.max(...a72.map(c => c.h)) - Math.min(...a72.map(c => c.l))) / r.spot * 100 : null; fe.prev3d_daily_vol_pct = rv(a72); }
       rows.push(fe);
-      window.vfCase[r.day + "|" + r.sl] = {t0: r.t0, tx: r.tx, sym, vol, btc};
+      window.vfCase[r.day + "|" + r.sl] = {t0: r.t0, tx: r.tx, sym, vol, btc, mk, oi, K, lo: r.lo, hi: r.hi, fin: r.fin, spot: r.spot, credit: r.credit, spr: (C.spr || 2) / 100, sold: C.sold || 5000, bought: C.bought || 1500, lot: C.lot || 0.001};
     }
     window.vfRows = rows;
+    { const keys = rows.map(x => x.day + "|" + x.slot), lab = x => `${x.day} ${x.slot} · ${x.fin < 0 ? "-$" : "$"}${f(Math.abs(x.fin), 0)}`;
+      const worst = [...rows].sort((a, b) => a.fin - b.fin)[0], swing = x => { const d = window.vfCase[x.day + "|" + x.slot]; if (!d) return 0; const a = d.btc.filter(c => c.t >= d.t0 && c.t < d.tx).map(c => Math.abs(c.c / d.spot - 1)); return a.length ? Math.max(...a) : 0; };
+      const wins = rows.filter(x => x.fin >= 0).sort((a, b) => swing(b) - swing(a))[0];
+      const opts = [...rows].sort((a, b) => a.fin - b.fin).map(x => `<option value="${x.day}|${x.slot}">${lab(x)}</option>`).join("");
+      $("vfa").innerHTML = opts; $("vfb").innerHTML = opts; if (worst) $("vfa").value = worst.day + "|" + worst.slot; if (wins) $("vfb").value = wins.day + "|" + wins.slot; $("vfpick").style.display = ""; $("vfshow").onclick = window.vfPair; window.vfPair(); }
     const loss = rows.filter(x => x.fin < 0), win = rows.filter(x => x.fin >= 0);
     if (loss.length < 3 || win.length < 3){ m.className = "note l"; m.textContent = `Need at least 3 loss trades and 3 profit trades to compare (have ${loss.length} loss, ${win.length} profit).`; }
     const feats = Object.keys(rows[0] || {}).filter(k => !["day", "slot", "fin", "spot"].includes(k));
@@ -3093,12 +3222,13 @@ $("vfgo").onclick = async () => {
     const fm = v => v === null ? "" : Math.abs(v) >= 100 ? f(v, 0) : Math.abs(v) >= 1 ? f(v, 2) : f(v, 4);
     let h = `<p class="note"><b>${loss.length} loss trades vs ${win.length} profit trades</b>${slot === "all" ? "" : " (slot " + slot + ")"}. "Loss higher" is the share of loss-day/profit-day pairs where the loss day had the larger value: 50% means no difference, above 70% or below 30% is a visible gap. With this few days a gap can be chance, so treat the top rows as leads to test, not rules.${oiSeen ? "" : " Open interest history was not returned by Delta, so OI columns are left out."}${noVol ? ` ${noVol} trades had no traded volume at all at their strikes.` : ""}</p>`;
     h += `<div class="wrap"><table><thead><tr><th>Feature</th><th>Loss days (average)</th><th>Profit days (average)</th><th>Loss (median)</th><th>Profit (median)</th><th>Loss higher</th><th>Gap (σ)</th></tr></thead><tbody>` + stats.map(x => { const strong = Math.abs(x.auc - 0.5) >= 0.2; return `<tr${strong ? ' style="font-weight:600"' : ""}><td>${x.k}</td><td>${fm(x.ml)}</td><td>${fm(x.mw)}</td><td>${fm(x.dl)}</td><td>${fm(x.dw)}</td><td>${f(x.auc * 100, 0)}%</td><td>${f(x.d, 2)}</td></tr>`; }).join("") + `</tbody></table></div>`;
-    out.innerHTML = h; $("vfcsv").disabled = false; $("vfraw").disabled = false;
+    out.innerHTML = h + vfWeekday(rows) + `<h3 style="margin:16px 0 0">While the trade is running</h3><p class="note">The same comparison at fixed times after entry. These are what you would know at that moment, so any gap here could become an exit or adjustment rule. Features that move with the price, such as open profit/loss, will naturally differ; look at the volume, IV and call/put columns for something new.</p>` + window.vfInTrade(rows); $("vfcsv").disabled = false; $("vfcsv2").disabled = false; $("vfraw").disabled = false;
     if (loss.length >= 3 && win.length >= 3){ m.textContent = `Done: ${rows.length} trades. The volume strip now shows under the chart when you click a loss day in the loss tables.`; }
   } catch (e){ m.className = "note l"; m.textContent = "Failed: " + e.message; }
 };
 const vfDl = (name, text) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type: "text/csv"})); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500); };
 $("vfcsv").onclick = () => { const R = window.vfRows || []; if (!R.length) return; const keys = [...new Set(R.flatMap(x => Object.keys(x)))]; vfDl("market-features-" + new Date().toISOString().slice(0, 10) + ".csv", keys.join(",") + "\n" + R.map(x => keys.map(k => x[k] === null || x[k] === undefined ? "" : typeof x[k] === "number" ? Math.round(x[k] * 10000) / 10000 : x[k]).join(",")).join("\n") + "\n"); };
+$("vfcsv2").onclick = () => { const R = window.vfInRows || []; if (!R.length) return; const keys = [...new Set(R.flatMap(x => Object.keys(x)))]; vfDl("in-trade-features-" + new Date().toISOString().slice(0, 10) + ".csv", keys.join(",") + "\n" + R.map(x => keys.map(k => x[k] === null || x[k] === undefined ? "" : typeof x[k] === "number" ? Math.round(x[k] * 10000) / 10000 : (/[",]/.test(x[k]) ? '"' + x[k] + '"' : x[k])).join(",")).join("\n") + "\n"); };
 $("vfraw").onclick = () => { const A = window.vfRaw || [], seen = new Set(), L = ["symbol,time_epoch,time_utc,open,high,low,close,volume"]; A.forEach(x => { if (seen.has(x.sym)) return; seen.add(x.sym); x.data.forEach(c => L.push(`${x.sym},${c.t},${new Date(c.t * 1000).toISOString().slice(0, 19).replace("T", " ")},${c.o},${c.h},${c.l},${c.c},${c.v}`)); }); vfDl("option-volume-1m-" + new Date().toISOString().slice(0, 10) + ".csv", L.join("\n") + "\n"); };
 $("dbxgo").onclick = async () => {
   const m = $("dbxmsg"); m.className = "note";
