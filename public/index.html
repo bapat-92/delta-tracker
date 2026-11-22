@@ -374,6 +374,16 @@ h1{padding-right:170px}
     </div>
     <div id="dbxmsg" class="note"></div>
   </details>
+  <details style="margin:6px 0"><summary><b>Load a candle CSV into this browser (one day or a date range)</b></summary>
+    <p class="note" style="margin:4px 0 8px">Loads the file made by "Export the saved candle data" (.csv or .csv.gz) so the backtest and the Replay use it instead of downloading from Delta. Leave the dates blank to load every expiry in the file. Then run with the same option price step as the file (1 minute for 1-minute data). BTC prices are still read from Delta.</p>
+    <div class="row">
+      <label>Candle file<input id="ldfile" type="file" accept=".csv,.gz,.csv.gz,text/csv"></label>
+      <label>Expiries from (optional)<input id="ldfrom" type="date"></label>
+      <label>to (optional)<input id="ldto" type="date"></label>
+      <button id="ldgo" type="button">Load into this browser</button>
+    </div>
+    <div id="ldmsg" class="note"></div>
+  </details>
   <details open style="margin:6px 0"><summary><b>Latest backtest report (run on GitHub)</b></summary>
     <p class="note" style="margin:4px 0 8px">Start a run on GitHub yourself (Actions tab, daily-backtest, Run workflow), wait a few minutes, then refresh the list and pick the report.</p>
     <div class="row"><label>Saved reports<select id="autosel"><option value="latest">Latest 30-day report</option></select></label><button id="autolist" type="button">Refresh list</button><button id="autoload" type="button">Show report</button></div>
@@ -2931,6 +2941,47 @@ $("dbcsv").onclick = () => {
 };
 
 // ---------- Export saved candles ----------
+$("ldgo").onclick = async () => {
+  const m = $("ldmsg"), file = $("ldfile").files && $("ldfile").files[0]; m.className = "note";
+  if (!file){ m.className = "note l"; m.textContent = "Choose the candle file first."; return; }
+  try {
+    const fromD = $("ldfrom").value ? Date.parse($("ldfrom").value + "T00:00:00Z") / 1000 : 0, toD = $("ldto").value ? Date.parse($("ldto").value + "T23:59:59Z") / 1000 : 1e12;
+    const codeDay = code => Date.UTC(2000 + Number(code.slice(4, 6)), Number(code.slice(2, 4)) - 1, Number(code.slice(0, 2))) / 1000;
+    const bySym = new Map(); let rows = 0, skipped = 0, col = null, n = 0;
+    const onLine = ln => {
+      if (!ln || ln[0] === "#") return; const c = ln.split(",");
+      if (!col){ if (c.indexOf("symbol") < 0){ throw new Error("This does not look like an exported candle file (no symbol column)."); } col = {sym: c.indexOf("symbol"), t: c.indexOf("time_epoch"), o: c.indexOf("open"), c: c.indexOf("close")}; if (col.t < 0 || col.o < 0 || col.c < 0) throw new Error("Missing time_epoch, open or close column."); return; }
+      const sym = c[col.sym]; if (!/^[CP]-BTC-\d+-\d{6}$/.test(sym)) return;
+      const D = codeDay(sym.slice(-6)); if (D < fromD || D > toD){ skipped++; return; }
+      const t = Number(c[col.t]), o = Number(c[col.o]), cl = Number(c[col.c]); if (!isFinite(t) || !(cl > 0 || o > 0)) return;
+      let a = bySym.get(sym); if (!a){ a = []; bySym.set(sym, a); } a.push({t, o, c: cl}); rows++;
+    };
+    m.textContent = "Reading the file…";
+    let stream = file.stream ? file.stream() : null;
+    if (stream){
+      if (/\.gz$/i.test(file.name)){ if (typeof DecompressionStream === "undefined") throw new Error("This browser cannot open .gz files; unzip it first or use a newer browser."); stream = stream.pipeThrough(new DecompressionStream("gzip")); }
+      const reader = stream.pipeThrough(new TextDecoderStream()).getReader(); let buf = "";
+      for (;;){ const {value, done} = await reader.read(); if (done) break; buf += value; const parts = buf.split("\n"); buf = parts.pop(); for (const ln of parts){ onLine(ln.replace(/\r$/, "")); if (++n % 100000 === 0){ m.textContent = `Reading… ${f(rows, 0)} rows`; await new Promise(r => setTimeout(r, 0)); } } }
+      if (buf) onLine(buf.replace(/\r$/, ""));
+    } else { (await file.text()).split("\n").forEach(ln => onLine(ln.replace(/\r$/, ""))); }
+    if (!bySym.size){ m.className = "note l"; m.textContent = skipped ? "No expiry in the file falls inside those dates." : "No candle rows found in the file."; return; }
+    // step of the data decides which saved set it joins (1m / 5m / 15m)
+    let gap = 1e9; for (const a of bySym.values()){ a.sort((x, y) => x.t - y.t); for (let i = 1; i < Math.min(a.length, 12); i++){ const d = a[i].t - a[i - 1].t; if (d > 0 && d < gap) gap = d; } }
+    const step = {60: "1m", 300: "5m", 900: "15m"}[gap];
+    if (!step){ m.className = "note l"; m.textContent = `The file's candle step is ${gap >= 1e9 ? "unclear" : gap + " seconds"}; the backtest can only use 1, 5 or 15 minute candles.`; return; }
+    let i = 0, days = new Set();
+    for (const [sym, arr] of bySym){
+      if (++i % 20 === 0){ m.textContent = `Saving ${i}/${bySym.size} series…`; await new Promise(r => setTimeout(r, 0)); }
+      const D = codeDay(sym.slice(-6)); days.add(D);
+      const key = step + "|" + sym, old = await idbGet(key); let data = arr;
+      if (old && old.data && old.data.length){ const mp = new Map(old.data.map(x => [x.t, x])); arr.forEach(x => mp.set(x.t, x)); data = [...mp.values()].sort((x, y) => x.t - y.t); }
+      await idbPut(key, {from: Math.min(D - 43200, old && old.from ? old.from : 1e12), to: Math.max(D + 86400, old && old.to ? old.to : 0), data, ok: true});
+    }
+    const ds = [...days].sort((x, y) => x - y).map(x => new Date(x * 1000).toISOString().slice(0, 10));
+    m.textContent = `Loaded ${bySym.size} option price series (${f(rows, 0)} rows, ${step} candles) for expiries ${ds[0]}${ds.length > 1 ? " to " + ds[ds.length - 1] : ""} (${ds.length} day${ds.length > 1 ? "s" : ""}). Set "Option price step" to ${step === "1m" ? "1 minute" : step === "5m" ? "5 minutes" : "15 minutes"} and run the backtest or Replay for those dates.`;
+    if (typeof dbCacheInfo === "function") dbCacheInfo();
+  } catch (e){ m.className = "note l"; m.textContent = "Could not load: " + e.message; }
+};
 $("dbxgo").onclick = async () => {
   const m = $("dbxmsg"); m.className = "note";
   try {
