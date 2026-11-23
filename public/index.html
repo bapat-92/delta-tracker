@@ -344,6 +344,7 @@ h1{padding-right:170px}
     <label>Assumed half-spread on each fill (%)<input id="dbspr" type="number" min="0" step="0.5" value="2"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbA" type="checkbox" style="width:auto" checked> 15:00 CET day before</label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbB" type="checkbox" style="width:auto" checked> 06:00 CET expiry day</label>
+    <label>Extra entry times, hours before expiry (e.g. 4,3; blank = none)<input id="dbxh" type="text" value="" placeholder="4,3"></label>
     <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
     <span hidden><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select></span>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto"> Also test: re-center when BTC reaches the middle of a shoulder (rebuild the other side around the new price, accept up to 5% loss at the new centre)</label>
@@ -3419,7 +3420,7 @@ $("dbgo").onclick = async () => {
     const funds = batFunds();
     if ($("iauto").checked && funds){ const r = autoLots(funds, Number($("imsh").value) || 25, lastSpotVal || 60000, lot, lev, (Number($("irat").value) || 30) / 100); if (r && r.sold >= 10){ sold = r.sold; bought = r.bought; } }
     if (sold < 1 || bought < 1 || bought >= sold){ prog.className = "note l"; prog.textContent = "Set sold and bought lots in the Inverted Batman card (sold must be higher than bought)."; return; }
-    const slots = []; if (RP) RP.hours.forEach(x => slots.push("H" + x)); else { if ($("dbA").checked) slots.push("A"); if ($("dbB").checked) slots.push("B"); }
+    const slots = []; if (RP) RP.hours.forEach(x => slots.push("H" + x)); else { if ($("dbA").checked) slots.push("A"); if ($("dbB").checked) slots.push("B"); const xh = String($("dbxh").value || "").split(",").map(x => Number(x.trim())).filter(x => x > 0 && x <= 23); xh.forEach(x => { if (!slots.includes("H" + x)) slots.push("H" + x); }); }
     if (!slots.length){ prog.className = "note l"; prog.textContent = "Tick at least one entry time."; return; }
     const base = $("base").value.replace(/\/$/, ""), now = Math.floor(Date.now() / 1000);
     prog.textContent = "Loading BTC candles…";
@@ -3430,7 +3431,7 @@ $("dbgo").onclick = async () => {
       if (ranged && (D < fromD || D > toD)) continue;
       const dd = new Date(D * 1000), pd = new Date((D - 86400) * 1000);
       const ent = {A: berlinUtc(pd.getUTCFullYear(), pd.getUTCMonth(), pd.getUTCDate(), 15), B: berlinUtc(dd.getUTCFullYear(), dd.getUTCMonth(), dd.getUTCDate(), 6)};
-      if (RP) RP.hours.forEach(x => { ent["H" + x] = Math.floor((tx - x * 3600) / 300) * 300; });
+      (RP ? RP.hours : String($("dbxh").value || "").split(",").map(x => Number(x.trim())).filter(x => x > 0 && x <= 23)).forEach(x => { ent["H" + x] = Math.floor((tx - x * 3600) / 300) * 300; });
       const rows = slots.map(sl => ({sl, t0: ent[sl]})).filter(r => r.t0 < tx && byT.get(r.t0) && byT.get(tx - 300)).map(r => Object.assign(r, {spot: byT.get(r.t0).open}));
       if (rows.length) exps.push({D, tx, code: ddmmyy(D * 1000), rows, settle: byT.get(tx - 300).close});
     }
