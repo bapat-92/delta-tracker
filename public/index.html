@@ -424,6 +424,21 @@ h1{padding-right:170px}
   <div id="rpout"></div>
 </div>
 
+<div class="card" id="histCard">
+  <b>Download Historical Data</b>
+  <p class="note" style="margin:4px 0 8px">Downloads 1-minute option mark prices straight from Delta's public API (no key, nothing is traded) for every daily expiry in your date range, and saves them as zip files in the same format as "Export the saved candle data". A range longer than 2 months is split into 2-month files that are downloaded one after another; each file is saved as soon as it is finished. Keep this tab open while it runs.</p>
+  <div class="row" style="margin:8px 0">
+    <label>Expiries from<input id="hfrom" type="date"></label>
+    <label>to<input id="hto" type="date"></label>
+    <label>Strikes within ±% of BTC (the backtest needs 10 or more)<input id="hband" type="number" min="3" step="1" value="10"></label>
+    <label>Strike step<input id="hstep" type="number" min="50" step="50" value="200"></label>
+    <label>Parallel downloads (raise carefully, Delta rate-limits)<input id="hpar" type="number" min="1" max="6" step="1" value="3"></label>
+    <button id="hgo" type="button">Start download</button>
+    <button id="hstop" type="button" disabled>Stop after this expiry</button>
+  </div>
+  <div id="hmsg" class="note"></div>
+  <div id="hlog" class="note" style="white-space:pre-wrap"></div>
+</div>
 <div class="card" id="batCard">
   <b>Inverted Batman: best strike combinations</b>
   <p class="note" style="margin:4px 0 8px">Sells more outer options, buys fewer inner ones (default 5,000 sold / 1,500 bought). Ranks strikes by the widest BTC range at expiry that keeps your minimum profit.</p>
@@ -4416,10 +4431,72 @@ trigButtons(); renderTrig();
 
 
 // ---------- Show / hide sections ----------
+
+// ---------- Download Historical Data (public prices only; saves 2-month zip files) ----------
+const hCrcT = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const hCrc = (crc, u8) => { let c = crc ^ 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = hCrcT[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+let hStop = false;
+async function hZip(name, feed){                       // feed(write) calls write(text) for each piece; returns a zip Blob (deflate, streamed, so large files do not sit in memory)
+  const cs = new CompressionStream("deflate-raw"), w = cs.writable.getWriter(), enc = new TextEncoder(), comp = new Response(cs.readable).blob();
+  let crc = 0, usz = 0;
+  await feed(async text => { const u = enc.encode(text); crc = hCrc(crc, u); usz += u.length; await w.write(u); });
+  await w.close(); const data = await comp, nm = enc.encode(name), d = new Date(), tm = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), dd = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const lh = new DataView(new ArrayBuffer(30 + nm.length)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0808, true); lh.setUint16(8, 8, true); lh.setUint16(10, tm, true); lh.setUint16(12, dd, true); lh.setUint16(26, nm.length, true); new Uint8Array(lh.buffer).set(nm, 30);
+  const dsc = new DataView(new ArrayBuffer(16)); dsc.setUint32(0, 0x08074b50, true); dsc.setUint32(4, crc, true); dsc.setUint32(8, data.size, true); dsc.setUint32(12, usz, true);
+  const cd = new DataView(new ArrayBuffer(46 + nm.length)); cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(8, 0x0808, true); cd.setUint16(10, 8, true); cd.setUint16(12, tm, true); cd.setUint16(14, dd, true); cd.setUint32(16, crc, true); cd.setUint32(20, data.size, true); cd.setUint32(24, usz, true); cd.setUint16(28, nm.length, true); new Uint8Array(cd.buffer).set(nm, 46);
+  const cdOff = lh.byteLength + data.size + 16, eo = new DataView(new ArrayBuffer(22)); eo.setUint32(0, 0x06054b50, true); eo.setUint16(8, 1, true); eo.setUint16(10, 1, true); eo.setUint32(12, cd.byteLength, true); eo.setUint32(16, cdOff, true);
+  return new Blob([lh, data, dsc, cd, eo], {type: "application/zip"});
+}
+$("hgo").onclick = async () => {
+  const msg = $("hmsg"), log = $("hlog"); msg.className = "note"; log.textContent = "";
+  try {
+    if (typeof CompressionStream === "undefined"){ msg.className = "note l"; msg.textContent = "This browser cannot make zip files (needs a current Chrome, Edge, Firefox or Safari)."; return; }
+    if (!$("hfrom").value || !$("hto").value){ msg.className = "note l"; msg.textContent = "Pick the first and last expiry date."; return; }
+    const base = $("base").value.replace(/\/$/, ""), now = Math.floor(Date.now() / 1000), step = Math.max(50, Number($("hstep").value) || 200), band = Math.max(3, Number($("hband").value) || 10), par = Math.min(6, Math.max(1, Number($("hpar").value) || 3));
+    const d0 = Date.parse($("hfrom").value + "T00:00:00Z") / 1000, d1 = Date.parse($("hto").value + "T00:00:00Z") / 1000, EXP = 43200;
+    const days = []; for (let D = d0; D <= d1; D += 86400) if (D + EXP < now - 3600) days.push(D);
+    if (!days.length){ msg.className = "note l"; msg.textContent = "No finished expiries in that range."; return; }
+    const ym = D => { const x = new Date(D * 1000); return x.getUTCFullYear() * 12 + x.getUTCMonth(); }, chunks = []; let cur = [];
+    for (const D of days){ if (cur.length && ym(D) - ym(cur[0]) >= 2){ chunks.push(cur); cur = []; } cur.push(D); }
+    if (cur.length) chunks.push(cur);
+    const iso = t => new Date(t * 1000).toISOString().slice(0, 19).replace("T", " "), dstr = D => new Date(D * 1000).toISOString().slice(0, 10);
+    hStop = false; $("hgo").disabled = true; $("hstop").disabled = false;
+    msg.textContent = `${days.length} expiries in ${chunks.length} file${chunks.length > 1 ? "s" : ""} of up to 2 months. Loading BTC prices…`;
+    const btc = await fetchCandles(base, "BTCUSD", 0, days[0] - 2 * 86400, Math.min(now, days[days.length - 1] + 86400));
+    const t0 = Date.now(); let done = 0, saved = 0;
+    for (let ci = 0; ci < chunks.length && !hStop; ci++){
+      const ch = chunks[ci], fname = `candles-1m_${dstr(ch[0])}_to_${dstr(ch[ch.length - 1])}`; let rows = 0, bad = 0, complete = true;
+      log.textContent += `File ${ci + 1}/${chunks.length}: ${dstr(ch[0])} to ${dstr(ch[ch.length - 1])} (${ch.length} expiries)\n`;
+      const blob = await hZip(fname + ".csv", async write => {
+        await write("expiry_day,symbol,type,strike,time_utc,time_epoch,open,close\n");
+        for (const D of ch){
+          if (hStop){ complete = false; break; }
+          const tx = D + EXP, wa = D - 43200, wb = tx + 60, sp = btc.filter(c => c.time >= wa && c.time <= tx);
+          if (!sp.length){ done++; continue; }
+          const lo = Math.floor(Math.min(...sp.map(c => c.low)) * (1 - band / 100) / step) * step, hi = Math.floor(Math.max(...sp.map(c => c.high)) * (1 + band / 100) / step) * step + step, code = ddmmyy(D * 1000), day = dstr(D), syms = [];
+          for (let K = lo; K <= hi; K += step){ syms.push(["C", K, `C-BTC-${K}-${code}`]); syms.push(["P", K, `P-BTC-${K}-${code}`]); }
+          const res = new Array(syms.length); let fail = 0;
+          await runPool(syms, par, async (x, i) => { const r = await candles15net(base, x[2], wa, wb, "1m"); if (r.failed) fail++; res[i] = r; });
+          if (fail > syms.length * 0.2){ bad++; log.textContent += `  ${day}: ${fail}/${syms.length} downloads failed (rate limit?), skipped\n`; done++; continue; }
+          let part = []; syms.forEach((x, i) => { for (const c of res[i]) part.push(`${day},${x[2]},${x[0]},${x[1]},${iso(c.t)},${c.t},${c.o},${c.c}\n`); rows += res[i].length; });
+          await write(part.join("")); done++;
+          const el = (Date.now() - t0) / 1000, left = el / Math.max(1, done) * (days.length - done);
+          msg.textContent = `File ${ci + 1}/${chunks.length}, expiry ${day}: ${done}/${days.length} done (${Math.round(done * 100 / days.length)}%), about ${Math.ceil(left / 60)} min left. ${saved} file${saved === 1 ? "" : "s"} saved.`;
+        }
+      });
+      if (rows){ const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = fname + (complete ? "" : "_partial") + ".zip"; document.body.appendChild(a); a.click(); setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) {} a.remove(); }, 4000); saved++;
+        log.textContent += `  saved ${fname}${complete ? "" : "_partial"}.zip (${f(rows, 0)} rows, ${(blob.size / 1048576).toFixed(1)} MB)${bad ? `, ${bad} expiries skipped` : ""}\n`; }
+      else log.textContent += "  nothing downloaded for this part\n";
+    }
+    msg.className = "note"; msg.textContent = hStop ? `Stopped. ${saved} file${saved === 1 ? "" : "s"} saved; start again from the next date to continue.` : `Done: ${saved} file${saved === 1 ? "" : "s"} saved. Send them to the lab one by one.`;
+  } catch (e){ msg.className = "note l"; msg.textContent = "Failed: " + e.message; }
+  $("hgo").disabled = false; $("hstop").disabled = true;
+};
+$("hstop").onclick = () => { hStop = true; $("hmsg").textContent += " Stopping…"; };
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["dfCard", "Delta filter"], ["summaryCard", "P&L summary"],
   ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["h24Card", "P&L, last 24 hours"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
-  ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["hvCard", "Hourly move study"], ["trigCard", "Move trigger"],
+  ["histCard", "Download historical data"], ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["hvCard", "Hourly move study"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
 const HIDE_DEFAULT = ["settingsCard"];
