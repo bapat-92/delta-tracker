@@ -424,6 +424,7 @@ h1{padding-right:170px}
     <label>Parallel downloads (raise carefully, Delta rate-limits)<input id="hpar" type="number" min="1" max="6" step="1" value="3"></label>
     <button id="hgo" type="button">Start download</button>
     <button id="hstop" type="button" disabled>Stop after this expiry</button>
+    <button id="hbtc" type="button">Download BTC 5-minute prices with volume (CSV)</button>
   </div>
   <div id="hmsg" class="note"></div>
   <div id="hlog" class="note" style="white-space:pre-wrap"></div>
@@ -3228,9 +3229,9 @@ $("dbgo").onclick = async () => {
             const tbl = (D, vv) => {
               const taken = (r, th) => { const sp = D.spd(r); return sp !== null && sp !== undefined && sp >= th && (vv <= 0 || D.vol(r) >= vv); }, val = (r, th) => taken(r, th) ? D.res(r) : D.other(r);
               const left = ok.filter(r => D.spd(r) !== null && D.spd(r) !== undefined), dl = (arr, th) => arr.reduce((t, r) => t + val(r, th) - r.fin, 0), sgn = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`;
-              const rows = [0, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(th => { const ex = left.filter(r => taken(r, th)), ds = ok.map(r => val(r, th) - r.fin), d = ds.reduce((x, y) => x + y, 0), top = Math.max(0, ...ds), a = dl(A, th), b = dl(B, th), tot = ok.reduce((t, r) => t + val(r, th), 0), wd = Math.min(...ok.map(r => val(r, th)));
-                return `<tr><td>${th === 0 ? "0 (always)" : "≥ " + th + "%"}</td><td>${ex.length}</td><td>${ex.filter(lost).length}</td><td>${ex.filter(r => !lost(r)).length}</td><td class="${sg(d)}"><b>${sgn(d)}</b></td><td class="${sg(d - top)}">${sgn(d - top)}</td><td class="${sg(a)}">${sgn(a)}</td><td class="${sg(b)}">${sgn(b)}</td><td class="${sg(tot)}">${usd(tot)}</td><td class="l">${usd(wd)}</td></tr>`; }).join("");
-              return {left, html: `<div class="wrap"><table><thead><tr><th>Speed cut-off</th><th>Exits taken</th><th>of which loss days</th><th>of which winners cut</th><th>Change vs hold, all days</th><th>Same, without its single biggest gain</th><th>Change, days before ${spl}</th><th>Change, days from ${spl}</th><th>All days total</th><th>Worst day</th></tr></thead><tbody>${rows}</tbody></table></div>`};
+              const rows = [0, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(th => { const ex = left.filter(r => taken(r, th)), ds = ok.map(r => val(r, th) - r.fin), d = ds.reduce((x, y) => x + y, 0), top = Math.max(0, ...ds), a = dl(A, th), b = dl(B, th), tot = ok.reduce((t, r) => t + val(r, th), 0), wd = Math.min(...ok.map(r => val(r, th))); const wo = Math.max(0, ...ok.map(r => { const w = r.rv.w ? (taken(r, th) ? r.rv.w.edge : r.rv.w.hold) : null; return w === null || w === undefined || !(r.margin > 0) ? 0 : -w / r.margin * 100; })), woN = ok.filter(r => { const w = r.rv.w ? (taken(r, th) ? r.rv.w.edge : r.rv.w.hold) : null; return w !== null && w !== undefined && r.margin > 0 && -w / r.margin * 100 > 100; }).length;
+                return `<tr><td>${th === 0 ? "0 (always)" : "≥ " + th + "%"}</td><td>${ex.length}</td><td>${ex.filter(lost).length}</td><td>${ex.filter(r => !lost(r)).length}</td><td class="${sg(d)}"><b>${sgn(d)}</b></td><td class="${sg(d - top)}">${sgn(d - top)}</td><td class="${sg(a)}">${sgn(a)}</td><td class="${sg(b)}">${sgn(b)}</td><td class="${sg(tot)}">${usd(tot)}</td><td class="l">${usd(wd)}</td><td class="${wo > 100 ? "l" : ""}">${f(wo, 0)}%</td><td>${woN}</td></tr>`; }).join("");
+              return {left, html: `<div class="wrap"><table><thead><tr><th>Speed cut-off</th><th>Exits taken</th><th>of which loss days</th><th>of which winners cut</th><th>Change vs hold, all days</th><th>Same, without its single biggest gain</th><th>Change, days before ${spl}</th><th>Change, days from ${spl}</th><th>All days total</th><th>Worst day</th><th>Worst open loss, % of margin</th><th>Days beyond 100% of margin</th></tr></thead><tbody>${rows}</tbody></table></div>`};
             };
             const vv = Number($("lrvol").value) || 3;
             DEF.forEach(D => {
@@ -3816,6 +3817,20 @@ $("hgo").onclick = async () => {
     msg.className = "note"; msg.textContent = hStop ? `Stopped. ${saved} file${saved === 1 ? "" : "s"} saved; start again from the next date to continue.` : `Done: ${saved} file${saved === 1 ? "" : "s"} saved. Send them to the lab one by one.`;
   } catch (e){ msg.className = "note l"; msg.textContent = "Failed: " + e.message; }
   $("hgo").disabled = false; $("hstop").disabled = true;
+};
+$("hbtc").onclick = async () => {
+  const msg = $("hmsg"); msg.className = "note";
+  try {
+    if (!$("hfrom").value || !$("hto").value){ msg.className = "note l"; msg.textContent = "Pick the first and last expiry date first."; return; }
+    const base = $("base").value.replace(/\/$/, ""), now = Math.floor(Date.now() / 1000), d0 = Date.parse($("hfrom").value + "T00:00:00Z") / 1000, d1 = Date.parse($("hto").value + "T00:00:00Z") / 1000;
+    msg.textContent = "Loading BTC 5-minute candles (starts 3 days before the first date so the 24 h average has data)…"; $("hbtc").disabled = true;
+    const btc = await fetchCandles(base, "BTCUSD", 0, d0 - 3 * 86400, Math.min(now, d1 + 2 * 86400));
+    if (!btc.length){ msg.className = "note l"; msg.textContent = "No BTC candles came back."; return; }
+    const lines = ["time,open,high,low,close,volume"].concat(btc.map(c => [c.time, c.open, c.high, c.low, c.close, c.volume].join(",")));
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([lines.join("\n")], {type: "text/csv"})); a.download = `btc-5m_${$("hfrom").value}_to_${$("hto").value}.csv`; document.body.appendChild(a); a.click(); a.remove();
+    msg.textContent = `Saved ${btc.length} BTC 5-minute candles with volume.`;
+  } catch (e) { msg.className = "note l"; msg.textContent = "Download failed: " + (e && e.message || e); }
+  $("hbtc").disabled = false;
 };
 $("hstop").onclick = () => { hStop = true; $("hmsg").textContent += " Stopping…"; };
 const SECTIONS = [
