@@ -228,40 +228,17 @@ h1{padding-right:170px}
   <div id="atab" class="wrap"></div>
 </div>
 
-<div class="card" id="planCard">
-  <b>Adjustment planner (next 0.5% move)</b>
-  <p class="note" style="margin:4px 0 8px">For a 0.5% fall and a 0.5% rise, ranks keep / roll / close combinations by widest profit range at expiry. Planning only.</p>
-  <div class="row" style="margin:8px 0">
-    <label>Move step (%)<input id="pstep" type="number" min="0.1" step="0.1" value="0.5"></label>
-    <label>History look-back (days)<input id="pdays" type="number" min="3" max="30" value="30"></label>
-    <label>Profit counts from (% of margin)<input id="ppct" type="number" min="0" step="0.5" value="0"></label>
-    <label>Plan from BTC level (blank = now)<input id="pat" type="number" min="0" step="10" placeholder="now"></label>
-    <button id="plrun">Run planner</button>
-  </div>
-  <div class="row" style="margin:8px 0">
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="pxon" type="checkbox" style="width:auto"> Also try selling extra calls</label>
-    <label>Sell calls this % above BTC<input id="pxpct" type="number" min="0.2" step="0.1" value="2"></label>
-    <label>Lots (blank = your sold-call lots)<input id="pxlots" type="number" min="1" placeholder="auto"></label>
-    <label>Protect with a long call this % further out (0 = none)<input id="pxprot" type="number" min="0" step="0.1" value="0"></label>
-  </div>
-  <div id="plmsg" class="note">Uses your current legs, the live chain for their expiry and the expiry time in the strike backtest card (UTC).</div>
-  <div id="plout"></div>
-</div>
 
 <div class="card" id="recCard">
-  <b>Re-center planner (when BTC reaches the middle of a shoulder)</b>
-  <p class="note" style="margin:4px 0 8px">When BTC reaches the trigger on one side, rebuilds the opposite side around the new price and keeps only combinations that pass your thresholds. Planning only; prices are model estimates.</p>
+  <b>Backtest rule settings</b>
+  <p class="note" style="margin:4px 0 8px">These settings are read by the day-by-day backtest below (mid-shoulder trigger point and the re-center test's thresholds).</p>
   <div class="row" style="margin:8px 0">
     <label>Trigger point (% of the way from bought to sold strike)<input id="rcfrac" type="number" min="10" max="95" step="5" value="50"></label>
     <label>Min profit at the new centre ($)<input id="rcmin" type="number" step="1" value="0"></label>
     <label>Max worst loss ($, blank = Batman dollar cap or % of Initial capital, else no cap)<input id="rcloss" type="number" min="1" step="10" placeholder="auto"></label>
     <label>Min cushion each side of the new centre (%)<input id="rccush" type="number" min="0" step="0.1" value="1"></label>
     <label>Max net cost of the trades ($, blank = no limit)<input id="rccost" type="number" min="0" step="5" placeholder="no limit"></label>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="rcroll" type="checkbox" style="width:auto" checked> Also try rolling the sold leg on the side that was hit</label>
-    <button id="rcrun">Find re-center combinations</button>
   </div>
-  <div id="rcmsg" class="note">Uses your current legs, the live chain for their expiry and the expiry time in the strike backtest card (UTC). The delta filter in Settings applies to new sold strikes.</div>
-  <div id="rcout"></div>
 </div>
 
 <div class="card" id="guardCard">
@@ -372,24 +349,8 @@ h1{padding-right:170px}
         <button type="button" id="dbxhclr" style="grid-column:1/-1">Clear</button>
       </div>
     </details>
-    <!-- re-center adjustment and exit-on-leaving-range options removed from the display; kept as hidden, switched-off inputs so the old code path stays valid -->
     <span hidden><input id="dbamin" type="number"><input id="dbapct" type="number" value="5"><select id="dbrank"><option value="at">at</option><option value="width">width</option></select></span>
-    <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbadj" type="checkbox" style="width:auto"> Also test: re-center when BTC reaches the middle of a shoulder (rebuild the other side around the new price, accept up to 5% loss at the new centre)</label>
-    <label>Loss-day test "out of range": trigger, % of BTC beyond the profit range<input id="lrtrig" type="number" min="0" step="0.05" value="0.2"></label>
-    <label>…new profit range reaches, % of BTC price, in the loss direction<input id="lrdir" type="number" min="0.1" step="0.1" value="1"></label>
-    <label>…and in the opposite direction<input id="lropp" type="number" min="0.1" step="0.1" value="2"></label>
-    <label>Loss-day test "cover": buy back the net-short lots this % beyond the sold strike<input id="lrcov" type="number" min="0" step="0.1" value="0.5"></label>
     <label style="flex-direction:row;align-items:center;gap:6px"><input id="dbchart" type="checkbox" style="width:auto"> Also draw every loss day's chart below the table (otherwise click a day or a result in the loss-day table)</label>
-    <label>Loss-day test "sell in the money": strike this % in the money (puts if BTC ran up, calls if it fell)<input id="lritm" type="number" min="0" step="0.1" value="0.5"></label>
-    <label>In-the-money sale, deeper strike when the move is fast: strike this % in the money (0 = off)<input id="lritm2" type="number" min="0" step="0.5" value="1.5"></label>
-    <label>…deeper only if BTC moved at least this % in the last hour when it went out of range (0 = ignore)<input id="lritmspd" type="number" min="0" step="0.1" value="1.0"></label>
-    <label>…and only if BTC volume over the last 15 minutes was at least this many times its 24h average (0 = ignore)<input id="lritmvol" type="number" min="0" step="0.5" value="0"></label>
-    <label>Loss-day test "cover + in-the-money sale": share of the net-short lots bought back (cover); the rest is sold as in-the-money options (%)<input id="lrmix" type="number" min="0" max="100" step="5" value="50"></label>
-    <label>Loss-day test "hard exit": close everything whenever the open loss reaches this % (0 = off)<input id="lrhard" type="number" min="0" step="5" value="0"></label>
-    <label>Half-spread on the hedge fills only (%, blank = same as above; use it to stress the cover and sale)<input id="lrhspr" type="number" min="0" step="0.5" placeholder="e.g. 4"></label>
-    <label>Also run the combination grid: cover + in-the-money sale, sizes and strikes, with and without a fast-move gate (slower)<input id="lrgrid" type="checkbox" checked></label>
-    <label>…of<select id="lrhardb"><option value="margin" selected>margin (capital used by the trade)</option><option value="funds">my funds (Settings funds box)</option></select></label>
-    <label>Loss-day test "fast move": close at mid-shoulder only if BTC moved at least this % in the last hour<input id="lrspd" type="number" min="0" step="0.1" value="0.8"></label>
     <label>Loss-day test "fast range exit": close all at the first close outside the profit range only if BTC moved at least this % in the last hour<input id="lrspe" type="number" min="0" step="0.1" value="1.0"></label>
     <label>Fast range exit, optional volume condition: also require BTC volume over the last 15 minutes of at least this many times its 24h average (0 = off; the comparison table always shows it with 3×)<input id="lrvol" type="number" min="0" step="0.5" value="0"></label>
     <label>Split for the fast-exit check: tune on days before this date, test on days from it (blank = halfway)<input id="lrsplit" type="date"></label>
@@ -2567,332 +2528,6 @@ function histSamples(candles, H){
   return {ret, mn, mx};
 }
 
-function planModel(chain, S0, T){
-  const sm = buildSmile(chain, S0, T);
-  const listed = {C: chain.calls.slice().sort((a, b) => a.strike - b.strike), P: chain.puts.slice().sort((a, b) => a.strike - b.strike)};
-  const price = (t, K, Ss) => bsPx(Ss, K, T, sm.ivAt(K), t);
-  const trade = (t, K, Ss, side) => price(t, K, Ss) * (side > 0 ? 1 + sm.hAt(t, K) : 1 - sm.hAt(t, K));   // buys pay a little more, sells get a little less
-  const nearest = (t, target) => listed[t].reduce((b, o) => !b || Math.abs(o.strike - target) < Math.abs(b.strike - target) ? o : b, null);
-  return {sm, listed, price, trade, nearest, T};
-}
-
-function sideActs(g, action, groupLegs, model, m){
-  if (action === "keep") return {acts: [], ok: true};
-  const closing = action === "rollsold" ? groupLegs.filter(l => l.side === -1) : groupLegs;
-  const acts = closing.map(l => ({kind: "close", sym: l.s, side: l.side, lots: l.lots, px: model.trade(g, l.k, m.Ss, -l.side)}));
-  if (action === "close") return {acts, ok: true};
-  const keptLongs = action === "rollsold" ? groupLegs.filter(l => l.side === 1) : [];
-  const news = closing.map(l => model.nearest(g, l.k * (1 + m.dir * m.step)));
-  if (news.some(o => !o)) return {ok: false};
-  const strikes = news.map(o => o.strike);
-  const soldIdx = closing.map((l, i) => l.side === -1 ? i : -1).filter(i => i >= 0), longIdx = closing.map((l, i) => l.side === 1 ? i : -1).filter(i => i >= 0);
-  const ordered = () => {        // the sold strike must stay further out than the long strike (puts: lower, calls: higher)
-    const longK = keptLongs.map(l => l.k).concat(longIdx.map(i => strikes[i]));
-    return soldIdx.every(i => longK.every(lk => g === "P" ? strikes[i] < lk : strikes[i] > lk));
-  };
-  if (!ordered() && action === "rollboth" && soldIdx.length && longIdx.length){
-    const listedK = model.listed[g].map(o => o.strike);      // rounding pulled the strikes together: move each long leg one listed strike toward the money
-    longIdx.forEach(i => {
-      const maxSold = Math.max(...soldIdx.map(j => strikes[j])), minSold = Math.min(...soldIdx.map(j => strikes[j]));
-      const fix = g === "P" ? listedK.find(k => k > maxSold) : [...listedK].reverse().find(k => k < minSold);
-      if (fix !== undefined){ strikes[i] = fix; news[i] = model.listed[g].find(o => o.strike === fix); }
-    });
-  }
-  if (!ordered()) return {ok: false};
-  if (closing.every((l, i) => strikes[i] === l.k)) return {ok: false};          // rolling to the same strikes changes nothing
-  closing.forEach((l, i) => acts.push({kind: "add", sym: news[i].symbol, side: l.side, lots: l.lots, px: model.trade(g, strikes[i], m.Ss, l.side)}));
-  return {acts, ok: true};
-}
-
-// Extra legs laid over a plan (generic: each extra is {c: isCall, side, pct above/below BTC, lots}). Returns null if a leg can't be placed.
-function extraActs(acts, model, m){
-  const out = [], labels = [], used = new Set(acts.filter(a => a.kind === "close").map(a => a.sym));
-  for (const x of m.extras){
-    const t = x.c ? "C" : "P", K = model.nearest(t, m.Ss * (1 + (x.c ? 1 : -1) * x.pct));
-    if (!K || used.has(K.symbol) || x.lots < 1) return null;
-    used.add(K.symbol);
-    out.push({kind: "add", sym: K.symbol, side: x.side, lots: x.lots, px: model.trade(t, K.strike, m.Ss, x.side)});
-    labels.push((x.side < 0 ? "sell " : "buy ") + (x.c ? "C" : "P") + K.strike + " ×" + f(x.lots, 0));
-  }
-  return {acts: out, label: labels.join(", ")};
-}
-function genPlans(base, model, m){
-  const grp = {C: base.filter(l => l.c), P: base.filter(l => !l.c)};
-  const choices = g => grp[g].length ? ["keep", "rollboth", "rollsold", "close"] : ["keep"];
-  const out = [];
-  choices("C").forEach(ac => choices("P").forEach(ap => {
-    const c = sideActs("C", ac, grp.C, model, m), p = sideActs("P", ap, grp.P, model, m);
-    if (!c.ok || !p.ok) return;
-    const acts = (c.acts || []).concat(p.acts || []);
-    out.push({calls: ac, puts: ap, acts});
-    (m.extras || []).length && (() => {
-      const ex = extraActs(acts, model, m); if (ex) out.push({calls: ac, puts: ap, acts: acts.concat(ex.acts), extra: ex.label});
-    })();
-  }));
-  return out;
-}
-
-function planGrid(Ss, T, sigma){
-  const n = 1200, lo = Ss * 0.7, hi = Ss * 1.3, S = [];
-  for (let i = 0; i <= n; i++) S.push(lo + (hi - lo) * i / n);
-  const st = sigma * Math.sqrt(T), mu = Math.log(Ss) - sigma * sigma * T / 2;
-  const edge = i => i <= 0 ? -Infinity : i > n ? Infinity : (S[i - 1] + S[i]) / 2;
-  const w = S.map((x, i) => { const a = i === 0 ? 0 : normCdf((Math.log(edge(i)) - mu) / st), b = i === n ? 1 : normCdf((Math.log(edge(i + 1)) - mu) / st); return Math.max(0, b - a); });
-  const tot = w.reduce((a, v) => a + v, 0) || 1;
-  return {S, w: w.map(v => v / tot)};
-}
-
-function evalPlan(base, acts, m){
-  const r = applyActs(base, acts, m.lot), g = m.grid, Ls = r.legs;
-  const pn = g.S.map(S => wifPnl(Ls, r.realised + closedOff(), S, m.lot));
-  const margin = Ls.filter(l => l.side === -1).reduce((a, l) => a + l.lots * m.lot * m.Ss / m.lev, 0), thr = m.minPct / 100 * margin;
-  let iS = 0; g.S.forEach((S, i) => { if (Math.abs(S - m.Ss) < Math.abs(g.S[iS] - m.Ss)) iS = i; });
-  let lo = null, hi = null, width = 0;
-  if (pn[iS] >= thr){ let a = iS, b = iS; while (a > 0 && pn[a - 1] >= thr) a--; while (b < pn.length - 1 && pn[b + 1] >= thr) b++; lo = g.S[a]; hi = g.S[b]; width = hi - lo; }
-  let pI = 0, eI = 0; pn.forEach((v, i) => { if (v >= thr) pI += g.w[i]; eI += g.w[i] * v; });
-  let pH = null, eH = null;
-  if (m.hist && m.hist.ret.length){
-    let c = 0, e = 0; m.hist.ret.forEach(x => { const v = wifPnl(Ls, r.realised + closedOff(), m.Ss * Math.exp(x), m.lot); if (v >= thr) c++; e += v; });
-    pH = c / m.hist.ret.length; eH = e / m.hist.ret.length;
-  }
-  const slope = Ls.reduce((a, l) => a + (l.c ? l.side * l.lots * m.lot : 0), 0);
-  return {acts, legs: Ls, realised: r.realised, cash: r.cash, margin, thr, lo, hi, width, atSpot: wifPnl(Ls, r.realised + closedOff(), m.Ss, m.lot),
-    atUp5: wifPnl(Ls, r.realised + closedOff(), m.Ss * 1.05, m.lot), atDn5: wifPnl(Ls, r.realised + closedOff(), m.Ss * 0.95, m.lot), pI, eI, pH, eH, worst: Math.min(...pn), unlimited: slope < 0, atEdge: lo !== null && (lo <= g.S[0] || hi >= g.S[g.S.length - 1])};
-}
-
-function planScenario(base, model, dir, m0){
-  const Ss = m0.S0 * (1 + dir * m0.step), sigma = model.sm.ivAt(Ss);
-  const m = Object.assign({}, m0, {Ss, dir, sigma, grid: planGrid(Ss, m0.T, sigma)});
-  const plans = genPlans(base, model, m).map(pl => Object.assign(pl, evalPlan(base, pl.acts, m)));
-  const baseline = plans.find(p => p.calls === "keep" && p.puts === "keep") || evalPlan(base, [], m);
-  let excluded = 0;
-  const dpass = pl => pl.acts.every(a => {
-    if (!(a.kind === "add" && a.side < 0)) return true;
-    const pp = a.sym.split("-"), K = Number(pp[2]), d = bsDelta(Ss, K, m0.T, model.sm.ivAt(K), pp[0] === "C");
-    return dOK(d);
-  });
-  let cands = plans.filter(p => p.acts.length);
-  if (dfil.on){ const before = cands.length; cands = cands.filter(dpass); excluded = before - cands.length; }
-  if ((m0.extras || []).length) cands = cands.filter(p => p.extra);      // option ticked: rank only the plans that add the extra legs
-  cands.sort((a, b) => b.width - a.width || b.atSpot - a.atSpot || b.eI - a.eI);
-  return {Ss, sigma, baseline, top: cands.slice(0, 3), count: cands.length, excluded};
-}
-
-function planEvents(S0, step, sigma, T, hist){
-  const L = S0 * (1 - step), U = S0 * (1 + step), st = sigma * Math.sqrt(T), mu = Math.log(S0) - sigma * sigma * T / 2;
-  const imp = {touchDn: Math.min(1, 2 * normCdf(Math.log(L / S0) / st)), touchUp: Math.min(1, 2 * (1 - normCdf(Math.log(U / S0) / st))),
-    belowDn: normCdf((Math.log(L) - mu) / st), aboveUp: 1 - normCdf((Math.log(U) - mu) / st)};
-  let h = null;
-  if (hist && hist.ret.length){
-    const n = hist.ret.length, fr = a => a / n;
-    h = {touchDn: fr(hist.mn.filter(x => x <= -step).length), touchUp: fr(hist.mx.filter(x => x >= step).length),
-      belowDn: fr(hist.ret.filter(x => x <= Math.log(L / S0)).length), aboveUp: fr(hist.ret.filter(x => x >= Math.log(U / S0)).length), n};
-  }
-  return {imp, hist: h, L, U};
-}
-
-let lastPlan = null;
-const pct1 = v => v === null || v === undefined ? "–" : f(v * 100, 0) + "%";
-function planActLines(acts){
-  return acts.map(a => `${a.kind === "close" ? (a.side < 0 ? "Buy back" : "Sell out") : (a.side > 0 ? "Buy" : "Sell")} ${esc(a.sym)} ×${f(a.lots, 0)} at ~${f(a.px)}`).join("<br>");
-}
-function planCards(list, dir, Ss){
-  if (!list.length) return `<p class="note">No valid combinations for this move.</p>`;
-  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
-  return `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:8px">` + list.map((c, n) => `
-    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
-      <b style="font-size:16px">#${n + 1} · ${c.width > 0 ? "range " + f(c.width, 0) + " (" + f(c.width / Ss * 100, 1) + "%)" : "no profit zone"}</b>
-      <div class="note" style="margin:2px 0 4px">Calls: ${c.calls === "rollboth" ? "roll both legs" : c.calls === "rollsold" ? "roll the sold leg" : c.calls === "close" ? "close" : "keep"} · Puts: ${c.puts === "rollboth" ? "roll both legs" : c.puts === "rollsold" ? "roll the sold leg" : c.puts === "close" ? "close" : "keep"}${c.extra ? `<br><b>+ extra calls: ${esc(c.extra)}</b>` : ""}</div>
-      ${c.width > 0 ? `<div class="note" style="margin-bottom:4px">Break-evens (profit zone): ${beN(c.lo)} to ${beN(c.hi)}${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>` : ""}
-      <div style="font-size:13px;margin-bottom:6px">${planActLines(c.acts)}</div>
-      <div class="note">Cash for these trades ${usd(c.cash)} · realised ${usd(c.realised)}<br>Total P&amp;L at expiry if BTC stays at the new level: <b class="${c.atSpot >= 0 ? "g" : "l"}">${usd(c.atSpot)}</b><br>
-        Chance of profit: implied <b>${pct1(c.pI)}</b> · history <b>${pct1(c.pH)}</b><br>Expected P&amp;L (model): implied ${usd(c.eI)} · history ${c.eH === null ? "–" : usd(c.eH)}<br>If BTC then moves −5%: ${usd(c.atDn5)} · +5%: ${usd(c.atUp5)}<br>Cushion: ${c.width > 0 ? f((Ss - c.lo) / Ss * 100, 1) + "% below" + (c.atEdge && c.hi >= Ss * 1.29 ? ", no upper limit in range" : ", " + f((c.hi - Ss) / Ss * 100, 1) + "% above") : "–"}<br>Worst P&amp;L within ±30%: ${usd(c.worst)}${c.unlimited ? " · losses uncapped above the sold calls" : ""}</div>
-      <p style="margin:8px 0 0"><button data-pl="${dir}:${n}">Show in what-if</button></p></div>`).join("") + `</div>`;
-}
-
-function renderPlan(info){
-  const {S0, step, exp, T, status, ev, down, up, base, sigma0, histN, base0} = info;
-  const e = ev, row = (lbl, a, b) => `<tr><td style="text-align:left">${lbl}</td><td>${pct1(a)}</td><td>${pct1(b)}</td></tr>`;
-  let h = `<p style="margin-top:8px"><b>${status.text}</b></p>`;
-  h += `<p class="note">Spot ${f(S0, 0)} · expiry ${esc(exp)} in ${f(T, 2)} days · implied volatility near spot ${f(sigma0 * 100, 0)}% · ${histN ? f(histN, 0) + " historical windows" : "no candle history"}</p>`;
-  h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Chance, from now to expiry</th><th>Implied (options market)</th><th>History (past candles)</th></tr></thead><tbody>` +
-    row(`BTC touches ${f(e.L, 0)} (−${f(step * 100, 1)}%)`, e.imp.touchDn, e.hist && e.hist.touchDn) +
-    row(`BTC touches ${f(e.U, 0)} (+${f(step * 100, 1)}%)`, e.imp.touchUp, e.hist && e.hist.touchUp) +
-    row(`Finishes below ${f(e.L, 0)}`, e.imp.belowDn, e.hist && e.hist.belowDn) +
-    row(`Finishes above ${f(e.U, 0)}`, e.imp.aboveUp, e.hist && e.hist.aboveUp) +
-    row("Your current legs finish in profit (no adjustment)", base0.pI, base0.pH) + `</tbody></table></div>`;
-  h += `<p style="margin:14px 0 0"><b>If BTC falls ${f(step * 100, 1)}% to ${f(down.Ss, 0)}</b> <span class="note">roll the range down: best 3 by widest profit range (${down.count} combinations tried${dfil.on ? ", " + down.excluded + " hidden by the " + dfil.lo + "–" + dfil.hi + " delta filter" : ""})</span></p>` +
-    `<div class="note">Without any change you'd have: P&amp;L at expiry if BTC stays ${usdP(down.baseline.atSpot)} · chance of profit implied ${pct1(down.baseline.pI)} / history ${pct1(down.baseline.pH)}</div>` + planCards(down.top, "down", down.Ss);
-  h += `<p style="margin:14px 0 0"><b>If BTC rises ${f(step * 100, 1)}% to ${f(up.Ss, 0)}</b> <span class="note">roll the range up: best 3 by widest profit range (${up.count} combinations tried${dfil.on ? ", " + up.excluded + " hidden by the " + dfil.lo + "–" + dfil.hi + " delta filter" : ""})</span></p>` +
-    `<div class="note">Without any change you'd have: P&amp;L at expiry if BTC stays ${usdP(up.baseline.atSpot)} · chance of profit implied ${pct1(up.baseline.pI)} / history ${pct1(up.baseline.pH)}</div>` + planCards(up.top, "up", up.Ss);
-  h += `<p class="note">How to read this: prices for the closes and new strikes at the moved BTC level are model estimates (Black-Scholes using each strike's implied volatility from the live chain today, plus the bid-ask spread seen now), so real quotes will differ. Implied odds assume a lognormal move with the options market's volatility near that level; history odds replay past ${f(T, 1)}-day moves from the candles. "Range" is where the total result at expiry is at or above your profit threshold and contains the new BTC level. Fees aren't included. A wider range isn't lower risk, and neither odds are a forecast.</p>`;
-  $("plout").innerHTML = h;
-}
-const usdP = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
-
-function planStatus(base, S0, lot, lev, minPct){
-  const r = applyActs(base, [], lot), ks = base.map(l => l.k), lo = Math.min(S0 * 0.7, Math.min(...ks) * 0.9), hi = Math.max(S0 * 1.3, Math.max(...ks) * 1.1);
-  const S = [], P = []; for (let i = 0; i <= 1500; i++){ const x = lo + (hi - lo) * i / 1500; S.push(x); P.push(wifPnl(r.legs, closedOff(), x, lot)); }
-  const margin = r.legs.filter(l => l.side === -1).reduce((a, l) => a + l.lots * lot * S0 / lev, 0), thr = minPct / 100 * margin;
-  let iS = 0; S.forEach((x, i) => { if (Math.abs(x - S0) < Math.abs(S[iS] - S0)) iS = i; });
-  if (P[iS] >= thr){
-    let a = iS, b = iS; while (a > 0 && P[a - 1] >= thr) a--; while (b < P.length - 1 && P[b + 1] >= thr) b++;
-    return {kind: "inside", lo: S[a], hi: S[b], text: `BTC is inside your profit range (break-evens ${beN(S[a])} to ${beN(S[b])}): ${f(S0 - S[a], 0)} above the lower break-even and ${f(S[b] - S0, 0)} below the upper one.`};
-  }
-  let below = null, above = null;
-  for (let i = 0; i < S.length; i++){ if (P[i] >= thr){ if (S[i] < S0) below = S[i]; else if (above === null) above = S[i]; } }
-  if (below !== null && (above === null || S0 - below <= above - S0)) return {kind: "above", text: `BTC has crossed above your profit range (it ends near ${f(below, 0)}), so the upside plan (roll up) is the relevant one.`};
-  if (above !== null) return {kind: "below", text: `BTC has crossed below your profit range (it starts near ${f(above, 0)}), so the downside plan (roll down) is the relevant one.`};
-  return {kind: "none", text: "Your current legs have no profit zone at your threshold: both plans below are damage-limiting."};
-}
-
-$("plrun").onclick = async () => {
-  const msg = $("plmsg"); msg.className = "note";
-  const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, step = (Number($("pstep").value) || 0.5) / 100;
-  const days = Math.min(30, Math.max(3, Number($("pdays").value) || 30)), minPct = Math.max(0, Number($("ppct").value) || 0);
-  const base = wifLegs(lot);
-  if (!base.length){ msg.className = "note l"; msg.textContent = "Add legs with lots first."; return; }
-  const exps = [...new Set(base.map(l => l.s.split("-")[3]))];
-  if (exps.length > 1){ msg.className = "note l"; msg.textContent = "Your legs have different expiries (" + exps.join(", ") + "). The planner needs one expiry."; return; }
-  const exp = exps[0], Tdays = (expiryMs(exp, $("bexp").value) - Date.now()) / 86400000;
-  if (!(Tdays > 0.01)){ msg.className = "note l"; msg.textContent = "Expiry " + exp + " has passed or is about to, so there's nothing to plan."; return; }
-  const T = Tdays / 365;                                   // years, for the option maths
-  msg.textContent = "Loading the chain and candle history…"; $("plout").innerHTML = "";
-  try {
-    const base_ = $("base").value.replace(/\/$/, "");
-    const [chain, candles] = await Promise.all([fetchChain(exp), fetchCandles(base_, "BTCUSD", days).catch(() => [])]);
-    if (!chain.calls.length || !chain.puts.length){ msg.className = "note l"; msg.textContent = "No options found for expiry " + exp + "."; return; }
-    const S0 = Number($("pat").value) || lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, model = planModel(chain, S0, T);
-    const hist = candles.length > 600 ? histSamples(candles, Math.max(12, Math.round(Tdays * 288))) : null;
-    const soldCallLots = base.filter(l => l.c && l.side === -1).reduce((a, l) => a + l.lots, 0);
-    const xl = Number($("pxlots").value) || soldCallLots || 1000, xp = (Number($("pxpct").value) || 2) / 100, xq = (Number($("pxprot").value) || 0) / 100, extras = [];
-    if ($("pxon").checked){
-      extras.push({c: true, side: -1, pct: xp, lots: xl});
-      if (xq > 0) extras.push({c: true, side: 1, pct: xp + xq, lots: xl});
-    }
-    const m0 = {S0, step, T, lot, lev, minPct, hist, extras};
-    const sigma0 = model.sm.ivAt(S0), g0 = planGrid(S0, T, sigma0);
-    const base0 = evalPlan(base, [], Object.assign({}, m0, {Ss: S0, dir: 0, sigma: sigma0, grid: g0}));
-    const down = planScenario(base, model, -1, m0), up = planScenario(base, model, 1, m0);
-    const info = {S0, step, exp, T: Tdays, status: planStatus(base, S0, lot, lev, minPct), ev: planEvents(S0, step, sigma0, T, hist), down, up, base, sigma0, histN: hist ? hist.ret.length : 0, base0};
-    lastPlan = {down: down.top, up: up.top};
-    msg.textContent = hist ? "Done." : "Done, but there was too little candle history, so only the implied odds are shown.";
-    renderPlan(info);
-  } catch (e){ msg.className = "note l"; msg.textContent = "Planner failed: " + e.message; }
-};
-
-// ---------- Re-center planner ----------
-let lastRec = null;
-function recScenario(base, model, dir, trig, ctx){
-  const Ss = trig, sigma = model.sm.ivAt(Ss), gT = dir > 0 ? "C" : "P", gO = dir > 0 ? "P" : "C";
-  const m = {S0: ctx.S0, step: 0, T: ctx.T, lot: ctx.lot, lev: ctx.lev, minPct: 0, hist: null, extras: [], Ss, dir, sigma, grid: planGrid(Ss, ctx.T, sigma)};
-  const opp = base.filter(l => l.c === (gO === "C")), hit = base.filter(l => l.c === (gT === "C"));
-  const fees = acts => acts.reduce((t, a) => t + feeOpt(a.lots, a.px, Ss, ctx.lot), 0);
-  const baseline = evalPlan(base, [], m);
-  const rej = {delta: 0, profit: 0, loss: 0, cushion: 0, cost: 0, none: 0}; let tried = 0;
-  if (!opp.length) return {Ss, sigma, baseline, top: [], tried, rej, note: "There are no " + (gO === "C" ? "call" : "put") + " legs on the opposite side to re-build."};
-  const oSold = opp.filter(l => l.side === -1), oLong = opp.filter(l => l.side === 1);
-  const soldLots = oSold.reduce((a, l) => a + l.lots, 0) || 1, longLots = oLong.reduce((a, l) => a + l.lots, 0);
-  const ratio0 = soldLots ? longLots / soldLots : 0;
-  const origGap = oSold.length && oLong.length ? Math.abs(oSold[0].k - oLong[0].k) : 0;
-  const closeAll = opp.map(l => ({kind: "close", sym: l.s, side: l.side, lots: l.lots, px: model.trade(gO, l.k, Ss, -l.side)}));
-  const hitOpts = [{label: "keep", acts: []}];
-  if (ctx.roll){
-    const hs = hit.filter(l => l.side === -1), hl = hit.filter(l => l.side === 1);
-    [0.015, 0.025].forEach(d => {
-      if (!hs.length) return;
-      const K = model.nearest(gT, Ss * (1 + (gT === "C" ? 1 : -1) * d)); if (!K) return;
-      const far = hs.every(l => gT === "C" ? K.strike > l.k : K.strike < l.k);
-      if (!far || hl.some(l => gT === "C" ? K.strike <= l.k : K.strike >= l.k)) return;
-      const acts = hs.map(l => ({kind: "close", sym: l.s, side: -1, lots: l.lots, px: model.trade(gT, l.k, Ss, 1)})).concat(hs.map(l => ({kind: "add", sym: K.symbol, side: -1, lots: l.lots, px: model.trade(gT, K.strike, Ss, -1)})));
-      hitOpts.push({label: "roll the sold " + (gT === "C" ? "call" : "put") + " out to " + K.strike, acts});
-    });
-  }
-  const A = [0, 0.0025, 0.005, 0.01], G = [0.01, 0.015, 0.02, 0.03].concat(origGap ? [origGap / Ss] : []);
-  const kLots = [1, 0.75, 0.5], rats = [...new Set([ratio0, 0.2, 0.3, 0.4, 0.5].filter(r => r > 0 && r < 1).map(r => Math.round(r * 100) / 100))];
-  const seen = new Set(), cands = [];
-  // build candidate re-builds of the opposite side
-  const dirO = gO === "C" ? 1 : -1;     // calls sit above the new centre, puts below
-  A.forEach(a => G.forEach(g => kLots.forEach(k => rats.forEach(r => {
-    const Kb = model.nearest(gO, Ss * (1 + dirO * a)), Ks = model.nearest(gO, Ss * (1 + dirO * (a + g)));
-    if (!Kb || !Ks || (gO === "C" ? Ks.strike <= Kb.strike : Ks.strike >= Kb.strike)) return;
-    const sl = Math.max(1, Math.round(soldLots * k)), bl = Math.max(1, Math.round(sl * r)); if (bl >= sl) return;
-    const key = [Kb.strike, Ks.strike, sl, bl].join("|"); if (seen.has(key)) return; seen.add(key);
-    const acts = closeAll.concat([{kind: "add", sym: Ks.symbol, side: -1, lots: sl, px: model.trade(gO, Ks.strike, Ss, -1)}, {kind: "add", sym: Kb.symbol, side: 1, lots: bl, px: model.trade(gO, Kb.strike, Ss, 1)}]);
-    cands.push({label: `new ${gO === "C" ? "call" : "put"} side: buy ${Kb.strike} ×${f(bl, 0)}, sell ${Ks.strike} ×${f(sl, 0)}`, acts, Kb, Ks, sl, bl});
-  }))));
-  const good = [];
-  hitOpts.forEach(h => cands.forEach(c => {
-    tried++;
-    const acts = h.acts.concat(c.acts);
-    if (acts.some(a => a.kind === "add" && a.side < 0)){      // delta filter on new sold strikes
-      const bad = acts.some(a => { if (!(a.kind === "add" && a.side < 0)) return false; const pp = a.sym.split("-"), K = Number(pp[2]); return !dOK(bsDelta(Ss, K, ctx.T, model.sm.ivAt(K), pp[0] === "C")); });
-      if (bad){ rej.delta++; return; }
-    }
-    const r = evalPlan(base, acts, m), fee = fees(acts), at = r.atSpot - fee, worst = r.worst - fee, cost = -(r.cash - fee);
-    if (!(r.width > 0)){ rej.none++; return; }
-    if (at < ctx.minProfit){ rej.profit++; return; }
-    if (ctx.maxLoss && worst < -ctx.maxLoss){ rej.loss++; return; }
-    if ((Ss - r.lo) / Ss * 100 < ctx.cush || (r.hi - Ss) / Ss * 100 < ctx.cush){ rej.cushion++; return; }
-    if (ctx.maxCost !== null && cost > ctx.maxCost){ rej.cost++; return; }
-    good.push(Object.assign(r, {acts, label: (h.label === "keep" ? "" : h.label + "; ") + c.label, fee, at, worst, cost}));
-  }));
-  good.sort((a, b) => b.width - a.width || b.at - a.at || b.eI - a.eI);
-  return {Ss, sigma, baseline, top: good.slice(0, 3), tried, passed: good.length, rej};
-}
-function recCards(list, dir, Ss){
-  if (!list.length) return `<p class="note l">No combination passes all your thresholds for this scenario. Loosen the minimum cushion, the minimum profit or the cost limit, or allow a higher worst loss.</p>`;
-  const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0);
-  return `<div class="kpi" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:8px">` + list.map((c, n) => `
-    <div style="border:1px solid var(--line);border-radius:8px;padding:10px;color:var(--fg)">
-      <b style="font-size:16px">R${n + 1} · range ${f(c.width, 0)} (${f(c.width / Ss * 100, 1)}%)</b>
-      <div class="note" style="margin:2px 0 4px">${esc(c.label)}</div>
-      <div class="note" style="margin-bottom:4px">Break-evens: ${beN(c.lo)} to ${beN(c.hi)} · cushion ${f((Ss - c.lo) / Ss * 100, 1)}% below / ${f((c.hi - Ss) / Ss * 100, 1)}% above the new centre${c.atEdge ? " (at least; edge of the modelled range)" : ""}</div>
-      <div style="font-size:13px;margin-bottom:6px">${planActLines(c.acts)}</div>
-      <div class="note">Net cost of these trades ${usd(c.cost)} (fees ${usd(c.fee)} included in the figures below)<br>Total P&amp;L at expiry if BTC stays at ${f(Ss, 0)}: <b class="${c.at >= 0 ? "g" : "l"}">${usd(c.at)}</b> · worst in ±30%: <span class="l">${usd(c.worst)}</span>${c.unlimited ? " (unlimited above the highest sold call)" : ""}<br>
-        Chance of profit (implied): <b>${pct1(c.pI)}</b> · expected P&amp;L (model) ${usd(c.eI - c.fee)}<br>If BTC then moves −5%: ${usd(c.atDn5 - c.fee)} · +5%: ${usd(c.atUp5 - c.fee)}</div>
-      <p style="margin:8px 0 0"><button data-rc="${dir}:${n}">Show in what-if</button></p></div>`).join("") + `</div>`;
-}
-$("rcrun").onclick = async () => {
-  const msg = $("rcmsg"); msg.className = "note";
-  const lot = Number($("lot").value) || 0, lev = Number($("lev").value) || 1, base = wifLegs(lot);
-  if (!base.length){ msg.className = "note l"; msg.textContent = "Add legs with lots first."; return; }
-  const exps = [...new Set(base.map(l => l.s.split("-")[3]))];
-  if (exps.length > 1){ msg.className = "note l"; msg.textContent = "Your legs have different expiries (" + exps.join(", ") + "). This planner needs one expiry."; return; }
-  const exp = exps[0], Tdays = (expiryMs(exp, $("bexp").value) - Date.now()) / 86400000;
-  if (!(Tdays > 0.01)){ msg.className = "note l"; msg.textContent = "Expiry " + exp + " has passed or is about to."; return; }
-  const T = Tdays / 365; msg.textContent = "Loading the chain…"; $("rcout").innerHTML = "";
-  try {
-    const chain = await fetchChain(exp);
-    if (!chain.calls.length || !chain.puts.length){ msg.className = "note l"; msg.textContent = "No options found for expiry " + exp + "."; return; }
-    const spot = lastSpotVal || chain.calls[0].spot || chain.puts[0].spot, frac = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
-    const lv = adjLevels(base, spot, frac);
-    if (!lv.C && !lv.P){ msg.className = "note l"; msg.textContent = "No bought strike inside a sold strike on either side, so there is no shoulder to take the middle of."; return; }
-    const model = planModel(chain, spot, T), fb = batFunds();
-    let maxLoss = 0, capSrc = "";
-    if (Number($("rcloss").value)){ maxLoss = Number($("rcloss").value); capSrc = "this card's box"; }
-    else if (Number($("imaxd").value)){ maxLoss = Number($("imaxd").value); capSrc = "the Batman 'Max loss in dollars' box"; }
-    else if (Number($("ifunds").value)){ maxLoss = Number($("ifunds").value) * (Number($("iplim").value) || 15) / 100; capSrc = (Number($("iplim").value) || 15) + "% of the Batman 'Initial capital' box"; }
-    const ctx = {capSrc, S0: spot, T, lot, lev, roll: $("rcroll").checked, minProfit: Number($("rcmin").value) || 0, maxLoss, cush: Math.max(0, Number($("rccush").value) || 0), maxCost: $("rccost").value === "" ? null : Number($("rccost").value)};
-    const res = {}; let h = `<p class="note">Spot ${f(spot, 0)} · expiry ${esc(exp)} in ${f(Tdays, 2)} days · thresholds: profit at the new centre ≥ ${usdP(ctx.minProfit)}, worst loss ${ctx.maxLoss ? "≤ " + usdP(ctx.maxLoss) + " (from " + capSrc + ")" : "no cap"}, cushion ≥ ${f(ctx.cush, 1)}% each side${ctx.maxCost !== null ? ", net cost ≤ " + usdP(ctx.maxCost) : ""}${dfil.on ? ", sold delta " + dfil.lo + "–" + dfil.hi : ""}.</p>`;
-    [["up", lv.C, 1], ["down", lv.P, -1]].forEach(([k, L, d]) => {
-      if (!L){ h += `<p class="note">No ${d > 0 ? "call" : "put"}-side shoulder, so no ${k} scenario.</p>`; return; }
-      const r = recScenario(base, model, d, L.trig, ctx); res[k] = r.top;
-      h += `<p style="margin:14px 0 0"><b>If BTC ${d > 0 ? "rises" : "falls"} to ${f(L.trig, 0)}</b> <span class="note">(${f(frac * 100, 0)}% of the way from your bought ${f(L.bought, 0)} to your sold ${f(L.sold, 0)} ${d > 0 ? "call" : "put"}) and the ${d > 0 ? "put" : "call"} side is re-built around it</span></p>`;
-      h += r.note ? `<p class="note l">${esc(r.note)}</p>` : `<div class="note">Without any change you'd have ${usdP(r.baseline.atSpot)} at expiry if BTC stays there, chance of profit (implied) ${pct1(r.baseline.pI)}.<br>Threshold check: ${f(r.tried, 0)} combinations tried, ${f(r.passed || 0, 0)} passed. Rejected for: no profit zone around the new centre ${r.rej.none}, profit at centre too low ${r.rej.profit}, worst loss too big ${r.rej.loss}, cushion too small ${r.rej.cushion}, cost too high ${r.rej.cost}, sold delta outside filter ${r.rej.delta}.</div>` + recCards(r.top, k, L.trig);
-    });
-    lastRec = res; msg.textContent = "Done."; $("rcout").innerHTML = h;
-  } catch (e){ msg.className = "note l"; msg.textContent = "Re-center planner failed: " + e.message; }
-};
-$("rcout").addEventListener("click", e => {
-  const v = e.target.dataset.rc; if (!v || !lastRec) return;
-  const [dir, n] = v.split(":"), c = (lastRec[dir] || [])[Number(n)]; if (!c) return;
-  wif.acts = c.acts.map(a => Object.assign({}, a));
-  $("wmsg").textContent = "Loaded re-center option R" + (Number(n) + 1) + " (" + dir + " scenario). Its prices at the new BTC level are model estimates.";
-  renderWhatIf();
-  const card = $("wifCard"); if (card && card.scrollIntoView) card.scrollIntoView({behavior: "smooth", block: "start"});
-});
-
 // ---------- Daily Inverted Batman backtest ----------
 function berlinUtc(y, mo, d, h){            // seconds (UTC) of Europe/Berlin local time y-mo-d h:00
   const want = Date.UTC(y, mo, d, h); let t = want;
@@ -3501,69 +3136,6 @@ $("dbgo").onclick = async () => {
 
         // ---- optional re-center adjustment: at the first 15-minute step where BTC reaches the middle of a shoulder, close the opposite side and re-build it around the new price ----
         let adj = null;
-        if ($("dbadj").checked){
-          const frac = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
-          const cT = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac, pT = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac;
-          let tA = null, sideA = null, pxA = null;
-          for (let t = r.t0 + rs; t < E.tx - rs && tA === null; t += rs){
-            const cb = byT.get(Math.floor((t - 300) / 300) * 300); if (!cb) continue;
-            if (cb.close >= cT){ tA = t; sideA = "C"; pxA = cb.close; } else if (cb.close <= pT){ tA = t; sideA = "P"; pxA = cb.close; }
-          }
-          if (tA !== null){
-            adj = {t: tA, spot: pxA, side: sideA, none: true};
-            const opp = L.filter(l => l.c === (sideA === "P")), kept = L.filter(l => l.c !== (sideA === "P")), isCallO = sideA === "P", dirO = isCallO ? 1 : -1;
-            let realised = 0, adjFees = 0, ok = true, cost0 = 0;
-            opp.forEach(l => { const m = mk(l.c, l.K, tA, false); if (m === null){ ok = false; return; } const px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); realised += l.side * (px - l.e) * l.n * lot; adjFees += feeOpt(l.n, px, pxA, lot); cost0 += (l.side === -1 ? 1 : -1) * px * l.n * lot; });
-            const avail = syms.filter(x => x.c === isCallO).map(x => ({K: x.K, m: mk(x.c, x.K, tA, false)})).filter(x => x.m > 0);
-            const near = target => avail.reduce((b, x) => !b || Math.abs(x.K - target) < Math.abs(b.K - target) ? x : b, null);
-            if (ok && avail.length > 2){
-              const oS = opp.filter(l => l.side === -1), oL = opp.filter(l => l.side === 1), sl0 = oS.reduce((a, l) => a + l.n, 0) || sold, bl0 = oL.reduce((a, l) => a + l.n, 0);
-              const gap0 = oS.length && oL.length ? Math.abs(oS[0].K - oL[0].K) : 0, rat0 = bl0 / sl0;
-              const A = [0, 0.0025, 0.005, 0.01], G = [0.01, 0.015, 0.02, 0.03].concat(gap0 ? [gap0 / pxA] : []), KL = [1, 0.75, 0.5];
-              const RT = [...new Set([rat0, 0.2, 0.3, 0.4, 0.5].filter(x => x > 0 && x < 1).map(x => Math.round(x * 100) / 100))];
-              const minProfit = $("dbamin").value !== "" ? Number($("dbamin").value) : ($("dbapct").value !== "" ? -Number($("dbapct").value) / 100 * margin : (Number($("rcmin").value) || 0)), byAt = $("dbrank").value === "at", cush = Math.max(0, Number($("rccush").value) || 0), maxCost = $("rccost").value === "" ? null : Number($("rccost").value), maxLoss = Number($("rcloss").value) || Number($("imaxd").value) || 0;
-              const grid = []; for (let i = 0; i <= 400; i++) grid.push(pxA * (0.7 + 0.6 * i / 400));
-              const iS = 200, seenC = new Set(); let bestC = null; const rj = adj.rej = {cost: 0, profit: 0, loss: 0, cushion: 0, tried: 0};
-              adj.th = {minProfit, maxLoss, cush, maxCost, byAt};
-              A.forEach(a => G.forEach(g => KL.forEach(k => RT.forEach(rt => {
-                const Kb = near(pxA * (1 + dirO * a)), Ks = near(pxA * (1 + dirO * (a + g)));
-                if (!Kb || !Ks || (isCallO ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
-                const sl = Math.max(1, Math.round(sl0 * k)), bl = Math.max(1, Math.round(sl * rt)); if (bl >= sl) return;
-                const key = [Kb.K, Ks.K, sl, bl].join("|"); if (seenC.has(key)) return; seenC.add(key);
-                rj.tried++;
-                const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(sl, pS, pxA, lot) + feeOpt(bl, pB, pxA, lot);
-                const cost = cost0 + (bl * pB - sl * pS) * lot + fee2 + adjFees;
-                if (maxCost !== null && cost > maxCost){ rj.cost++; return; }
-                const nl = [{c: isCallO, K: Ks.K, side: -1, n: sl, e: pS}, {c: isCallO, K: Kb.K, side: 1, n: bl, e: pB}], all = kept.concat(nl);
-                const P = grid.map(S => realised - fees - adjFees - fee2 + all.reduce((t, l) => t + l.side * ((l.c ? Math.max(S - l.K, 0) : Math.max(l.K - S, 0)) - l.e) * l.n * lot, 0));
-                if (P[iS] < minProfit){ rj.profit++; return; }
-                if (maxLoss && Math.min(...P) < -maxLoss){ rj.loss++; return; }
-                let lo = iS, hi = iS; while (lo > 0 && P[lo - 1] >= 0) lo--; while (hi < grid.length - 1 && P[hi + 1] >= 0) hi++;
-                if (P[iS] >= 0 && ((pxA - grid[lo]) / pxA * 100 < cush || (grid[hi] - pxA) / pxA * 100 < cush)){ rj.cushion++; return; }
-                const w = P[iS] >= 0 ? grid[hi] - grid[lo] : 0;
-                if (!bestC || (byAt ? (P[iS] > bestC.at || (P[iS] === bestC.at && w > bestC.w)) : (w > bestC.w || (w === bestC.w && P[iS] > bestC.at)))) bestC = {w, at: P[iS], nl, fee2, desc: `buy ${Kb.K} ×${f(bl, 0)}, sell ${Ks.K} ×${f(sl, 0)}`};
-              }))));
-              if (bestC){
-                const all = kept.concat(bestC.nl), pathAdj = t => { let v = realised - fees - adjFees - bestC.fee2; for (const l of all){ const m = mk(l.c, l.K, t, false); if (m === null) return null; v += l.side * (m - l.e) * l.n * lot; } return v; };
-                let mV = Infinity, mT = null, a0 = null, a1 = null, a2 = null; const pathA = [];
-                for (let t = r.t0 + rs; t < E.tx; t += rs){
-                  const v = t < tA ? pnlAt(t) : pathAdj(t); if (v === null) continue; pathA.push([t, v]);
-                  if (v < mV){ mV = v; mT = t; }
-                  if (a0 === null && v <= -lv0 / 100 * margin) a0 = t; if (a1 === null && v <= -lv1 / 100 * margin) a1 = t; if (a2 === null && v <= -lv2 / 100 * margin) a2 = t;
-                }
-                let fa = realised - fees - adjFees - bestC.fee2; all.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); fa += l.side * (intr - l.e) * l.n * lot; if (intr > 0) fa -= settleFee(l.n * lot, intr, E.settle); });
-                const adjSl = slv.map(X => {                  // stop-loss on the re-centred position (or on the original one if it was hit before the re-centre)
-                  const hit = pathA.find(q => q[1] <= -X / 100 * slBase); if (!hit) return null;
-                  const t = hit[0], cb = byT.get(Math.floor((t - 300) / 300) * 300), sp = cb ? cb.close : r.spot;
-                  let pv = t < tA ? -fees : realised - fees - adjFees - bestC.fee2;
-                  for (const l of (t < tA ? L : all)){ const m = mk(l.c, l.K, t, false), px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); pv += l.side * (px - l.e) * l.n * lot - feeOpt(l.n, px, sp, lot); }
-                  return {t, spot: sp, fin: pv, mark: hit[1]};
-                });
-                adj = {t: tA, spot: pxA, side: sideA, fin: fa, minV: isFinite(mV) ? mV : null, b0: a0, b1: a1, b2: a2, desc: bestC.desc, sls: adjSl};
-              }
-            }
-          }
-        }
 
         // ---- stop-loss exits: close all four legs at the first step where the open loss reaches X% of capital used (closing costs: spread against you + fees) ----
         const sls = slv.map(X => {
@@ -3574,58 +3146,12 @@ $("dbgo").onclick = async () => {
           return {t, spot: sp, fin: pv, mark: hit[1]};
         });
         // ---- loss-day review rules: other exits / adjustments measured on the same trade ----
-        const rv = {mixA: fin, itmA: fin, edge: fin, edgeFast: fin, all: fin, side: fin, roll: fin, half: fin, out: null, outFin: fin, cov1: fin, cov2: fin, itm1: fin, itm2: fin, fast: fin, an: null, trig: null};
+        const rv = {edge: fin, edgeFast: fin, an: null};
         {
           const frac2 = Math.min(0.95, Math.max(0.1, (Number($("rcfrac").value) || 50) / 100));
           const cT2 = best.callLong.strike + (best.callShort.strike - best.callLong.strike) * frac2, pT2 = best.putLong.strike - (best.putLong.strike - best.putShort.strike) * frac2; rv.cT = cT2; rv.pT = pT2;
           const spotAt = t => { const cb = byT.get(Math.floor((t - 300) / 300) * 300); return cb ? cb.close : null; };
           const closeV = (legs, t, sp) => { let v = 0; for (const l of legs){ const m = mk(l.c, l.K, t, false); if (m === null) return null; const px = l.side === -1 ? m * (1 + spr) : m * (1 - spr); v += l.side * (px - l.e) * l.n * lot - feeOpt(l.n, px, sp, lot); } return v; };
-          const settleV = legs => { let v = 0; legs.forEach(l => { const intr = l.c ? Math.max(E.settle - l.K, 0) : Math.max(l.K - E.settle, 0); v += l.side * (intr - l.e) * l.n * lot; if (intr > 0) v -= settleFee(l.n * lot, intr, E.settle); }); return v; };
-          // worst open profit/loss of the whole run when one extra option leg is added at time tAct (sign -1 = sold, +1 = bought)
-          const worstAfter = (tAct, legCall, K, sign, e, q, feeX) => { let w = Infinity; for (const [t, v] of path){ if (t <= tAct){ if (v < w) w = v; } else { const mh = mk(legCall, K, t, false); if (mh === null) continue; const x = v + sign * (mh - e) * q * lot - feeX; if (x < w) w = x; } } return w; };
-          // cover: buy back the net-short lots of the threatened side as options X% beyond the sold strike, then hold to expiry
-          const sprH = (() => { const v = $("lrhspr") ? $("lrhspr").value : ""; return v === "" || isNaN(Number(v)) ? spr : Math.max(0, Number(v)) / 100; })();
-          const coverAt = (t, isCall, scale, offOv) => {
-            const sh = L.find(l => l.c === isCall && l.side === -1), lg = L.find(l => l.c === isCall && l.side === 1); if (!sh || !lg) return null;
-            const q = (sh.n - lg.n) * (scale === undefined ? 1 : scale); if (q <= 0) return null; const off = (offOv !== undefined ? offOv : (Number($("lrcov").value) || 0)) / 100, tgt = isCall ? sh.K * (1 + off) : sh.K * (1 - off); let bc = null;
-            syms.forEach(x => { if (x.c !== isCall) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (isCall ? x.K < sh.K : x.K > sh.K) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
-            if (!bc) return null; const e = bc.m * (1 + sprH), sp = spotAt(t), intr = isCall ? Math.max(E.settle - bc.K, 0) : Math.max(bc.K - E.settle, 0);
-            return {K: bc.K, fin: fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), leg: {c: isCall, K: bc.K, s: 1, e, q, fee: feeOpt(q, e, sp, lot)}, worst: (() => { const fv = fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0); return Math.min(fv, worstAfter(t, isCall, bc.K, 1, e, q, feeOpt(q, e, sp, lot))); })(), desc: `${isCall ? "calls" : "puts"} ×${f(q, 0)} at ${bc.K}, paid $${f(q * lot * e, 0)}`};
-          };
-          // sell in the money: against the net-short lots of the threatened side, sell options of the OTHER type that are already in the money (puts when BTC ran up, calls when it fell) and hold to expiry
-          const mvH = t => { const a = spotAt(t - 3600), b = spotAt(t); return a && b ? Math.abs(b - a) / a * 100 : null; };
-          const volR = tt => { let s3 = 0, n3 = 0, s24 = 0, n24 = 0; for (let k = 1; k <= 3; k++){ const c = byT.get(tt - 300 * k); if (c && c.volume !== undefined){ s3 += c.volume; n3++; } } for (let k = 1; k <= 288; k++){ const c = byT.get(tt - 300 * k - 300); if (c && c.volume !== undefined){ s24 += c.volume; n24++; } } return n3 === 3 && n24 > 200 && s24 > 0 ? (s3 / 3) / (s24 / n24) : null; };
-          const sellItmAt = (t, threatCall, offPct, scale) => {
-            const sh = L.find(l => l.c === threatCall && l.side === -1), lg = L.find(l => l.c === threatCall && l.side === 1); if (!sh || !lg) return null;
-            const q = (sh.n - lg.n) * (scale === undefined ? 1 : scale); if (q <= 0) return null; const sp = spotAt(t); if (sp === null) return null;
-            const off = (offPct !== undefined ? offPct : (Number($("lritm").value) || 0)) / 100, selPut = threatCall, tgt = selPut ? sp * (1 + off) : sp * (1 - off); let bc = null;
-            syms.forEach(x => { if (x.c === selPut) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (selPut ? x.K < sp : x.K > sp) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
-            if (!bc) return null; const e = bc.m * (1 - sprH), intr = selPut ? Math.max(bc.K - E.settle, 0) : Math.max(E.settle - bc.K, 0);
-            return {K: bc.K, fin: fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), leg: {c: !selPut, K: bc.K, s: -1, e, q, fee: feeOpt(q, e, sp, lot)}, worst: (() => { const fv = fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0); return Math.min(fv, worstAfter(t, !selPut, bc.K, -1, e, q, feeOpt(q, e, sp, lot))); })(), desc: `${selPut ? "puts" : "calls"} ×${f(q, 0)} sold at ${bc.K}, received $${f(q * lot * e, 0)}`};
-          };
-          // cover part of the net-short lots and sell in-the-money options against the rest (both at the same moment)
-          const mixAt = (t, up, fc, fi, oc, oi) => {
-            const c = fc > 0 ? coverAt(t, up, fc, oc) : null, i = fi > 0 ? sellItmAt(t, up, oi, fi) : null; if (!c && !i) return null;
-            const legs = [c && c.leg, i && i.leg].filter(Boolean), fv = fin + (c ? c.fin - fin : 0) + (i ? i.fin - fin : 0); let w = fv;
-            for (const [tt, v] of path){ if (tt <= t){ if (v < w) w = v; continue; } let x = v, ok2 = true; for (const g of legs){ const mh = mk(g.c, g.K, tt, false); if (mh === null){ ok2 = false; break; } x += g.s * (mh - g.e) * g.q * lot; } if (ok2){ x -= legs.reduce((a, g) => a + g.fee, 0); if (x < w) w = x; } }
-            return {fin: fv, worst: w, legs, xm: legs.filter(g => g.s === -1).reduce((a, g) => a + g.q * lot * g.K / lev, 0)};
-          };
-          // hard exit: first moment the open loss of (original position + extra legs) reaches X% of the base; closes everything at spread + fees
-          rv.hsweep = legs => {
-            const lv = Number($("lrhard").value) || 0, Xs = [...new Set([20, 30, 50, 75, 100, lv].filter(x => x > 0))].sort((a, b) => a - b), out = {}, tAct = legs.tAct === undefined ? -1 : legs.tAct;
-            const base = $("lrhardb").value === "funds" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : margin;
-            for (const [t, v] of path){
-              let val = v; const ex = t > tAct ? legs : []; let bad = false;
-              for (const g of ex){ const mh = mk(g.c, g.K, t, false); if (mh === null){ bad = true; break; } val += g.s * (mh - g.e) * g.q * lot - g.fee; }
-              if (bad) continue;
-              for (const X of Xs){ if (out[X]) continue; if (val <= -X / 100 * base){
-                const sp = spotAt(t), c0 = closeV(L, t, sp); let real = c0 === null ? val : -fees + c0;
-                if (c0 !== null) for (const g of ex){ const mh = mk(g.c, g.K, t, false); const px = g.s === -1 ? mh * (1 + spr) : mh * (1 - spr); real += g.s * (px - g.e) * g.q * lot - g.fee - feeOpt(g.q, px, sp, lot); }
-                out[X] = {t, real}; } }
-              if (Xs.every(X => out[X])) break;
-            }
-            return out;
-          };
           let tE = null, tM = null, sideM = null;
           for (const q of path){
             const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue;
@@ -3645,128 +3171,12 @@ $("dbgo").onclick = async () => {
             const tMa = (() => { let a = null; for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; if (sp >= cT2 || sp <= pT2){ a = t; break; } } return a; })();
             if (tMa !== null){ rv.an.hM = (E.tx - tMa) / 3600; rv.an.spdM = mv1h(tMa); rv.an.volM = volAt(tMa); }
             if (tE !== null){ rv.an.hE = (E.tx - tE) / 3600; rv.an.pE = pAt(tE); rv.an.spdE = mv1h(tE); rv.an.volE = volAt(tE); { const a15 = spotAt(tE - 900), b15 = spotAt(tE); rv.an.spdE15 = a15 && b15 ? Math.abs(b15 - a15) / a15 * 100 : null; } }
-            const thr = Number($("lrspd").value) || 0;
-            rv.fast = tMa !== null && rv.an.spdM !== null && rv.an.spdM >= thr ? "PENDING" : fin;
           }
           if (tE !== null){ const c = closeV(L, tE, spotAt(tE)); if (c !== null) rv.edge = -fees + c; }
           rv.fastE = rv.edge !== fin && rv.an.spdE !== null && rv.an.spdE !== undefined && rv.an.spdE >= (Number($("lrspe").value) || 0) && !((Number($("lrvol").value) || 0) > 0 && !(rv.an.volE >= Number($("lrvol").value))); rv.edgeFast = rv.fastE ? rv.edge : fin;
-          if (tM !== null){
-            const sp = spotAt(tM), c = closeV(L, tM, sp);
-            if (c !== null){
-              rv.trig = {t: tM, spot: sp, side: sideM}; rv.all = -fees + c; { const cv = coverAt(tM, sideM === "C"); if (cv){ rv.w2c = cv.worst; rv.cov2 = cv.fin; rv.cov2d = cv.desc; rv.cov2K = cv.K; } const sv = sellItmAt(tM, sideM === "C"); if (sv){ rv.w2i = sv.worst; rv.itm2 = sv.fin; rv.itm2d = sv.desc; rv.itm2K = sv.K; } }
-              const nearL = L.filter(l => l.c === (sideM === "C")), farL = L.filter(l => l.c !== (sideM === "C")), cn = closeV(nearL, tM, sp);
-              if (cn !== null) rv.side = -fees + cn + settleV(farL);
-              rv.roll = rv.all; rv.half = rv.side;
-              {   // close the side BTC is moving away from (the profitable one) and re-sell it at half the original width, nearer the new price
-                const farCall = sideM === "P", dirF = farCall ? 1 : -1, cf = closeV(farL, tM, sp);
-                const fS = farL.filter(l => l.side === -1), fB = farL.filter(l => l.side === 1);
-                const av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tM, true)})).filter(x => x.m > 0);
-                if (cf !== null && fS.length && fB.length && av.length > 2){
-                  const gap0 = Math.abs(fS[0].K - fB[0].K), nS = fS[0].n, nB = fB[0].n, nr = t => av.reduce((b, x) => !b || Math.abs(x.K - t) < Math.abs(b.K - t) ? x : b, null);
-                  const iv = (c, K, S) => c ? Math.max(S - K, 0) : Math.max(K - S, 0); let bestH = null;
-                  [0, 0.0025, 0.005, 0.01].forEach(a => {
-                    const Kb = nr(sp * (1 + dirF * a)); if (!Kb) return; const Ks = nr(Kb.K + dirF * gap0 / 2);
-                    if (!Ks || (farCall ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
-                    const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(nS, pS, sp, lot) + feeOpt(nB, pB, sp, lot);
-                    const nw = [{c: farCall, K: Ks.K, side: -1, n: nS, e: pS}, {c: farCall, K: Kb.K, side: 1, n: nB, e: pB}], all2 = nearL.concat(nw);
-                    const Pc = -fees + cf - fee2 + all2.reduce((t, l) => t + l.side * (iv(l.c, l.K, sp) - l.e) * l.n * lot, 0);
-                    if (!bestH || Pc > bestH.Pc) bestH = {Pc, all2, fee2};
-                  });
-                  if (bestH) rv.half = -fees + cf - bestH.fee2 + settleV(bestH.all2);
-                }
-              }
-              const cs = [], ps = [];
-              syms.forEach(x => { const m = mk(x.c, x.K, tM, true); if (!(m > 0)) return; (x.c ? cs : ps).push({strike: x.K, bid: m * (1 - spr), ask: m * (1 + spr), mark: m, delta: null, spot: sp, symbol: x.sym}); });
-              if (cs.length > 2 && ps.length > 2){
-                const b2 = batmanSearch({calls: cs, puts: ps}, sp, {sold, bought, lot, lev, minPct, balanced: $("ibal").checked, equi: $("ieq").checked ? {tol: step} : undefined})[0];
-                if (b2){
-                  const L2 = [{c: true, K: b2.callShort.strike, side: -1, n: sold, e: b2.callShort.bid}, {c: true, K: b2.callLong.strike, side: 1, n: bought, e: b2.callLong.ask}, {c: false, K: b2.putShort.strike, side: -1, n: sold, e: b2.putShort.bid}, {c: false, K: b2.putLong.strike, side: 1, n: bought, e: b2.putLong.ask}];
-                  rv.roll = rv.all - L2.reduce((t, l) => t + feeOpt(l.n, l.e, sp, lot), 0) + settleV(L2);
-                }
-              }
-            }
-          }
-          // combination grid: trigger distance x crash gate x cover/sale sizes x strike offsets, all on this trade
-          rv.grid = null;
-          if ($("lrgrid") && $("lrgrid").checked){
-            rv.grid = {}; const cache = new Map();
-            [0.2, 0.5].forEach(tg => [0, 1.5, 2].forEach(gt => {
-              let tG = null, upG = null;
-              for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; const u = sp > best.hi * (1 + tg / 100), d2 = sp < best.lo * (1 - tg / 100); if (!u && !d2) continue; if (gt > 0){ const m = mvH(t); if (m === null || m < gt) continue; } tG = t; upG = u; break; }
-              if (tG === null) return;
-              [[0.5, 0], [1, 0], [0, 0.5], [0, 1], [0.5, 0.5], [0.5, 1], [1, 0.5], [1, 1]].forEach(([fc, fi]) => [0.5, 1].forEach(oc => [0.5, 1].forEach(oi => {
-                if ((!fc && oc !== 0.5) || (!fi && oi !== 0.5)) return;
-                const ck = [tG, upG, fc, fi, oc, oi].join("|"); let m = cache.get(ck); if (m === undefined){ m = mixAt(tG, upG, fc, fi, oc, oi); cache.set(ck, m || null); }
-                if (m) rv.grid[[tg, gt, fc, fi, oc, oi].join("|")] = {fin: m.fin, worst: m.worst, xm: m.xm};
-              })));
-            }));
-          }
-          // staged hedge: add the cover / in-the-money sale in tranches (distance schedule: next tranche each X% further out; time schedule: a tranche every T minutes while still out of range)
-          rv.stage = null;
-          if ($("lrgrid") && $("lrgrid").checked){
-            rv.stage = {}; const pt = path.map(q => q[0]), tEnd = E.tx - rs;
-            const distAt = (t, up) => { const sp = spotAt(t); if (sp === null) return null; return up ? (sp - best.hi) / best.hi * 100 : (best.lo - sp) / best.lo * 100; };
-            let t0 = null, up0 = null;
-            for (const q of path){ const t = q[0]; if (t >= tEnd) break; const sp = spotAt(t); if (sp === null) continue; if (sp > best.hi * 1.002){ t0 = t; up0 = true; break; } if (sp < best.lo * 0.998){ t0 = t; up0 = false; break; } }
-            if (t0 !== null){
-              const sched = {};
-              [0.1, 0.25, 0.5].forEach(stp => [5, 10].forEach(N => { const ts = []; let k = 0; for (const q of path){ if (k >= N) break; const t = q[0]; if (t < t0) continue; if (t >= tEnd) break; const d = distAt(t, up0); while (d !== null && k < N && d >= 0.2 + k * stp){ ts.push(t); k++; } } sched["d|" + stp + "|" + N] = {ts, N}; }));
-              [30, 60].forEach(Tm => [5, 10].forEach(N => { const ts = []; for (let k = 0; k < N; k++){ const target = t0 + k * Tm * 60, i = pt.findIndex(x => x >= target); if (i < 0) break; const t = pt[i]; if (t >= tEnd) break; const d = distAt(t, up0); if (d !== null && d > 0) ts.push(t); } sched["t|" + Tm + "|" + N] = {ts, N}; }));
-              Object.entries(sched).forEach(([sk, o]) => [[1, 0], [0, 1], [1, 1]].forEach(([fc, fi]) => {
-                const ts = o.ts, N = o.N; if (!ts.length) return; const legs = []; let fv = fin;
-                ts.forEach(tt => { const c = fc > 0 ? coverAt(tt, up0, fc / N, 0.5) : null, i2 = fi > 0 ? sellItmAt(tt, up0, 0.5, fi / N) : null; if (c){ legs.push(Object.assign({tA: tt}, c.leg)); fv += c.fin - fin; } if (i2){ legs.push(Object.assign({tA: tt}, i2.leg)); fv += i2.fin - fin; } });
-                if (!legs.length) return;
-                let w = fv; for (const [t, v] of path){ let x = v, ok2 = true; for (const g of legs){ if (g.tA >= t) continue; const mh = mk(g.c, g.K, t, false); if (mh === null){ ok2 = false; break; } x += g.s * (mh - g.e) * g.q * lot - g.fee; } if (ok2 && x < w) w = x; }
-                rv.stage[sk + "|" + fc + "|" + fi] = {fin: fv, worst: w, n: ts.length, N};
-              }));
-            }
-          }
-          // out of range: when BTC is X% beyond the profit range, close the side it is moving away from and rebuild that side so the new profit range is Y% (loss direction) / Z% (opposite) around the new price
-          {
-            const trig = (Number($("lrtrig").value) || 0) / 100, dL = (Number($("lrdir").value) || 1) / 100, dO = (Number($("lropp").value) || 2) / 100;
-            const iv = (c, K, S) => c ? Math.max(S - K, 0) : Math.max(K - S, 0);
-            let tO = null, up = null;
-            for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; if (sp > best.hi * (1 + trig)){ tO = t; up = true; break; } if (sp < best.lo * (1 - trig)){ tO = t; up = false; break; } }
-            if (tO !== null){
-              const sp = spotAt(tO), farCall = !up, dirF = farCall ? 1 : -1, farL = L.filter(l => l.c === farCall), nearL = L.filter(l => l.c !== farCall), cf = closeV(farL, tO, sp);
-              const fS = farL.find(l => l.side === -1), av = syms.filter(x => x.c === farCall).map(x => ({K: x.K, m: mk(x.c, x.K, tO, true)})).filter(x => x.m > 0);
-              rv.out = {t: tO, spot: sp, up}; rv.outFin = fin; { const cv = coverAt(tO, up); if (cv){ rv.w1c = cv.worst; rv.legC = cv.leg; rv.cov1 = cv.fin; rv.cov1d = cv.desc; rv.cov1K = cv.K; } const sv = sellItmAt(tO, up); if (sv){ rv.w1i = sv.worst; rv.legI = sv.leg; rv.itm1 = sv.fin; rv.itm1d = sv.desc; rv.itm1K = sv.K; }
-                rv.itmS = {}; [0.5, 1, 1.5, 2, 3].forEach(D => { const q2 = sellItmAt(tO, up, D); if (q2) rv.itmS[D] = {fin: q2.fin, worst: q2.worst, K: q2.K}; });
-                { const spO = mvH(tO), vO = volR(tO), tS = Number($("lritmspd").value) || 0, tV = Number($("lritmvol").value) || 0, dp = Number($("lritm2").value) || 0;
-                  rv.out.spd = spO; rv.out.vol = vO; const deep = dp > 0 && (tS <= 0 || (spO !== null && spO >= tS)) && (tV <= 0 || (vO !== null && vO >= tV)) && (tS > 0 || tV > 0);
-                  rv.out.deep = deep; const qa = sellItmAt(tO, up, deep ? dp : undefined); if (qa){ rv.itmA = qa.fin; rv.w1a = qa.worst; rv.itmAd = qa.desc; } }
-                rv.mixS = {}; [0, 25, 50, 75, 100].forEach(pc => { const m = mixAt(tO, up, pc / 100, (100 - pc) / 100); if (m) rv.mixS[pc] = m; });
-                { const mb = mixAt(tO, up, 1, 1); if (mb) rv.mixS.both = mb; const mm = Math.min(100, Math.max(0, Number($("lrmix").value) || 0)), ma = mixAt(tO, up, mm / 100, (100 - mm) / 100); if (ma){ rv.mixA = ma.fin; rv.w1m = ma.worst; rv.legM = ma.legs; } } }        // if no acceptable rebuild exists the position is simply held
-              if (cf !== null && fS && av.length > 2){
-                const tLo = sp * (1 - (up ? dO : dL)), tHi = sp * (1 + (up ? dL : dO)), nr = tg => av.reduce((b, x) => !b || Math.abs(x.K - tg) < Math.abs(b.K - tg) ? x : b, null); let bestO = null;
-                [0, 0.0025, 0.005, 0.01, 0.015].forEach(a => [0.01, 0.015, 0.02, 0.03, 0.04].forEach(g => [1, 0.75, 0.5, 0.35].forEach(k => [0.2, 0.3, 0.4, 0.5, 0.7].forEach(rt => {
-                  const Kb = nr(sp * (1 + dirF * a)), Ks = nr(sp * (1 + dirF * (a + g))); if (!Kb || !Ks || (farCall ? Ks.K <= Kb.K : Ks.K >= Kb.K)) return;
-                  const sl = Math.max(1, Math.round(fS.n * k)), bl = Math.max(1, Math.round(sl * rt)); if (bl >= sl) return;
-                  const pS = Ks.m * (1 - spr), pB = Kb.m * (1 + spr), fee2 = feeOpt(sl, pS, sp, lot) + feeOpt(bl, pB, sp, lot);
-                  const nw = [{c: farCall, K: Ks.K, side: -1, n: sl, e: pS}, {c: farCall, K: Kb.K, side: 1, n: bl, e: pB}], all2 = nearL.concat(nw);
-                  const P = S => -fees + cf - fee2 + all2.reduce((t, l) => t + l.side * (iv(l.c, l.K, S) - l.e) * l.n * lot, 0);
-                  const worst = Math.min(P(sp), P(tLo), P(tHi));
-                  if (!bestO || worst > bestO.worst) bestO = {worst, P, tLo, tHi, all2, fee2, desc: `${farCall ? "calls" : "puts"}: buy ${Kb.K} ×${bl}, sell ${Ks.K} ×${sl}`};
-                }))));
-                if (bestO){
-                  rv.outFin = -fees + cf - bestO.fee2 + settleV(bestO.all2); rv.outDesc = bestO.desc;
-                  let pmin = Infinity, pmax = -Infinity; for (let i = 0; i <= 40; i++){ const v = bestO.P(bestO.tLo + (bestO.tHi - bestO.tLo) * i / 40); if (v < pmin) pmin = v; if (v > pmax) pmax = v; }
-                  let mn = Infinity, mx = -Infinity, brT = null, brS = null;
-                  for (const q of path){ const t = q[0]; if (t <= tO) continue; if (t >= E.tx - rs) break; const s2 = spotAt(t); if (s2 === null) continue; if (s2 < mn) mn = s2; if (s2 > mx) mx = s2; if (brT === null && (s2 < bestO.tLo || s2 > bestO.tHi)){ brT = t; brS = s2; } }
-                  if (E.settle < mn) mn = E.settle; if (E.settle > mx) mx = E.settle;
-                  const inside = brT === null && E.settle >= bestO.tLo && E.settle <= bestO.tHi;
-                  rv.outP = {pc: bestO.P(sp), pmin, pmax, tLo: bestO.tLo, tHi: bestO.tHi, mn, mx, brT, brS, inside};
-                }
-              }
-            }
-          }
         }
-        if (rv.fast === "PENDING") rv.fast = rv.all;
-        rv.combo = rv.fastE ? rv.edge : rv.itm1;
-        if (rv.hsweep){ const hold = rv.hsweep([]), mk2 = (legsArr, tt) => { const a = legsArr.slice(); a.tAct = tt; return rv.hsweep(a); }, tO2 = rv.out ? rv.out.t : -1;
-          rv.hs = {hold, itm1: rv.legI ? mk2([rv.legI], tO2) : hold, cov1: rv.legC ? mk2([rv.legC], tO2) : hold, mixA: rv.legM ? mk2(rv.legM, tO2) : hold}; }
         { const wH = Math.min(minV, fin), wClose = (tt, val) => { if (tt === null || tt === undefined || val === fin) return wH; let w = Infinity; for (const [t, v] of path){ if (t <= tt && v < w) w = v; } return Math.min(w, val); };
-          rv.w = {hold: wH, edge: wClose(rv.edgeT, rv.edge), itm1: rv.w1i !== undefined ? rv.w1i : wH, itm2: rv.w2i !== undefined ? rv.w2i : wH, itmA: rv.w1a !== undefined ? rv.w1a : wH, mixA: rv.w1m !== undefined ? rv.w1m : wH, cov1: rv.w1c !== undefined ? rv.w1c : wH, cov2: rv.w2c !== undefined ? rv.w2c : wH};
+          rv.w = {hold: wH, edge: wClose(rv.edgeT, rv.edge), edge_fast: rv.fastE ? wClose(rv.edgeT, rv.edge) : wH};
           rv.w.combo = rv.fastE ? rv.w.edge : rv.w.itm1; }
         let ch = null;
         if (fin < 0 || RP){ const pts = []; for (let t = r.t0; t <= E.tx; t += 300){ const cb = byT.get(t); if (cb) pts.push([t, cb.close]); } const st = Math.max(1, Math.round(300 / rs)); ch = {pts, pn: path.filter((q, i) => i % st === 0)}; }
@@ -3775,7 +3185,7 @@ $("dbgo").onclick = async () => {
         results.push(row);
       });
     }
-    window.dbLast = results; window.dbCfg = {days, spr: spr * 100, minPct, sold, bought, lev, lot, step: resName, adj: $("dbadj").checked, stop_loss_pct: slv.join("/"), stop_loss_of: $("dbsb").value, frac: Number($("rcfrac").value) || 50, amin: $("dbamin").value, apct: $("dbapct").value, rank: $("dbrank").value, cush: $("rccush").value, maxLoss: $("rcloss").value || $("imaxd").value, maxCost: $("rccost").value}; $("dbcsv").disabled = false; dbCacheInfo();
+    window.dbLast = results; window.dbCfg = {days, spr: spr * 100, minPct, sold, bought, lev, lot, step: resName, stop_loss_pct: slv.join("/"), stop_loss_of: $("dbsb").value, frac: Number($("rcfrac").value) || 50, amin: $("dbamin").value, apct: $("dbapct").value, rank: $("dbrank").value, cush: $("rccush").value, maxLoss: $("rcloss").value || $("imaxd").value, maxCost: $("rccost").value}; $("dbcsv").disabled = false; dbCacheInfo();
     const usd = v => (v < 0 ? "-$" : "$") + f(Math.abs(v), 0), tz = t => new Date(t * 1000).toLocaleString("en-GB", {timeZone: "Europe/Berlin", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
     let h = `<p class="note">${f(sold, 0)} sold / ${f(bought, 0)} bought lots per leg, leverage ${f(lev, 0)}x, minimum profit ${f(minPct, 1)}% of margin, assumed half-spread ${f(spr * 100, 1)}%, fees included (entry fees and settlement fees). Times in CET. Capital used = estimated margin of the sold lots.</p>`;
     const cases = window.dbCases = RP ? (window.dbCases || {}) : {}; let caseN = 0;
@@ -3784,27 +3194,13 @@ $("dbgo").onclick = async () => {
       out.innerHTML = h + renderReplay(results, cidR); window.dbLast = prevLast; window.dbCfg = prevCfg; prog.className = "note"; prog.textContent = `Replay done: ${results.filter(r => !r.none).length} of ${results.length} start times had a setup.`; try { out.scrollIntoView({behavior: "smooth", block: "start"}); } catch (e) {} return;
     }
     slots.forEach(sl => {
-      const R = results.filter(r => r.sl === sl), ok = R.filter(r => !r.none), name = sl === "A" ? "15:00 CET, the day before expiry" : "06:00 CET, expiry day";
+      const R = results.filter(r => r.sl === sl), ok = R.filter(r => !r.none), name = sl === "A" ? "15:00 CET, the day before expiry" : /^H\d+$/.test(sl) ? sl.slice(1) + " hours before expiry" : "06:00 CET, expiry day";
       h += `<p style="margin:14px 0 4px"><b>Entry ${name}</b></p>`;
       if (!ok.length){ h += `<p class="note l">No day had a combination meeting your minimum profit (or prices were missing).</p>`; return; }
       const wins = ok.filter(r => r.fin > 0), tot = ok.reduce((t, r) => t + r.fin, 0), h0 = ok.filter(r => r.b0 !== null), h1 = ok.filter(r => r.b1 !== null), h2 = ok.filter(r => r.b2 !== null);
       const rec = a => a.filter(r => r.fin > 0).length;
       h += `<div class="kpi" style="margin:6px 0"><div>Days with a setup<b>${ok.length}/${R.length}</b></div><div>Finished in profit<b class="${wins.length >= ok.length / 2 ? "g" : "l"}">${wins.length} (${f(wins.length / ok.length * 100, 0)}%)</b></div><div>Total P&amp;L<b class="${sg(tot)}">${usd(tot)}</b></div><div>Average per day<b class="${sg(tot)}">${usd(tot / ok.length)}</b></div><div>Best / worst day<b>${usd(Math.max(...ok.map(r => r.fin)))} / <span class="l">${usd(Math.min(...ok.map(r => r.fin)))}</span></b></div>` +
         `</div>`;
-      if ($("dbadj").checked){
-        const A2 = ok.map(r => r.adj && r.adj.fin !== undefined ? r.adj : null), fa = ok.map((r, i) => A2[i] ? A2[i].fin : r.fin), nAdj = A2.filter(Boolean).length, trig = ok.filter(r => r.adj).length;
-        const totA = fa.reduce((t, v) => t + v, 0), winsA = fa.filter(v => v > 0).length, impr = ok.filter((r, i) => A2[i] && A2[i].fin > r.fin + 0.5).length, worse = ok.filter((r, i) => A2[i] && A2[i].fin < r.fin - 0.5).length;
-        const cnt = k => ok.filter((r, i) => (A2[i] ? A2[i][k] : r[k]) !== null).length;
-        const lossDays = ok.filter(r => r.fin < 0), lossB = lossDays.reduce((t, r) => t + r.fin, 0), lossA = lossDays.reduce((t, r) => t + (r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin), 0);
-        h += `<p style="margin:10px 0 4px"><b>Same days with the re-center adjustment</b> <span class="note">(one adjustment per day, at the first ${resName} step BTC reaches the trigger; ${trig} days triggered, ${nAdj} could be adjusted within your thresholds)</span></p>` + (() => {
-          const th = (ok.find(r => r.adj && r.adj.th) || {adj: {}}).adj.th, rj = {cost: 0, profit: 0, loss: 0, cushion: 0, tried: 0};
-          ok.forEach(r => { if (r.adj && r.adj.rej) Object.keys(rj).forEach(k => rj[k] += r.adj.rej[k]); });
-          if (!th) return "";
-          return `<p class="note">Thresholds used: profit at the new centre at least ${usd(th.minProfit)}${$("dbamin").value !== "" ? " (your dollar box)" : $("dbapct").value !== "" ? " (a loss of up to " + f(Number($("dbapct").value), 1) + "% of capital used is accepted)" : " (from the Re-center card)"}; worst loss ${th.maxLoss ? "no more than " + usd(th.maxLoss) : "uncapped"}; cushion at least ${f(th.cush, 1)}% each side (only counted when the result at the centre is a profit); net cost ${th.maxCost === null ? "unlimited" : "up to " + usd(th.maxCost)}; trigger at ${f(Number($("rcfrac").value) || 50, 0)}% of the shoulder; ranked by ${th.byAt ? "best result at the new centre" : "widest profit range"}. Of ${f(rj.tried, 0)} combinations tried on triggered days, those failing on: profit at the centre ${f(rj.profit, 0)}, worst-loss cap ${f(rj.loss, 0)}, cushion ${f(rj.cushion, 0)}, cost ${f(rj.cost, 0)} (each combination is counted at its first failing check, in that order of checks: cost, profit, loss, cushion).</p>`;
-        })() +
-          `<div class="kpi" style="margin:6px 0"><div>Finished in profit<b class="${winsA >= ok.length / 2 ? "g" : "l"}">${winsA} (${f(winsA / ok.length * 100, 0)}%)</b><span class="note">before ${wins.length}</span></div><div>Total P&amp;L<b class="${sg(totA)}">${usd(totA)}</b><span class="note">before ${usd(tot)}</span></div><div>Better / worse days<b>${impr} / ${worse}</b></div><div>Loss days only: total<b class="${sg(lossA)}">${usd(lossA)}</b><span class="note">before ${usd(lossB)} on ${lossDays.length} days</span></div><div>Worst day<b class="l">${usd(Math.min(...fa))}</b><span class="note">before ${usd(Math.min(...ok.map(r => r.fin)))}</span></div>` +
-        `</div>`;
-      }
       if (slv.length){
         const fin = slv.map((X, k) => ok.map(r => r.sls[k] ? r.sls[k].fin : r.fin)), tots = fin.map(a => a.reduce((t, v) => t + v, 0)), cnt = slv.map((X, k) => ok.filter(r => r.sls[k]).length);
         const col = (head, vals, tot, n, extra) => `<td><b>${head}</b></td><td class="${sg(tot)}"><b>${usd(tot)}</b></td><td>${usd(tot / n)}</td><td>${vals.filter(v => v > 0).length} (${f(vals.filter(v => v > 0).length / n * 100, 0)}%)</td><td class="l">${usd(Math.min(...vals))}</td>${extra}`;
@@ -3813,19 +3209,12 @@ $("dbgo").onclick = async () => {
           `<div class="wrap"><table><thead><tr><th style="text-align:left">Exit rule</th><th>Total P&amp;L</th><th>Average per day</th><th>Finished in profit</th><th>Worst day</th><th>Days stopped out</th><th>Better / worse than actual</th></tr></thead><tbody>` +
           `<tr>${col("Actual (hold to expiry)", act, tot, ok.length, "<td>–</td><td>–</td>").replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>` +
           slv.map((X, k) => `<tr>${col("Exit at " + X + "% SL" + (capBase ? " (" + usd(-X / 100 * capBase) + ")" : ""), fin[k], tots[k], ok.length, `<td>${cnt[k]} of ${ok.length}</td><td>${ok.filter((r, i) => fin[k][i] > r.fin + 0.5).length} / ${ok.filter((r, i) => fin[k][i] < r.fin - 0.5).length}</td>`).replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>`).join("") +
-          ($("dbadj").checked ? (() => {
-            const aHold = ok.map(r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin), nAd = ok.filter(r => r.adj && r.adj.fin !== undefined).length, aTot = aHold.reduce((t, v) => t + v, 0);
-            const aSl = slv.map((X, k) => ok.map(r => r.adj && r.adj.sls ? (r.adj.sls[k] ? r.adj.sls[k].fin : r.adj.fin) : (r.sls[k] ? r.sls[k].fin : r.fin)));
-            return `<tr>${col("Re-center, hold to expiry", aHold, aTot, ok.length, `<td>${nAd} re-centred</td><td>${ok.filter((r, i) => aHold[i] > r.fin + 0.5).length} / ${ok.filter((r, i) => aHold[i] < r.fin - 0.5).length}</td>`).replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>` +
-              slv.map((X, k) => { const t2 = aSl[k].reduce((t, v) => t + v, 0); return `<tr>${col("Re-center + " + X + "% SL" + (capBase ? " (" + usd(-X / 100 * capBase) + ")" : ""), aSl[k], t2, ok.length, `<td>${ok.filter(r => (r.adj && r.adj.sls ? r.adj.sls[k] : r.sls[k])).length} of ${ok.length}</td><td>${ok.filter((r, i) => aSl[k][i] > r.fin + 0.5).length} / ${ok.filter((r, i) => aSl[k][i] < r.fin - 0.5).length}</td>`).replace("<td><b>", "<td style=\"text-align:left\"><b>")}</tr>`; }).join("");
-          })() : "") + `</tbody></table></div>`;
+          "" + `</tbody></table></div>`;
       }
       {
         const capB = $("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? Number($("ifunds").value) : 0, RL = [["Actual (hold to expiry)", r => r.fin, "hold"]];
-        slv.forEach((X, k) => RL.push(["Exit at " + X + "% SL" + (capB ? " (" + usd(-X / 100 * capB) + ")" : ""), r => r.sls[k] ? r.sls[k].fin : r.fin, "sl" + k]));
-        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["Range exit: close all, only if BTC moved fast in the last hour (and, if set, on heavy volume)", r => r.rv.edgeFast, "edge_fast"], ["Combined: fast range exit closes all, otherwise sell in-the-money options when out of range", r => r.rv.combo, "combo"], ["At mid-shoulder: close all", r => r.rv.all, "mid_all"], ["At mid-shoulder: close all, only if BTC moved fast in the last hour (setting above)", r => r.rv.fast, "mid_fast"], ["At mid-shoulder: close only the threatened side", r => r.rv.side, "mid_side"], ["At mid-shoulder: close all, reopen centred", r => r.rv.roll, "mid_roll"], ["At mid-shoulder: close the profit side, re-sell it at half the width", r => r.rv.half, "mid_half"], ["Out of range: close the profit side, rebuild it centred (range set in the boxes above)", r => r.rv.outFin, "out"], ["Out of range: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov1, "cov1"], ["Mid-shoulder: buy back the net-short lots beyond the sold strike (cover)", r => r.rv.cov2, "cov2"], ["Out of range: sell in-the-money options of the other type against the net-short lots (puts if BTC ran up)", r => r.rv.itm1, "itm1"], ["Out of range: in-the-money sale, deeper strike when fast / heavy volume (settings above)", r => r.rv.itmA, "itmA"], ["Out of range: cover part of the net-short lots, sell in-the-money options against the rest (setting above)", r => r.rv.mixA, "mixA"], ["Mid-shoulder: sell in-the-money options of the other type against the net-short lots", r => r.rv.itm2, "itm2"]);
-        if ($("dbadj").checked) RL.push(["At mid-shoulder: re-center", r => r.adj && r.adj.fin !== undefined ? r.adj.fin : r.fin, "recenter"]);
-        const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.trig).length;
+        RL.push(["Exit when BTC leaves the profit range", r => r.rv.edge, "edge"], ["Range exit: close all, only if BTC moved fast in the last hour (and, if set, on heavy volume)", r => r.rv.edgeFast, "edge_fast"]);
+        const LD = ok.filter(r => r.fin < 0), trigN = ok.filter(r => r.rv.an && r.rv.an.hM !== null && r.rv.an.hM !== undefined).length;
         h += `<p style="margin:10px 0 4px"><b>Loss-day review</b> <span class="note">(${LD.length} of ${ok.length} days lost money; ${trigN} days reached the ${f(Number($("rcfrac").value) || 50, 0)}% mid-shoulder trigger. Each rule is applied to every day, so you can see if a rescue also hurts the winners: closing costs = spread + fees)</span></p>`;
         if (!LD.length) h += `<p class="note g">No loss days in this entry slot.</p>`;
         else {
@@ -3835,15 +3224,13 @@ $("dbgo").onclick = async () => {
           {   // sweeps: speed cut-off, with and without volume, tuned and tested on different halves, and without the single biggest gain
             const days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl), lost = x => x.fin < 0, an = r => r.rv.an || {};
             const DEF = [
-              {k: "edge", title: "Fast range exit: close all at the first close outside the profit range, only if BTC moved at least X% in the last hour", spd: r => an(r).spdE, vol: r => an(r).volE, res: r => r.rv.edge, other: r => r.fin, otherNote: "Days that do not trigger are held to expiry."},
-              {k: "mid", title: "Fast mid-shoulder exit: close all when BTC is halfway to a profit-range edge, only if it moved at least X% in the last hour", spd: r => an(r).spdM, vol: r => an(r).volM, res: r => r.rv.all, other: r => r.fin, otherNote: "Days that do not trigger are held to expiry."},
-              {k: "combo", title: "Combined: if the range exit is fast (at least X% in the last hour) close all, otherwise sell in-the-money options once BTC is out of range", spd: r => an(r).spdE, vol: r => an(r).volE, res: r => r.rv.edge, other: r => r.rv.itm1, otherNote: "Days that do not trigger the exit use the in-the-money sale instead of holding, so \"winners cut\" counts only the fast exits."}];
+              {k: "edge", title: "Fast range exit: close all at the first close outside the profit range, only if BTC moved at least X% in the last hour", spd: r => an(r).spdE, vol: r => an(r).volE, res: r => r.rv.edge, other: r => r.fin, otherNote: "Days that do not trigger are held to expiry."}];
             const tbl = (D, vv) => {
               const taken = (r, th) => { const sp = D.spd(r); return sp !== null && sp !== undefined && sp >= th && (vv <= 0 || D.vol(r) >= vv); }, val = (r, th) => taken(r, th) ? D.res(r) : D.other(r);
               const left = ok.filter(r => D.spd(r) !== null && D.spd(r) !== undefined), dl = (arr, th) => arr.reduce((t, r) => t + val(r, th) - r.fin, 0), sgn = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`;
-              const rows = [0, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(th => { const ex = left.filter(r => taken(r, th)), ds = ok.map(r => val(r, th) - r.fin), d = ds.reduce((x, y) => x + y, 0), top = Math.max(0, ...ds), a = dl(A, th), b = dl(B, th), tot = ok.reduce((t, r) => t + val(r, th), 0);
-                return `<tr><td>${th === 0 ? "0 (always)" : "≥ " + th + "%"}</td><td>${ex.length}</td><td>${ex.filter(lost).length}</td><td>${ex.filter(r => !lost(r)).length}</td><td class="${sg(d)}"><b>${sgn(d)}</b></td><td class="${sg(d - top)}">${sgn(d - top)}</td><td class="${sg(a)}">${sgn(a)}</td><td class="${sg(b)}">${sgn(b)}</td><td class="${sg(tot)}">${usd(tot)}</td></tr>`; }).join("");
-              return {left, html: `<div class="wrap"><table><thead><tr><th>Speed cut-off</th><th>Exits taken</th><th>of which loss days</th><th>of which winners cut</th><th>Change vs hold, all days</th><th>Same, without its single biggest gain</th><th>Change, days before ${spl}</th><th>Change, days from ${spl}</th><th>All days total</th></tr></thead><tbody>${rows}</tbody></table></div>`};
+              const rows = [0, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3].map(th => { const ex = left.filter(r => taken(r, th)), ds = ok.map(r => val(r, th) - r.fin), d = ds.reduce((x, y) => x + y, 0), top = Math.max(0, ...ds), a = dl(A, th), b = dl(B, th), tot = ok.reduce((t, r) => t + val(r, th), 0), wd = Math.min(...ok.map(r => val(r, th)));
+                return `<tr><td>${th === 0 ? "0 (always)" : "≥ " + th + "%"}</td><td>${ex.length}</td><td>${ex.filter(lost).length}</td><td>${ex.filter(r => !lost(r)).length}</td><td class="${sg(d)}"><b>${sgn(d)}</b></td><td class="${sg(d - top)}">${sgn(d - top)}</td><td class="${sg(a)}">${sgn(a)}</td><td class="${sg(b)}">${sgn(b)}</td><td class="${sg(tot)}">${usd(tot)}</td><td class="l">${usd(wd)}</td></tr>`; }).join("");
+              return {left, html: `<div class="wrap"><table><thead><tr><th>Speed cut-off</th><th>Exits taken</th><th>of which loss days</th><th>of which winners cut</th><th>Change vs hold, all days</th><th>Same, without its single biggest gain</th><th>Change, days before ${spl}</th><th>Change, days from ${spl}</th><th>All days total</th><th>Worst day</th></tr></thead><tbody>${rows}</tbody></table></div>`};
             };
             const vv = Number($("lrvol").value) || 3;
             DEF.forEach(D => {
@@ -3855,7 +3242,7 @@ $("dbgo").onclick = async () => {
             h += `<p class="note" style="margin:6px 0">Every day that left the range, fastest first (hour speed %, 15-minute volume vs 24h average, final result if held, result if closed at the exit): ` + lv.map(x => `${x.d} ${f(x.s, 2)}% ${x.v !== null && x.v !== undefined ? f(x.v, 1) + "×" : "–"} ${usd(x.fin)} → ${usd(x.e)}`).join(" · ") + `</p>`;
           }
           {   // worst open loss during the run, as a share of margin, for each rule
-            const WR = [["Hold to expiry", "hold"], ["Exit when BTC leaves the profit range", "edge"], ["Combined (fast range exit, otherwise sell in-the-money options)", "combo"], ["Out of range: sell in-the-money options", "itm1"], ["Out of range: in-the-money sale, deeper strike when fast / heavy volume", "itmA"], ["Out of range: cover part + in-the-money sale on the rest (setting above)", "mixA"], ["Mid-shoulder: sell in-the-money options", "itm2"], ["Out of range: buy back net-short lots (cover)", "cov1"]];
+            const WR = [["Hold to expiry", "hold"], ["Exit when BTC leaves the profit range", "edge"], ["Fast range exit (speed and volume as set above)", "edge_fast"]];
             const pc = (r, k) => { const w = r.rv.w && r.rv.w[k]; return w === undefined || w === null || !(r.margin > 0) ? null : Math.max(0, -w / r.margin * 100); };
             const levNow = Number($("lev").value) || 100, LV = [levNow, 50, 25, 10].filter((x, i, a) => a.indexOf(x) === i);
             h += `<p style="margin:12px 0 4px"><b>Worst open loss during the run, as a share of margin</b> <span class="note">(follows the position minute by minute after each rule acts, including the options it adds. Above 100% of margin would mean a margin call or forced liquidation before expiry. Margin shown for ${levNow}x leverage; at lower leverage you post more margin, so the same dollar loss is a smaller share: ${LV.slice(1).map(x => x + "x = ×" + f(x / levNow, 2)).join(", ")}.)</span></p>`;
@@ -3863,79 +3250,7 @@ $("dbgo").onclick = async () => {
               WR.map(([nm, k]) => { const v = ok.map(r => pc(r, k)).filter(x => x !== null), mx = v.length ? Math.max(...v) : 0; return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${mx > 100 ? "l" : ""}"><b>${f(mx, 0)}%</b></td>${LV.slice(1).map(x => `<td>${f(mx * x / levNow, 0)}%</td>`).join("")}<td>${v.filter(x => x > 50).length}</td><td>${v.filter(x => x > 100).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
             const risky = ok.filter(r => (pc(r, "hold") || 0) > 50 || r.fin < 0).sort((a, b) => (pc(b, "hold") || 0) - (pc(a, "hold") || 0));
             h += `<p class="note" style="margin:6px 0 2px">Every loss day, and every day whose open loss went beyond 50% of margin when held (worst open loss as % of margin; the final result is in brackets):</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th>${WR.map(x => `<th>${x[0]}</th>`).join("")}<th>Final if held</th></tr></thead><tbody>` +
-              risky.map(r => `<tr><td style="text-align:left"><b>${r.day}</b></td>${WR.map(([nm, k]) => { const v = pc(r, k), fv = k === "hold" ? r.fin : k === "edge" ? r.rv.edge : k === "combo" ? r.rv.combo : k === "itm1" ? r.rv.itm1 : k === "itmA" ? r.rv.itmA : k === "mixA" ? r.rv.mixA : k === "itm2" ? r.rv.itm2 : r.rv.cov1; return `<td class="${v > 100 ? "l" : ""}">${v === null ? "–" : f(v, 0) + "%"}<br><span class="note">(${usd(fv)})</span></td>`; }).join("")}<td class="${sg(r.fin)}">${usd(r.fin)}</td></tr>`).join("") + `</tbody></table></div>`;
-          }
-          {   // in-the-money sale: how deep the strike should be, fixed depths against the adaptive rule
-            const days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl), levNow = Number($("lev").value) || 100;
-            const get = (r, D) => D === "A" ? {fin: r.rv.itmA, worst: r.rv.w && r.rv.w.itmA} : r.rv.itmS && r.rv.itmS[D] ? r.rv.itmS[D] : {fin: r.fin, worst: Math.min(r.minV === null || r.minV === undefined ? r.fin : r.minV, r.fin)};
-            const sg2 = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`, sh = (r, D) => { const w = get(r, D).worst; return w === undefined || !(r.margin > 0) ? 0 : Math.max(0, -w / r.margin * 100); };
-            const tspd = Number($("lritmspd").value) || 0, tvol = Number($("lritmvol").value) || 0, dp = Number($("lritm2").value) || 0, nDeep = ok.filter(r => r.rv.out && r.rv.out.deep).length, nOut = ok.filter(r => r.rv.out).length;
-            h += `<p style="margin:12px 0 4px"><b>In-the-money sale: how deep should the strike be?</b> <span class="note">(sold when BTC is ${f(Number($("lrtrig").value) || 0, 2)}% beyond the profit range; ${nOut} days. A deeper strike keeps more of its hedge when BTC keeps moving. The last row uses ${f(Number($("lritm").value) || 0, 2)}% normally and ${f(dp, 2)}% when BTC moved ≥ ${f(tspd, 2)}% in the last hour${tvol > 0 ? " and volume ≥ " + f(tvol, 1) + "× normal" : ""}; it went deep on ${nDeep} of those ${nOut} days. Worst open loss is shown at ${levNow}x leverage.)</span></p>`;
-            h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Strike in the money</th><th>Change vs hold, all days</th><th>Without its single biggest gain</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Loss days total</th><th>Better / worse than hold</th><th>Worst open loss, % of margin</th><th>Days beyond 50% / 100%</th></tr></thead><tbody>` +
-              [[0.5, "0.5%"], [1, "1%"], [1.5, "1.5%"], [2, "2%"], [3, "3%"], ["A", "adaptive (settings above)"]].map(([D, nm]) => { const v = ok.map(r => get(r, D).fin - r.fin), tot = v.reduce((a, b) => a + b, 0), top = Math.max(0, ...v), a = A.reduce((t, r) => t + get(r, D).fin - r.fin, 0), b = B.reduce((t, r) => t + get(r, D).fin - r.fin, 0), ls = ok.filter(r => r.fin < 0).reduce((t, r) => t + get(r, D).fin, 0), p = ok.map(r => sh(r, D));
-                return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(tot)}"><b>${sg2(tot)}</b></td><td class="${sg(tot - top)}">${sg2(tot - top)}</td><td class="${sg(a)}">${sg2(a)}</td><td class="${sg(b)}">${sg2(b)}</td><td class="${sg(ls)}">${usd(ls)}</td><td>${v.filter(x => x > 0.5).length} / ${v.filter(x => x < -0.5).length}</td><td class="${Math.max(...p) > 100 ? "l" : ""}"><b>${f(Math.max(...p), 0)}%</b></td><td>${p.filter(x => x > 50).length} / ${p.filter(x => x > 100).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
-            const od = ok.filter(r => r.rv.out && r.rv.out.spd !== null && r.rv.out.spd !== undefined).map(r => ({d: r.day, s: r.rv.out.spd, v: r.rv.out.vol, deep: r.rv.out.deep, fin: r.fin, a: r.rv.itmA, b: r.rv.itm1})).sort((x, y) => y.s - x.s);
-            h += `<p class="note" style="margin:6px 0">Days that went out of range, fastest first (hour speed %, volume vs 24h average, went deep?, hold → 0.5% sale → adaptive): ` + od.map(x => `${x.d} ${f(x.s, 2)}% ${x.v !== null && x.v !== undefined ? f(x.v, 1) + "×" : "–"} ${x.deep ? "deep" : "base"} ${usd(x.fin)} → ${usd(x.b)} → ${usd(x.a)}`).join(" · ") + `</p>`;
-          }
-          {   // cover + in-the-money sale mixes
-            const days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl), levNow = Number($("lev").value) || 100, mm = Math.min(100, Math.max(0, Number($("lrmix").value) || 0));
-            const get = (r, k) => k === "A" ? {fin: r.rv.mixA, worst: r.rv.w && r.rv.w.mixA} : r.rv.mixS && r.rv.mixS[k] ? r.rv.mixS[k] : {fin: r.fin, worst: Math.min(r.minV === null || r.minV === undefined ? r.fin : r.minV, r.fin)};
-            const sg2 = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`, sh = (r, k) => { const w = get(r, k).worst; return w === undefined || !(r.margin > 0) ? 0 : Math.max(0, -w / r.margin * 100); };
-            h += `<p style="margin:12px 0 4px"><b>Cover + in-the-money sale: how much to buy back?</b> <span class="note">(when BTC is ${f(Number($("lrtrig").value) || 0, 2)}% beyond the profit range, buy back this share of the net-short lots at ${f(Number($("lrcov").value) || 0, 2)}% beyond the sold strike, and sell in-the-money options (${f(Number($("lritm").value) || 0, 2)}% in the money) against the rest. 0% cover is the plain sale and 100% cover is the plain cover. The last two rows are your setting and "both in full", which hedges the same lots twice and is shown only for comparison. Worst open loss is at ${levNow}x leverage.)</span></p>`;
-            h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Mix</th><th>Change vs hold, all days</th><th>Without its single biggest gain</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Loss days total</th><th>Better / worse than hold</th><th>Worst open loss, % of margin</th><th>Days beyond 50% / 100%</th></tr></thead><tbody>` +
-              [[0, "0% cover / 100% sale"], [25, "25% cover / 75% sale"], [50, "50% cover / 50% sale"], [75, "75% cover / 25% sale"], [100, "100% cover / 0% sale"], ["A", `your setting: ${mm}% cover`], ["both", "100% cover + 100% sale (both in full)"]].map(([k, nm]) => { const v = ok.map(r => get(r, k).fin - r.fin), tot = v.reduce((a, b) => a + b, 0), top = Math.max(0, ...v), a = A.reduce((t, r) => t + get(r, k).fin - r.fin, 0), b = B.reduce((t, r) => t + get(r, k).fin - r.fin, 0), ls = ok.filter(r => r.fin < 0).reduce((t, r) => t + get(r, k).fin, 0), p = ok.map(r => sh(r, k));
-                return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(tot)}"><b>${sg2(tot)}</b></td><td class="${sg(tot - top)}">${sg2(tot - top)}</td><td class="${sg(a)}">${sg2(a)}</td><td class="${sg(b)}">${sg2(b)}</td><td class="${sg(ls)}">${usd(ls)}</td><td>${v.filter(x => x > 0.5).length} / ${v.filter(x => x < -0.5).length}</td><td class="${Math.max(...p) > 100 ? "l" : ""}"><b>${f(Math.max(...p), 0)}%</b></td><td>${p.filter(x => x > 50).length} / ${p.filter(x => x > 100).length}</td></tr>`; }).join("") + `</tbody></table></div>`;
-          }
-          if ((Number($("lrhard").value) || 0) > 0){   // hard exit overlay
-            const X0 = Number($("lrhard").value), baseNm = $("lrhardb").value === "funds" ? "your funds" : "margin", days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl);
-            const R = [["Hold to expiry", "hold", r => r.fin], ["Out of range: sell in-the-money options", "itm1", r => r.rv.itm1], ["Out of range: cover (buy back net-short lots)", "cov1", r => r.rv.cov1], ["Out of range: cover part + sale on the rest (setting above)", "mixA", r => r.rv.mixA]];
-            const fin2 = (r, key, fn, X) => { const hs = r.rv.hs && r.rv.hs[key]; return hs && hs[X] ? hs[X].real : fn(r); };
-            const sg2 = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`;
-            h += `<p style="margin:12px 0 4px"><b>Hard exit: close everything the moment the open loss reaches ${X0}% of ${baseNm}</b> <span class="note">(checked every minute on the position including any options the rule added; closing costs the spread and fees, so the realised loss is a little larger than ${X0}%. "Winners cut" are days that would have finished in profit without the exit.)</span></p>`;
-            h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Rule</th><th>Total, no hard exit</th><th>Total, with hard exit</th><th>Change from the exit</th><th>Days exited</th><th>of which winners cut</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Worst day with exit</th></tr></thead><tbody>` +
-              R.map(([nm, key, fn]) => { const t0 = ok.reduce((a, r) => a + fn(r), 0), t1 = ok.reduce((a, r) => a + fin2(r, key, fn, X0), 0), ex = ok.filter(r => r.rv.hs && r.rv.hs[key] && r.rv.hs[key][X0]), a = A.reduce((t, r) => t + fin2(r, key, fn, X0) - fn(r), 0), b = B.reduce((t, r) => t + fin2(r, key, fn, X0) - fn(r), 0), wd = Math.min(...ok.map(r => fin2(r, key, fn, X0)));
-                return `<tr><td style="text-align:left"><b>${nm}</b></td><td class="${sg(t0)}">${usd(t0)}</td><td class="${sg(t1)}"><b>${usd(t1)}</b></td><td class="${sg(t1 - t0)}">${sg2(t1 - t0)}</td><td>${ex.length}</td><td>${ex.filter(r => fn(r) >= 0).length}</td><td class="${sg(a)}">${sg2(a)}</td><td class="${sg(b)}">${sg2(b)}</td><td class="l">${usd(wd)}</td></tr>`; }).join("") + `</tbody></table></div>`;
-            const Xs = [...new Set([20, 30, 50, 75, 100, X0])].sort((a, b) => a - b);
-            h += `<p class="note" style="margin:6px 0 2px">Same, for other levels (total result over all days, with the number of days exited in brackets):</p><div class="wrap"><table><thead><tr><th style="text-align:left">Rule</th><th>No exit</th>${Xs.map(x => `<th>${x}% of ${baseNm}</th>`).join("")}</tr></thead><tbody>` +
-              R.map(([nm, key, fn]) => `<tr><td style="text-align:left"><b>${nm}</b></td><td>${usd(ok.reduce((a, r) => a + fn(r), 0))}</td>${Xs.map(X => `<td>${usd(ok.reduce((a, r) => a + fin2(r, key, fn, X), 0))} <span class="note">(${ok.filter(r => r.rv.hs && r.rv.hs[key] && r.rv.hs[key][X]).length})</span></td>`).join("")}</tr>`).join("") + `</tbody></table></div>`;
-          }
-          if (ok.some(r => r.rv.grid)){   // combination grid
-            const days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl);
-            const sg2 = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`, keys = new Set(); ok.forEach(r => r.rv.grid && Object.keys(r.rv.grid).forEach(k => keys.add(k)));
-            const baseTot = ok.reduce((t, r) => t + r.fin, 0), fw = r => Math.min(r.minV === null || r.minV === undefined ? r.fin : r.minV, r.fin);
-            const rows = [...keys].map(k => {
-              const [tg, gt, fc, fi, oc, oi] = k.split("|").map(Number), g = r => (r.rv.grid && r.rv.grid[k]) || null;
-              const v = ok.map(r => { const x = g(r); return x ? x.fin - r.fin : 0; }), tot = v.reduce((a, b) => a + b, 0), top = Math.max(0, ...v);
-              const a = A.reduce((t, r) => { const x = g(r); return t + (x ? x.fin - r.fin : 0); }, 0), b = B.reduce((t, r) => { const x = g(r); return t + (x ? x.fin - r.fin : 0); }, 0);
-              const ls = ok.filter(r => r.fin < 0).reduce((t, r) => { const x = g(r); return t + (x ? x.fin : r.fin); }, 0), wo = Math.max(...ok.map(r => { const x = g(r), w = x ? Math.min(x.worst, x.fin) : fw(r); return r.margin > 0 ? Math.max(0, -w / r.margin * 100) : 0; }));
-              const xmP = Math.max(0, ...ok.map(r => { const x = g(r); return x && r.margin > 0 ? x.xm / r.margin * 100 : 0; })), wo2 = Math.max(...ok.map(r => { const x = g(r), w = x ? Math.min(x.worst, x.fin) : fw(r), m2 = r.margin + (x ? x.xm : 0); return m2 > 0 ? Math.max(0, -w / m2 * 100) : 0; }));
-              const acted = ok.filter(r => g(r)).length, cut = ok.filter(r => { const x = g(r); return x && r.fin >= 0 && x.fin < r.fin - 0.5; }).length;
-              return {tg, gt, fc, fi, oc, oi, tot, nb: tot - top, a, b, ls, wo, xmP, wo2, acted, cut, better: v.filter(x => x > 0.5).length, worse: v.filter(x => x < -0.5).length};
-            });
-            const nm = x => (x.fc ? `${x.fc * 100}% cover @${x.oc}%` : "no cover") + " + " + (x.fi ? `${x.fi * 100}% sale @${x.oi}%` : "no sale");
-            const tbl = (arr, title, note) => { h += `<p style="margin:12px 0 4px"><b>${title}</b> <span class="note">${note}</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Hedge (of the net-short lots)</th><th>Trigger, % beyond range</th><th>Crash gate, hour move ≥</th><th>Final P&amp;L, all days</th><th>Change vs hold</th><th>Without its biggest gain</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Loss days total</th><th>Better / worse</th><th>Days acted</th><th>Winners cut</th><th>Worst open loss, % of margin</th><th>Extra margin the sale needs, % of the original (largest day)</th><th>Worst open loss, % of margin incl. the sale</th></tr></thead><tbody>` + arr.map(x => `<tr><td style="text-align:left"><b>${nm(x)}</b></td><td>${x.tg}</td><td>${x.gt > 0 ? x.gt + "%" : "none"}</td><td class="${sg(baseTot + x.tot)}"><b>${usd(baseTot + x.tot)}</b></td><td class="${sg(x.tot)}">${sg2(x.tot)}</td><td class="${sg(x.nb)}">${sg2(x.nb)}</td><td class="${sg(x.a)}">${sg2(x.a)}</td><td class="${sg(x.b)}">${sg2(x.b)}</td><td class="${sg(x.ls)}">${usd(x.ls)}</td><td>${x.better} / ${x.worse}</td><td>${x.acted}</td><td>${x.cut}</td><td class="${x.wo > 100 ? "l" : ""}">${f(x.wo, 0)}%</td><td>${f(x.xmP, 0)}%</td><td class="${x.wo2 > 100 ? "l" : ""}">${f(x.wo2, 0)}%</td></tr>`).join("") + `</tbody></table></div>`; };
-            tbl([...rows].sort((x, y) => y.tot - x.tot).slice(0, 15), "Combination grid: the 15 best by change vs hold", `(hold to expiry: ${usd(baseTot)}; ${rows.length} combinations tested on ${ok.length} days; "crash gate" = act only if BTC moved at least that much in the last hour. With this many combinations, the top rows are partly luck: look at the next table.)`);
-            const st = rows.filter(x => x.a > 0 && x.b > 0 && x.nb > 0).sort((x, y) => y.nb - x.nb).slice(0, 15);
-            tbl(st, "Combinations that are positive in both halves and still positive without their biggest day", st.length ? "(the ones least likely to be luck; sorted by the change without the biggest day)" : "(none: no combination was positive in both halves and without its biggest day)");
-            const lowWo = rows.filter(x => x.wo <= 60).sort((x, y) => y.tot - x.tot).slice(0, 8);
-            tbl(lowWo, "Best results with a worst open loss of 60% of margin or less", lowWo.length ? "" : "(none reached that safety)");
-            tbl(rows.filter(x => x.tg === 0.2 && x.gt === 0 && x.oc === 0.5 && x.oi === 0.5).sort((x, y) => y.tot - x.tot), "All hedge sizes at the default trigger (0.2%), no crash gate, strikes 0.5%", "(always shown, so you can compare the same rows between runs)");
-            if (ok.some(r => r.rv.stage && Object.keys(r.rv.stage).length)){   // staged hedge
-              const SK = new Set(); ok.forEach(r => r.rv.stage && Object.keys(r.rv.stage).forEach(k => SK.add(k)));
-              const agg = get => { const v = ok.map(r => { const x = get(r); return x ? x.fin - r.fin : 0; }), tot = v.reduce((a, b) => a + b, 0), top = Math.max(0, ...v), ac = ok.filter(r => get(r));
-                const sh = arr => arr.length ? arr.reduce((t, r) => { const x = get(r); return t + (x.n !== undefined ? x.n / x.N : 1); }, 0) / arr.length * 100 : null;
-                return {tot, nb: tot - top, a: A.reduce((t, r) => { const x = get(r); return t + (x ? x.fin - r.fin : 0); }, 0), b: B.reduce((t, r) => { const x = get(r); return t + (x ? x.fin - r.fin : 0); }, 0), ls: ok.filter(r => r.fin < 0).reduce((t, r) => { const x = get(r); return t + (x ? x.fin : r.fin); }, 0),
-                  wo: Math.max(...ok.map(r => { const x = get(r), w = x ? Math.min(x.worst, x.fin) : fw(r); return r.margin > 0 ? Math.max(0, -w / r.margin * 100) : 0; })), acted: ac.length, shL: sh(ac.filter(r => r.fin < 0)), shP: sh(ac.filter(r => r.fin >= 0)), nL: ac.filter(r => r.fin < 0).length, nP: ac.filter(r => r.fin >= 0).length, cut: ac.filter(r => r.fin >= 0 && get(r).fin < r.fin - 0.5).length, better: v.filter(x => x > 0.5).length, worse: v.filter(x => x < -0.5).length}; };
-              const hn = (fc, fi) => fc && fi ? "cover + sale" : fc ? "cover only" : "sale only";
-              const sn = k => { const [m, p, N] = k.split("|"); return (m === "d" ? `next tranche every +${p}% further out` : `a tranche every ${p} min while out of range`) + `, ${N} tranches of ${100 / N}%`; };
-              const R = [];
-              [[1, 0], [0, 1], [1, 1]].forEach(([fc, fi]) => { const gk = `0.2|0|${fc}|${fi}|0.5|0.5`; R.push({nm: `All at once (reference): ${hn(fc, fi)}`, m: agg(r => r.rv.grid && r.rv.grid[gk] || null)}); });
-              [...SK].forEach(k => { const [m, p, N, fc, fi] = k.split("|"); R.push({nm: `${sn([m, p, N].join("|"))}: ${hn(+fc, +fi)}`, m: agg(r => r.rv.stage && r.rv.stage[k] || null), st: 1}); });
-              const pc = x => x === null ? "–" : f(x, 0) + "%";
-              h += `<p style="margin:12px 0 4px"><b>Staged hedge: add the hedge in tranches instead of all at once</b> <span class="note">(first tranche when BTC is 0.2% beyond the profit range; every tranche is cover at 0.5% beyond the sold strike and/or a sale 0.5% in the money, sized as a share of the net-short lots. If BTC comes back in, no more tranches are added. "Share placed" is the average share of the hedge that was in place at the end, on days that finished as losses vs days that finished in profit: a good schedule places most of it on loss days and little on profit days.)</span></p>`;
-              h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Schedule and hedge</th><th>Final P&amp;L, all days</th><th>Change vs hold</th><th>Without its biggest gain</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Loss days total</th><th>Better / worse</th><th>Share placed, loss days</th><th>Share placed, profit days</th><th>Winners cut</th><th>Worst open loss, % of margin</th></tr></thead><tbody>` +
-                R.map(x => `<tr><td style="text-align:left"><b>${x.nm}</b></td><td class="${sg(baseTot + x.m.tot)}"><b>${usd(baseTot + x.m.tot)}</b></td><td class="${sg(x.m.tot)}">${sg2(x.m.tot)}</td><td class="${sg(x.m.nb)}">${sg2(x.m.nb)}</td><td class="${sg(x.m.a)}">${sg2(x.m.a)}</td><td class="${sg(x.m.b)}">${sg2(x.m.b)}</td><td class="${sg(x.m.ls)}">${usd(x.m.ls)}</td><td>${x.m.better} / ${x.m.worse}</td><td>${pc(x.m.shL)} <span class="note">(${x.m.nL})</span></td><td>${pc(x.m.shP)} <span class="note">(${x.m.nP})</span></td><td>${x.m.cut}</td><td class="${x.m.wo > 100 ? "l" : ""}">${f(x.m.wo, 0)}%</td></tr>`).join("") + `</tbody></table></div>`;
-            }
+              risky.map(r => `<tr><td style="text-align:left"><b>${r.day}</b></td>${WR.map(([nm, k]) => { const v = pc(r, k), fv = k === "hold" ? r.fin : k === "edge" ? r.rv.edge : r.rv.edgeFast; return `<td class="${v > 100 ? "l" : ""}">${v === null ? "–" : f(v, 0) + "%"}<br><span class="note">(${usd(fv)})</span></td>`; }).join("")}<td class="${sg(r.fin)}">${usd(r.fin)}</td></tr>`).join("") + `</tbody></table></div>`;
           }
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
@@ -3944,17 +3259,6 @@ $("dbgo").onclick = async () => {
           h += `<div class="dbcase" style="margin:8px 0"><p class="note">Click a day, or any result in the table, to draw its chart here.</p></div>`;
           if ($("dbchart").checked) window.dbRL = RL; LD.slice(0, 12).forEach(r => { h += drawCase(r, "all"); });
           window.dbRL = RL;
-        }
-      }
-      {
-        const OT = ok.filter(r => r.rv.out), OR = OT.filter(r => r.rv.outP);
-        h += `<p style="margin:10px 0 4px"><b>Out-of-range rebuild: the level it locks in, and whether it held</b> <span class="note">(${OT.length} of ${ok.length} days went ${f(Number($("lrtrig").value) || 0, 2)}% beyond the profit range; ${OR.length} could be rebuilt. "Locked result" = total P&amp;L of the rebuilt position if BTC expires inside the new range, at the new price and its lowest / highest point in the range. "Held" = BTC stayed inside the new range until expiry)</span></p>`;
-        if (!OR.length) h += `<p class="note">No day was rebuilt.</p>`;
-        else {
-          const held = OR.filter(r => r.rv.outP.inside), tot = a => a.reduce((t, r) => t + r.rv.outFin, 0), totH = a => a.reduce((t, r) => t + r.fin, 0), avgC = OR.reduce((t, r) => t + r.rv.outP.pc, 0) / OR.length, left = OR.filter(r => !r.rv.outP.inside);
-          h += `<div class="kpi" style="margin:6px 0"><div>Locked result at the new price, average<b class="${sg(avgC)}">${usd(avgC)}</b><span class="note">${OR.filter(r => r.rv.outP.pc >= 0).length} of ${OR.length} at or above zero</span></div><div>Held (BTC stayed inside the new range)<b class="${held.length >= OR.length / 2 ? "g" : "l"}">${held.length} of ${OR.length} (${f(held.length / OR.length * 100, 0)}%)</b></div><div>Final P&amp;L with rebuild<b class="${sg(tot(OR))}">${usd(tot(OR))}</b><span class="note">hold ${usd(totH(OR))} on the same days</span></div><div>Days that held: rebuild vs hold<b class="${sg(tot(held) - totH(held))}">${usd(tot(held))} vs ${usd(totH(held))}</b></div><div>Days that left the range: rebuild vs hold<b class="${sg(tot(left) - totH(left))}">${usd(tot(left))} vs ${usd(totH(left))}</b></div></div>`;
-          h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>Out of range at (CET) · BTC</th><th>Rebuilt side</th><th>New profit range (BTC)</th><th>Locked result at the new price</th><th>Lowest – highest in the range</th><th>BTC afterwards (min – max)</th><th>Held?</th><th>Final P&amp;L</th><th>Hold P&amp;L</th><th>Change</th></tr></thead><tbody>` +
-            OR.map(r => { const o = r.rv.outP; return `<tr><td style="text-align:left">${r.day}</td><td>${tz(r.rv.out.t)} · ${f(r.rv.out.spot, 0)}</td><td>${esc(r.rv.outDesc)}</td><td>${f(o.tLo, 0)}–${f(o.tHi, 0)}</td><td class="${sg(o.pc)}"><b>${usd(o.pc)}</b></td><td>${usd(o.pmin)} to ${usd(o.pmax)}</td><td>${f(o.mn, 0)} – ${f(o.mx, 0)}</td><td class="${o.inside ? "g" : "l"}">${o.inside ? "yes" : "no, left the range " + (o.brT ? tz(o.brT) + " at " + f(o.brS, 0) : "at expiry (" + f(r.settle, 0) + ")")}</td><td class="${sg(r.rv.outFin)}"><b>${usd(r.rv.outFin)}</b></td><td class="${sg(r.fin)}">${usd(r.fin)}</td><td class="${sg(r.rv.outFin - r.fin)}">${r.rv.outFin - r.fin >= 0 ? "+" : ""}${usd(r.rv.outFin - r.fin)}</td></tr>`; }).join("") + `</tbody></table></div>`;
         }
       }
       {
@@ -3971,9 +3275,9 @@ $("dbgo").onclick = async () => {
             LDa.map(r => { const a = r.rv.an, hh = t => t ? f((r.tx - t) / 3600, 1) + " h" : "–"; return `<tr><td style="text-align:left"><b>${r.day}</b></td><td>${a.move >= 0 ? "+" : ""}${f(a.move, 1)}%</td><td>${f(a.bigMove, 2)}% (${hh(a.mvT)})</td><td class="${sg(a.pk.v)}">${usd(a.pk.v)} (${hh(a.pk.t)})</td><td>${a.hM !== null ? f(a.hM, 1) + " h · " + pc(a.spdM) : "not reached"}</td><td>${a.hE !== null ? f(a.hE, 1) + " h · " + usd(a.pE) : "stayed in range"}</td><td class="l">${usd(a.wr.v)} (${hh(a.wr.t)})</td><td class="l"><b>${usd(r.fin)}</b></td><td class="l">${a.pE !== null ? usd(r.fin - a.pE) : "–"}</td></tr>`; }).join("") + `</tbody></table></div>`;
         }
       }
-      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th>${$("dbadj").checked ? "<th>Adjusted at (CET) · BTC</th><th>What was done</th><th>Final with adjustment</th><th>Change</th>" : ""}${$("dbadj").checked ? slv.map(X => `<th>Re-center + ${X}% SL</th>`).join("") : ""}${slv.map(X => `<th>Exit at ${X}% SL${$("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? "<br>(" + usd(-X / 100 * Number($("ifunds").value)) + ")" : ""}</th>`).join("")}</tr></thead><tbody>` +
-        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${5 + ($("dbadj").checked ? 7 : 0) + slv.length}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
-          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td>${$("dbadj").checked ? (r.adj ? `<td>${tz(r.adj.t)} · ${f(r.adj.spot, 0)}</td>` + (r.adj.fin !== undefined ? `<td>${r.adj.side === "C" ? "up" : "down"}: ${esc(r.adj.desc)}</td><td class="${sg(r.adj.fin)}"><b>${usd(r.adj.fin)}</b></td><td class="${sg(r.adj.fin - r.fin)}">${r.adj.fin - r.fin >= 0 ? "+" : ""}${usd(r.adj.fin - r.fin)}</td>` : `<td colspan="3" class="note">no combination passed the thresholds</td>`) : `<td colspan="4" class="note">trigger not reached</td>`) : ""}${$("dbadj").checked ? slv.map((X, k) => { const A = r.adj && r.adj.sls ? r.adj : null, q = A ? A.sls[k] : r.sls[k], base = A ? A.fin : r.fin; return q ? `<td class="${sg(q.fin)}"><b>${usd(q.fin)}</b><br><span class="note">${tz(q.t)} · ${f(q.spot, 0)}</span></td>` : `<td class="note">not reached: ${usd(base)}</td>`; }).join("") : ""}${slv.map((X, k) => { const q = r.sls[k]; return q ? `<td class="${sg(q.fin)}"><b>${usd(q.fin)}</b><br><span class="note">${tz(q.t)} · ${f(q.spot, 0)}<br>loss at trigger ${usd(q.mark)}, closing costs ${usd(q.fin - q.mark)}</span></td>` : `<td class="note">not reached: ${usd(r.fin)}</td>`; }).join("")}</tr>`).join("") + `</tbody></table></div>`;
+      h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC at entry</th><th>BTC at expiry</th><th>Puts sold/bought · calls bought/sold</th><th>Profit range</th><th>Net credit</th><th>Actual final P&amp;L</th><th>Worst open loss (% of margin)</th>${slv.map(X => `<th>Exit at ${X}% SL${$("dbsb").value === "cap" && Number($("ifunds").value) > 0 ? "<br>(" + usd(-X / 100 * Number($("ifunds").value)) + ")" : ""}</th>`).join("")}</tr></thead><tbody>` +
+        R.map(r => r.none ? `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td colspan="${5 + slv.length}" class="note">${r.failN ? `<span class="l">price download failed for ${r.failN} of ${r.total} strikes (Delta busy or rate-limited), run again</span>` : r.n === 0 ? "no prices exist at Delta for these strikes at that time" : "no combination met the minimum (" + r.n + " priced strikes)"}</td></tr>` :
+          `<tr><td style="text-align:left">${r.day}</td><td>${f(r.spot, 0)}</td><td>${f(r.settle, 0)}</td><td>${r.strikes}</td><td>${f(r.lo, 0)}–${f(r.hi, 0)}</td><td>${usd(r.credit)}</td><td class="${sg(r.fin)}"><b>${usd(r.fin)}</b></td><td class="${r.minV < 0 ? "l" : ""}">${r.minV === null ? "–" : usd(r.minV) + " (" + f(r.minV / r.margin * 100, 0) + "%)"}</td>${slv.map((X, k) => { const q = r.sls[k]; return q ? `<td class="${sg(q.fin)}"><b>${usd(q.fin)}</b><br><span class="note">${tz(q.t)} · ${f(q.spot, 0)}<br>loss at trigger ${usd(q.mark)}, closing costs ${usd(q.fin - q.mark)}</span></td>` : `<td class="note">not reached: ${usd(r.fin)}</td>`; }).join("")}</tr>`).join("") + `</tbody></table></div>`;
     });
     h += `<p class="note">"Open loss" = worst mark-to-market loss of the four legs before expiry, compared with estimated margin. Fills = mark price ± the assumed half-spread. Estimate only.</p>`;
     out.innerHTML = h; prog.className = "note"; prog.textContent = `Done: ${results.filter(r => !r.none).length} setups from ${exps.length} expiries.`;
@@ -3994,14 +3298,6 @@ $("rpgo").onclick = () => {
   if (!hrs.length){ prog.className = "note l"; prog.textContent = "Enter start times as hours before expiry, e.g. 22,18,12,6."; return; }
   window.dbReplay = {day, hours: hrs}; $("dbgo").click();
 };
-$("plout").addEventListener("click", e => {
-  const v = e.target.dataset.pl; if (!v || !lastPlan) return;
-  const [dir, n] = v.split(":"), c = (lastPlan[dir] || [])[Number(n)]; if (!c) return;
-  wif.acts = c.acts.map(a => Object.assign({}, a));
-  $("wmsg").textContent = "Loaded planner option #" + (Number(n) + 1) + " (" + dir + " move). Its prices at the moved BTC level are model estimates.";
-  renderWhatIf();
-  const card = $("wifCard"); if (card && card.scrollIntoView) card.scrollIntoView({behavior: "smooth", block: "start"});
-});
 
 
 $("cinc").checked = incClosed;
@@ -4230,8 +3526,8 @@ function adjEval(){
   const hit = {C: lv.C && spot >= lv.C.trig, P: lv.P && spot <= lv.P.trig}, rows = [];
   ["C", "P"].forEach(sd => { const L = lv[sd]; if (!L) return;
     const away = sd === "C" ? (L.trig - spot) / spot * 100 : (spot - L.trig) / spot * 100;
-    rows.push(`<tr${hit[sd] ? ' style="background:var(--warn,#fdecea)"' : ""}><td style="text-align:left">${sd === "C" ? "Call side (up)" : "Put side (down)"}</td><td>${f(L.bought, 0)}</td><td>${f(L.sold, 0)}</td><td><b style="font-size:1.2em">${f(L.trig, 0)}</b></td><td>${hit[sd] ? "reached" : f(away, 2) + "% away"}</td><td>${pr ? money(pr.pnl(L.trig)) : "–"} <span class="note">(peak ${pr ? money(pr.pnl(L.sold)) : "–"})</span></td><td><button data-aplan="${L.trig}">Plan adjustment here</button></td></tr>`); });
-  $("atab").innerHTML = `<table><thead><tr><th style="text-align:left">Side</th><th>Bought strike</th><th>Sold strike</th><th>Trigger BTC</th><th>BTC now</th><th>P&amp;L at expiry at trigger</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    rows.push(`<tr${hit[sd] ? ' style="background:var(--warn,#fdecea)"' : ""}><td style="text-align:left">${sd === "C" ? "Call side (up)" : "Put side (down)"}</td><td>${f(L.bought, 0)}</td><td>${f(L.sold, 0)}</td><td><b style="font-size:1.2em">${f(L.trig, 0)}</b></td><td>${hit[sd] ? "reached" : f(away, 2) + "% away"}</td><td>${pr ? money(pr.pnl(L.trig)) : "–"} <span class="note">(peak ${pr ? money(pr.pnl(L.sold)) : "–"})</span></td></tr>`); });
+  $("atab").innerHTML = `<table><thead><tr><th style="text-align:left">Side</th><th>Bought strike</th><th>Sold strike</th><th>Trigger BTC</th><th>BTC now</th><th>P&amp;L at expiry at trigger</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
   const names = ["C", "P"].filter(sd => hit[sd]).map(sd => sd === "C" ? `call side (BTC ${f(spot, 0)} ≥ ${f(lv.C.trig, 0)})` : `put side (BTC ${f(spot, 0)} ≤ ${f(lv.P.trig, 0)})`);
   if (names.length){
     stat.innerHTML = `<b style="color:var(--loss,#b3261e)">ADJUST: halfway trigger reached on the ${esc(names.join(" and "))}. Use "Plan adjustment here".</b>`;
@@ -4252,8 +3548,6 @@ function readAdj(){ adj.on = $("aon").checked; adj.frac = Math.min(100, Math.max
   adjFired = {C: false, P: false}; adjEval(); }
 $("aon").checked = !!adj.on; $("afrac").value = adj.frac; $("asound").checked = !!adj.sound;
 ["aon", "afrac", "asound"].forEach(id => $(id).addEventListener("change", readAdj));
-$("atab").addEventListener("click", e => { const t = e.target.dataset.aplan; if (!t) return;
-  $("pat").value = Math.round(Number(t)); const c = $("planCard"); if (c && c.scrollIntoView) c.scrollIntoView({behavior: "smooth"}); $("plrun").click(); });
 
 // ---------- Call-side guard ----------
 let guard = {on: false, price: "", mult: 2, buf: 0.5, sec: 15, sound: true};
@@ -4526,7 +3820,7 @@ $("hgo").onclick = async () => {
 $("hstop").onclick = () => { hStop = true; $("hmsg").textContent += " Stopping…"; };
 const SECTIONS = [
   ["spotCard", "BTC spot"], ["syncCard", "Cloud sync"], ["settingsCard", "Settings"], ["dfCard", "Delta filter"], ["summaryCard", "P&L summary"],
-  ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["h24Card", "P&L, last 24 hours"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["planCard", "Adjustment planner"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
+  ["impCard", "Import from Delta"], ["legsCard", "Legs table"], ["posCard", "Position payoff chart"], ["h24Card", "P&L, last 24 hours"], ["wifCard", "What-if adjustments"], ["ticketCard", "Order list"], ["adjCard", "Adjustment trigger"], ["guardCard", "Call-side guard"], ["journalCard", "Journal"], ["finderCard", "Strike finder"], ["volCard", "BTC move check"],
   ["histCard", "Download historical data"], ["backCard", "Strike backtest"], ["batCard", "Inverted Batman"], ["nbCard", "Not-inverted Batman"], ["hvCard", "Hourly move study"], ["trigCard", "Move trigger"],
   ["marginCard", "Margin estimate"], ["slCard", "Stop-loss"], ["sizeCard", "Position sizing"]
 ];
