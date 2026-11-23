@@ -357,7 +357,9 @@ h1{padding-right:170px}
     <label>…deeper only if BTC moved at least this % in the last hour when it went out of range (0 = ignore)<input id="lritmspd" type="number" min="0" step="0.1" value="1.0"></label>
     <label>…and only if BTC volume over the last 15 minutes was at least this many times its 24h average (0 = ignore)<input id="lritmvol" type="number" min="0" step="0.5" value="0"></label>
     <label>Loss-day test "cover + in-the-money sale": share of the net-short lots bought back (cover); the rest is sold as in-the-money options (%)<input id="lrmix" type="number" min="0" max="100" step="5" value="50"></label>
-    <label>Loss-day test "hard exit": close everything whenever the open loss reaches this % (0 = off)<input id="lrhard" type="number" min="0" step="5" value="30"></label>
+    <label>Loss-day test "hard exit": close everything whenever the open loss reaches this % (0 = off)<input id="lrhard" type="number" min="0" step="5" value="0"></label>
+    <label>Half-spread on the hedge fills only (%, blank = same as above; use it to stress the cover and sale)<input id="lrhspr" type="number" min="0" step="0.5" placeholder="e.g. 4"></label>
+    <label>Also run the combination grid: cover + in-the-money sale, sizes and strikes, with and without a fast-move gate (slower)<input id="lrgrid" type="checkbox" checked></label>
     <label>…of<select id="lrhardb"><option value="margin" selected>margin (capital used by the trade)</option><option value="funds">my funds (Settings funds box)</option></select></label>
     <label>Loss-day test "fast move": close at mid-shoulder only if BTC moved at least this % in the last hour<input id="lrspd" type="number" min="0" step="0.1" value="0.8"></label>
     <label>Loss-day test "fast range exit": close all at the first close outside the profit range only if BTC moved at least this % in the last hour<input id="lrspe" type="number" min="0" step="0.1" value="1.0"></label>
@@ -3539,11 +3541,12 @@ $("dbgo").onclick = async () => {
           // worst open profit/loss of the whole run when one extra option leg is added at time tAct (sign -1 = sold, +1 = bought)
           const worstAfter = (tAct, legCall, K, sign, e, q, feeX) => { let w = Infinity; for (const [t, v] of path){ if (t <= tAct){ if (v < w) w = v; } else { const mh = mk(legCall, K, t, false); if (mh === null) continue; const x = v + sign * (mh - e) * q * lot - feeX; if (x < w) w = x; } } return w; };
           // cover: buy back the net-short lots of the threatened side as options X% beyond the sold strike, then hold to expiry
-          const coverAt = (t, isCall, scale) => {
+          const sprH = (() => { const v = $("lrhspr") ? $("lrhspr").value : ""; return v === "" || isNaN(Number(v)) ? spr : Math.max(0, Number(v)) / 100; })();
+          const coverAt = (t, isCall, scale, offOv) => {
             const sh = L.find(l => l.c === isCall && l.side === -1), lg = L.find(l => l.c === isCall && l.side === 1); if (!sh || !lg) return null;
-            const q = (sh.n - lg.n) * (scale === undefined ? 1 : scale); if (q <= 0) return null; const off = (Number($("lrcov").value) || 0) / 100, tgt = isCall ? sh.K * (1 + off) : sh.K * (1 - off); let bc = null;
+            const q = (sh.n - lg.n) * (scale === undefined ? 1 : scale); if (q <= 0) return null; const off = (offOv !== undefined ? offOv : (Number($("lrcov").value) || 0)) / 100, tgt = isCall ? sh.K * (1 + off) : sh.K * (1 - off); let bc = null;
             syms.forEach(x => { if (x.c !== isCall) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (isCall ? x.K < sh.K : x.K > sh.K) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
-            if (!bc) return null; const e = bc.m * (1 + spr), sp = spotAt(t), intr = isCall ? Math.max(E.settle - bc.K, 0) : Math.max(bc.K - E.settle, 0);
+            if (!bc) return null; const e = bc.m * (1 + sprH), sp = spotAt(t), intr = isCall ? Math.max(E.settle - bc.K, 0) : Math.max(bc.K - E.settle, 0);
             return {K: bc.K, fin: fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), leg: {c: isCall, K: bc.K, s: 1, e, q, fee: feeOpt(q, e, sp, lot)}, worst: (() => { const fv = fin + q * lot * (intr - e) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0); return Math.min(fv, worstAfter(t, isCall, bc.K, 1, e, q, feeOpt(q, e, sp, lot))); })(), desc: `${isCall ? "calls" : "puts"} ×${f(q, 0)} at ${bc.K}, paid $${f(q * lot * e, 0)}`};
           };
           // sell in the money: against the net-short lots of the threatened side, sell options of the OTHER type that are already in the money (puts when BTC ran up, calls when it fell) and hold to expiry
@@ -3554,15 +3557,15 @@ $("dbgo").onclick = async () => {
             const q = (sh.n - lg.n) * (scale === undefined ? 1 : scale); if (q <= 0) return null; const sp = spotAt(t); if (sp === null) return null;
             const off = (offPct !== undefined ? offPct : (Number($("lritm").value) || 0)) / 100, selPut = threatCall, tgt = selPut ? sp * (1 + off) : sp * (1 - off); let bc = null;
             syms.forEach(x => { if (x.c === selPut) return; const m = mk(x.c, x.K, t, true); if (!(m > 0)) return; if (selPut ? x.K < sp : x.K > sp) return; if (!bc || Math.abs(x.K - tgt) < Math.abs(bc.K - tgt)) bc = {K: x.K, m}; });
-            if (!bc) return null; const e = bc.m * (1 - spr), intr = selPut ? Math.max(bc.K - E.settle, 0) : Math.max(E.settle - bc.K, 0);
+            if (!bc) return null; const e = bc.m * (1 - sprH), intr = selPut ? Math.max(bc.K - E.settle, 0) : Math.max(E.settle - bc.K, 0);
             return {K: bc.K, fin: fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0), leg: {c: !selPut, K: bc.K, s: -1, e, q, fee: feeOpt(q, e, sp, lot)}, worst: (() => { const fv = fin + q * lot * (e - intr) - feeOpt(q, e, sp, lot) - (intr > 0 ? settleFee(q * lot, intr, E.settle) : 0); return Math.min(fv, worstAfter(t, !selPut, bc.K, -1, e, q, feeOpt(q, e, sp, lot))); })(), desc: `${selPut ? "puts" : "calls"} ×${f(q, 0)} sold at ${bc.K}, received $${f(q * lot * e, 0)}`};
           };
           // cover part of the net-short lots and sell in-the-money options against the rest (both at the same moment)
-          const mixAt = (t, up, fc, fi) => {
-            const c = fc > 0 ? coverAt(t, up, fc) : null, i = fi > 0 ? sellItmAt(t, up, undefined, fi) : null; if (!c && !i) return null;
+          const mixAt = (t, up, fc, fi, oc, oi) => {
+            const c = fc > 0 ? coverAt(t, up, fc, oc) : null, i = fi > 0 ? sellItmAt(t, up, oi, fi) : null; if (!c && !i) return null;
             const legs = [c && c.leg, i && i.leg].filter(Boolean), fv = fin + (c ? c.fin - fin : 0) + (i ? i.fin - fin : 0); let w = fv;
             for (const [tt, v] of path){ if (tt <= t){ if (v < w) w = v; continue; } let x = v, ok2 = true; for (const g of legs){ const mh = mk(g.c, g.K, tt, false); if (mh === null){ ok2 = false; break; } x += g.s * (mh - g.e) * g.q * lot; } if (ok2){ x -= legs.reduce((a, g) => a + g.fee, 0); if (x < w) w = x; } }
-            return {fin: fv, worst: w, legs};
+            return {fin: fv, worst: w, legs, xm: legs.filter(g => g.s === -1).reduce((a, g) => a + g.q * lot * g.K / lev, 0)};
           };
           // hard exit: first moment the open loss of (original position + extra legs) reaches X% of the base; closes everything at spread + fees
           rv.hsweep = legs => {
@@ -3638,6 +3641,41 @@ $("dbgo").onclick = async () => {
                   rv.roll = rv.all - L2.reduce((t, l) => t + feeOpt(l.n, l.e, sp, lot), 0) + settleV(L2);
                 }
               }
+            }
+          }
+          // combination grid: trigger distance x crash gate x cover/sale sizes x strike offsets, all on this trade
+          rv.grid = null;
+          if ($("lrgrid") && $("lrgrid").checked){
+            rv.grid = {}; const cache = new Map();
+            [0.2, 0.5].forEach(tg => [0, 1.5, 2].forEach(gt => {
+              let tG = null, upG = null;
+              for (const q of path){ const t = q[0]; if (t >= E.tx - rs) break; const sp = spotAt(t); if (sp === null) continue; const u = sp > best.hi * (1 + tg / 100), d2 = sp < best.lo * (1 - tg / 100); if (!u && !d2) continue; if (gt > 0){ const m = mvH(t); if (m === null || m < gt) continue; } tG = t; upG = u; break; }
+              if (tG === null) return;
+              [[0.5, 0], [1, 0], [0, 0.5], [0, 1], [0.5, 0.5], [0.5, 1], [1, 0.5], [1, 1]].forEach(([fc, fi]) => [0.5, 1].forEach(oc => [0.5, 1].forEach(oi => {
+                if ((!fc && oc !== 0.5) || (!fi && oi !== 0.5)) return;
+                const ck = [tG, upG, fc, fi, oc, oi].join("|"); let m = cache.get(ck); if (m === undefined){ m = mixAt(tG, upG, fc, fi, oc, oi); cache.set(ck, m || null); }
+                if (m) rv.grid[[tg, gt, fc, fi, oc, oi].join("|")] = {fin: m.fin, worst: m.worst, xm: m.xm};
+              })));
+            }));
+          }
+          // staged hedge: add the cover / in-the-money sale in tranches (distance schedule: next tranche each X% further out; time schedule: a tranche every T minutes while still out of range)
+          rv.stage = null;
+          if ($("lrgrid") && $("lrgrid").checked){
+            rv.stage = {}; const pt = path.map(q => q[0]), tEnd = E.tx - rs;
+            const distAt = (t, up) => { const sp = spotAt(t); if (sp === null) return null; return up ? (sp - best.hi) / best.hi * 100 : (best.lo - sp) / best.lo * 100; };
+            let t0 = null, up0 = null;
+            for (const q of path){ const t = q[0]; if (t >= tEnd) break; const sp = spotAt(t); if (sp === null) continue; if (sp > best.hi * 1.002){ t0 = t; up0 = true; break; } if (sp < best.lo * 0.998){ t0 = t; up0 = false; break; } }
+            if (t0 !== null){
+              const sched = {};
+              [0.1, 0.25, 0.5].forEach(stp => [5, 10].forEach(N => { const ts = []; let k = 0; for (const q of path){ if (k >= N) break; const t = q[0]; if (t < t0) continue; if (t >= tEnd) break; const d = distAt(t, up0); while (d !== null && k < N && d >= 0.2 + k * stp){ ts.push(t); k++; } } sched["d|" + stp + "|" + N] = {ts, N}; }));
+              [30, 60].forEach(Tm => [5, 10].forEach(N => { const ts = []; for (let k = 0; k < N; k++){ const target = t0 + k * Tm * 60, i = pt.findIndex(x => x >= target); if (i < 0) break; const t = pt[i]; if (t >= tEnd) break; const d = distAt(t, up0); if (d !== null && d > 0) ts.push(t); } sched["t|" + Tm + "|" + N] = {ts, N}; }));
+              Object.entries(sched).forEach(([sk, o]) => [[1, 0], [0, 1], [1, 1]].forEach(([fc, fi]) => {
+                const ts = o.ts, N = o.N; if (!ts.length) return; const legs = []; let fv = fin;
+                ts.forEach(tt => { const c = fc > 0 ? coverAt(tt, up0, fc / N, 0.5) : null, i2 = fi > 0 ? sellItmAt(tt, up0, 0.5, fi / N) : null; if (c){ legs.push(Object.assign({tA: tt}, c.leg)); fv += c.fin - fin; } if (i2){ legs.push(Object.assign({tA: tt}, i2.leg)); fv += i2.fin - fin; } });
+                if (!legs.length) return;
+                let w = fv; for (const [t, v] of path){ let x = v, ok2 = true; for (const g of legs){ if (g.tA >= t) continue; const mh = mk(g.c, g.K, t, false); if (mh === null){ ok2 = false; break; } x += g.s * (mh - g.e) * g.q * lot - g.fee; } if (ok2 && x < w) w = x; }
+                rv.stage[sk + "|" + fc + "|" + fi] = {fin: fv, worst: w, n: ts.length, N};
+              }));
             }
           }
           // out of range: when BTC is X% beyond the profit range, close the side it is moving away from and rebuild that side so the new profit range is Y% (loss direction) / Z% (opposite) around the new price
@@ -3817,6 +3855,44 @@ $("dbgo").onclick = async () => {
             const Xs = [...new Set([20, 30, 50, 75, 100, X0])].sort((a, b) => a - b);
             h += `<p class="note" style="margin:6px 0 2px">Same, for other levels (total result over all days, with the number of days exited in brackets):</p><div class="wrap"><table><thead><tr><th style="text-align:left">Rule</th><th>No exit</th>${Xs.map(x => `<th>${x}% of ${baseNm}</th>`).join("")}</tr></thead><tbody>` +
               R.map(([nm, key, fn]) => `<tr><td style="text-align:left"><b>${nm}</b></td><td>${usd(ok.reduce((a, r) => a + fn(r), 0))}</td>${Xs.map(X => `<td>${usd(ok.reduce((a, r) => a + fin2(r, key, fn, X), 0))} <span class="note">(${ok.filter(r => r.rv.hs && r.rv.hs[key] && r.rv.hs[key][X]).length})</span></td>`).join("")}</tr>`).join("") + `</tbody></table></div>`;
+          }
+          if (ok.some(r => r.rv.grid)){   // combination grid
+            const days = ok.map(r => r.day).sort(), spl = $("lrsplit").value || days[Math.floor(days.length / 2)], A = ok.filter(r => r.day < spl), B = ok.filter(r => r.day >= spl);
+            const sg2 = d => `${d >= 0 ? "+" : "-"}${usd(Math.abs(d))}`, keys = new Set(); ok.forEach(r => r.rv.grid && Object.keys(r.rv.grid).forEach(k => keys.add(k)));
+            const baseTot = ok.reduce((t, r) => t + r.fin, 0), fw = r => Math.min(r.minV === null || r.minV === undefined ? r.fin : r.minV, r.fin);
+            const rows = [...keys].map(k => {
+              const [tg, gt, fc, fi, oc, oi] = k.split("|").map(Number), g = r => (r.rv.grid && r.rv.grid[k]) || null;
+              const v = ok.map(r => { const x = g(r); return x ? x.fin - r.fin : 0; }), tot = v.reduce((a, b) => a + b, 0), top = Math.max(0, ...v);
+              const a = A.reduce((t, r) => { const x = g(r); return t + (x ? x.fin - r.fin : 0); }, 0), b = B.reduce((t, r) => { const x = g(r); return t + (x ? x.fin - r.fin : 0); }, 0);
+              const ls = ok.filter(r => r.fin < 0).reduce((t, r) => { const x = g(r); return t + (x ? x.fin : r.fin); }, 0), wo = Math.max(...ok.map(r => { const x = g(r), w = x ? Math.min(x.worst, x.fin) : fw(r); return r.margin > 0 ? Math.max(0, -w / r.margin * 100) : 0; }));
+              const xmP = Math.max(0, ...ok.map(r => { const x = g(r); return x && r.margin > 0 ? x.xm / r.margin * 100 : 0; })), wo2 = Math.max(...ok.map(r => { const x = g(r), w = x ? Math.min(x.worst, x.fin) : fw(r), m2 = r.margin + (x ? x.xm : 0); return m2 > 0 ? Math.max(0, -w / m2 * 100) : 0; }));
+              const acted = ok.filter(r => g(r)).length, cut = ok.filter(r => { const x = g(r); return x && r.fin >= 0 && x.fin < r.fin - 0.5; }).length;
+              return {tg, gt, fc, fi, oc, oi, tot, nb: tot - top, a, b, ls, wo, xmP, wo2, acted, cut, better: v.filter(x => x > 0.5).length, worse: v.filter(x => x < -0.5).length};
+            });
+            const nm = x => (x.fc ? `${x.fc * 100}% cover @${x.oc}%` : "no cover") + " + " + (x.fi ? `${x.fi * 100}% sale @${x.oi}%` : "no sale");
+            const tbl = (arr, title, note) => { h += `<p style="margin:12px 0 4px"><b>${title}</b> <span class="note">${note}</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Hedge (of the net-short lots)</th><th>Trigger, % beyond range</th><th>Crash gate, hour move ≥</th><th>Final P&amp;L, all days</th><th>Change vs hold</th><th>Without its biggest gain</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Loss days total</th><th>Better / worse</th><th>Days acted</th><th>Winners cut</th><th>Worst open loss, % of margin</th><th>Extra margin the sale needs, % of the original (largest day)</th><th>Worst open loss, % of margin incl. the sale</th></tr></thead><tbody>` + arr.map(x => `<tr><td style="text-align:left"><b>${nm(x)}</b></td><td>${x.tg}</td><td>${x.gt > 0 ? x.gt + "%" : "none"}</td><td class="${sg(baseTot + x.tot)}"><b>${usd(baseTot + x.tot)}</b></td><td class="${sg(x.tot)}">${sg2(x.tot)}</td><td class="${sg(x.nb)}">${sg2(x.nb)}</td><td class="${sg(x.a)}">${sg2(x.a)}</td><td class="${sg(x.b)}">${sg2(x.b)}</td><td class="${sg(x.ls)}">${usd(x.ls)}</td><td>${x.better} / ${x.worse}</td><td>${x.acted}</td><td>${x.cut}</td><td class="${x.wo > 100 ? "l" : ""}">${f(x.wo, 0)}%</td><td>${f(x.xmP, 0)}%</td><td class="${x.wo2 > 100 ? "l" : ""}">${f(x.wo2, 0)}%</td></tr>`).join("") + `</tbody></table></div>`; };
+            tbl([...rows].sort((x, y) => y.tot - x.tot).slice(0, 15), "Combination grid: the 15 best by change vs hold", `(hold to expiry: ${usd(baseTot)}; ${rows.length} combinations tested on ${ok.length} days; "crash gate" = act only if BTC moved at least that much in the last hour. With this many combinations, the top rows are partly luck: look at the next table.)`);
+            const st = rows.filter(x => x.a > 0 && x.b > 0 && x.nb > 0).sort((x, y) => y.nb - x.nb).slice(0, 15);
+            tbl(st, "Combinations that are positive in both halves and still positive without their biggest day", st.length ? "(the ones least likely to be luck; sorted by the change without the biggest day)" : "(none: no combination was positive in both halves and without its biggest day)");
+            const lowWo = rows.filter(x => x.wo <= 60).sort((x, y) => y.tot - x.tot).slice(0, 8);
+            tbl(lowWo, "Best results with a worst open loss of 60% of margin or less", lowWo.length ? "" : "(none reached that safety)");
+            tbl(rows.filter(x => x.tg === 0.2 && x.gt === 0 && x.oc === 0.5 && x.oi === 0.5).sort((x, y) => y.tot - x.tot), "All hedge sizes at the default trigger (0.2%), no crash gate, strikes 0.5%", "(always shown, so you can compare the same rows between runs)");
+            if (ok.some(r => r.rv.stage && Object.keys(r.rv.stage).length)){   // staged hedge
+              const SK = new Set(); ok.forEach(r => r.rv.stage && Object.keys(r.rv.stage).forEach(k => SK.add(k)));
+              const agg = get => { const v = ok.map(r => { const x = get(r); return x ? x.fin - r.fin : 0; }), tot = v.reduce((a, b) => a + b, 0), top = Math.max(0, ...v), ac = ok.filter(r => get(r));
+                const sh = arr => arr.length ? arr.reduce((t, r) => { const x = get(r); return t + (x.n !== undefined ? x.n / x.N : 1); }, 0) / arr.length * 100 : null;
+                return {tot, nb: tot - top, a: A.reduce((t, r) => { const x = get(r); return t + (x ? x.fin - r.fin : 0); }, 0), b: B.reduce((t, r) => { const x = get(r); return t + (x ? x.fin - r.fin : 0); }, 0), ls: ok.filter(r => r.fin < 0).reduce((t, r) => { const x = get(r); return t + (x ? x.fin : r.fin); }, 0),
+                  wo: Math.max(...ok.map(r => { const x = get(r), w = x ? Math.min(x.worst, x.fin) : fw(r); return r.margin > 0 ? Math.max(0, -w / r.margin * 100) : 0; })), acted: ac.length, shL: sh(ac.filter(r => r.fin < 0)), shP: sh(ac.filter(r => r.fin >= 0)), nL: ac.filter(r => r.fin < 0).length, nP: ac.filter(r => r.fin >= 0).length, cut: ac.filter(r => r.fin >= 0 && get(r).fin < r.fin - 0.5).length, better: v.filter(x => x > 0.5).length, worse: v.filter(x => x < -0.5).length}; };
+              const hn = (fc, fi) => fc && fi ? "cover + sale" : fc ? "cover only" : "sale only";
+              const sn = k => { const [m, p, N] = k.split("|"); return (m === "d" ? `next tranche every +${p}% further out` : `a tranche every ${p} min while out of range`) + `, ${N} tranches of ${100 / N}%`; };
+              const R = [];
+              [[1, 0], [0, 1], [1, 1]].forEach(([fc, fi]) => { const gk = `0.2|0|${fc}|${fi}|0.5|0.5`; R.push({nm: `All at once (reference): ${hn(fc, fi)}`, m: agg(r => r.rv.grid && r.rv.grid[gk] || null)}); });
+              [...SK].forEach(k => { const [m, p, N, fc, fi] = k.split("|"); R.push({nm: `${sn([m, p, N].join("|"))}: ${hn(+fc, +fi)}`, m: agg(r => r.rv.stage && r.rv.stage[k] || null), st: 1}); });
+              const pc = x => x === null ? "–" : f(x, 0) + "%";
+              h += `<p style="margin:12px 0 4px"><b>Staged hedge: add the hedge in tranches instead of all at once</b> <span class="note">(first tranche when BTC is 0.2% beyond the profit range; every tranche is cover at 0.5% beyond the sold strike and/or a sale 0.5% in the money, sized as a share of the net-short lots. If BTC comes back in, no more tranches are added. "Share placed" is the average share of the hedge that was in place at the end, on days that finished as losses vs days that finished in profit: a good schedule places most of it on loss days and little on profit days.)</span></p>`;
+              h += `<div class="wrap"><table><thead><tr><th style="text-align:left">Schedule and hedge</th><th>Final P&amp;L, all days</th><th>Change vs hold</th><th>Without its biggest gain</th><th>Days before ${spl}</th><th>Days from ${spl}</th><th>Loss days total</th><th>Better / worse</th><th>Share placed, loss days</th><th>Share placed, profit days</th><th>Winners cut</th><th>Worst open loss, % of margin</th></tr></thead><tbody>` +
+                R.map(x => `<tr><td style="text-align:left"><b>${x.nm}</b></td><td class="${sg(baseTot + x.m.tot)}"><b>${usd(baseTot + x.m.tot)}</b></td><td class="${sg(x.m.tot)}">${sg2(x.m.tot)}</td><td class="${sg(x.m.nb)}">${sg2(x.m.nb)}</td><td class="${sg(x.m.a)}">${sg2(x.m.a)}</td><td class="${sg(x.m.b)}">${sg2(x.m.b)}</td><td class="${sg(x.m.ls)}">${usd(x.m.ls)}</td><td>${x.m.better} / ${x.m.worse}</td><td>${pc(x.m.shL)} <span class="note">(${x.m.nL})</span></td><td>${pc(x.m.shP)} <span class="note">(${x.m.nP})</span></td><td>${x.m.cut}</td><td class="${x.m.wo > 100 ? "l" : ""}">${f(x.m.wo, 0)}%</td></tr>`).join("") + `</tbody></table></div>`;
+            }
           }
           h += `<p style="margin:8px 0 4px" class="note">Each loss day, with the best alternative:</p><div class="wrap"><table><thead><tr><th style="text-align:left">Expiry</th><th>BTC entry → expiry</th><th>Profit range</th><th>Mid-shoulder reached</th>${RL.map(x => `<th>${x[0]}</th>`).join("")}<th>Best alternative</th></tr></thead><tbody>` +
             LD.map(r => { const vals = RL.map(x => x[1](r)); let bi = 1; vals.forEach((v, i) => { if (i > 0 && v > vals[bi]) bi = i; });
