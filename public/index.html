@@ -29,9 +29,8 @@ td input{min-width:70px}
 #alert{display:none;background:var(--warn);color:var(--loss);border:1px solid var(--loss);border-radius:8px;padding:10px;margin-bottom:12px;font-weight:600}
 #status{color:var(--mut);font-size:13px}
 .spotcard{text-align:center;padding:18px 12px;border-width:2px}
-.spotrow{display:grid;grid-template-columns:1fr;gap:12px;align-items:stretch}
-.spotrow>.card{margin:0}
-@media(min-width:900px){.spotrow.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.posrow{display:grid;grid-template-columns:1fr;gap:12px;align-items:start}
+@media(min-width:1020px){.posrow{width:calc(100vw - 48px);margin-left:calc(50% - 50vw + 24px)}.posrow.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 #h24Card{padding:10px 12px}
 .spotlbl{font-size:13px;letter-spacing:.12em;color:var(--mut);font-weight:700}
 .spotnum{font-size:clamp(44px,13vw,84px);font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
@@ -73,7 +72,6 @@ h1{padding-right:170px}
   <p><button id="secAll">Show all</button> <button id="secNone">Hide all</button></p>
 </details>
 
-<div class="spotrow" id="spotRow">
 <div class="card spotcard" id="spotCard">
   <div class="spotlbl">BTC SPOT</div>
   <div class="spotnum" id="spot">–</div>
@@ -82,8 +80,6 @@ h1{padding-right:170px}
   <div class="spotsub" id="spotTv" style="font-size:14px"></div>
   <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
-</div>
-<div class="card" id="h24Card" style="display:none"><div id="h24Tip2" style="font-size:13px;min-height:34px">–</div><div id="h24Chart"></div></div>
 </div>
 
 <div class="card" id="syncCard">
@@ -182,10 +178,11 @@ h1{padding-right:170px}
     <button id="rsil" type="button">Silence until back in range</button>
     <button id="rtest" type="button">Test alarm</button> <button id="rtest2" type="button">Test early warning</button> <button id="rtest3" type="button">Test back-in-range tone</button>
   </div>
-  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours graph next to BTC SPOT <span id="trailMsg" class="note"></span></label></div>
+  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours graph next to the position payoff <span id="trailMsg" class="note"></span></label></div>
   <div id="rbanner" style="margin:4px 0;font-size:15px"></div>
   <div id="posTip" style="min-height:44px;margin:4px 0"></div>
-  <div id="posChart"></div>
+  <div class="posrow" id="posRow"><div id="posChart" style="min-width:0"></div>
+  <div class="card" id="h24Card" style="display:none;margin:0"><div id="h24Tip2" style="font-size:13px;min-height:34px">–</div><div id="h24Chart"></div></div></div>
   <div id="posStats" class="note"></div>
   <label style="flex-direction:row;align-items:center;gap:6px;margin-top:8px"><input id="cinc" type="checkbox" style="width:auto" checked> Include closed legs of this expiry (combined result)</label>
   <div id="posClosed"></div>
@@ -2093,7 +2090,7 @@ function drawPosition(){
     rngCheck(null);
     return;
   }
-  const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
+  const W = 900, H = 330, L = 64, R = 34, T = 14, B = 34;
   const minP = Math.min(...pr.P, 0), maxP = Math.max(...pr.P, 0), pad = (maxP - minP || 1) * 0.08;
   const trail = [];
   const tv = trail.map(p => p.v);
@@ -4071,21 +4068,21 @@ setInterval(() => {
   if ($("trailOn").checked && (!h24Cache || h24Cache.key !== k)) trailRefresh(true);
 }, 1500);
 
-// ---------- Last 24 hours: its own graph next to the BTC SPOT card (x = time; purple = P&L at mark, grey = BTC price, each with its own y axis) ----------
+// ---------- Last 24 hours: its own graph next to the position payoff chart (x = time; purple = P&L at mark, grey = BTC price, each with its own y axis) ----------
 let h24Pts = [];
 function drawH24(){
-  const card = $("h24Card"), row = $("spotRow"); if (!card) return;
+  const card = $("h24Card"), row = $("posRow"); if (!card) return;
   const on = $("trailOn").checked; let pr = null; try { pr = positionProfile(); } catch (e) {}
   if (!on || !pr){ card.style.display = "none"; row.classList.remove("two"); h24Pts = []; return; }
   card.style.display = ""; row.classList.add("two");
   if (!h24Cache || h24Cache.key !== h24Key()){ $("h24Chart").innerHTML = '<div class="note">Loading the last 24 hours…</div>'; return; }
   const trail = h24Cache.pts.filter(p => p.btc).map(p => ({t: p.t, btc: p.btc, v: p.pnl + pr.off, live: p.live}));
   h24Pts = trail; if (trail.length < 2){ $("h24Chart").innerHTML = '<div class="note">Not enough points yet.</div>'; return; }
-  const W = 560, H = 270, L = 54, R = 54, T = 16, B = 30, n = trail.length, tA = trail[0].t, tB = Math.max(trail[n - 1].t, tA + 1);
+  const W = 900, H = 330, L = 64, R = 64, T = 18, B = 34, n = trail.length, tA = trail[0].t, tB = Math.max(trail[n - 1].t, tA + 1);
   const vs = trail.map(p => p.v), v0 = Math.min(...vs), v1 = Math.max(...vs), vp = (v1 - v0 || 1) * 0.12, vmin = v0 - vp, vmax = v1 + vp;
   const bs = trail.map(p => p.btc), b0 = Math.min(...bs), b1 = Math.max(...bs), bp = (b1 - b0 || 1) * 0.12, bmin = b0 - bp, bmax = b1 + bp;
   const X = t => L + (t - tA) / (tB - tA) * (W - L - R), Y = v => T + (H - T - B) * (1 - (v - vmin) / (vmax - vmin)), YB = v => T + (H - T - B) * (1 - (v - bmin) / (bmax - bmin));
-  let g = `<text x="${L}" y="11" font-size="12" font-weight="700" fill="#8e44ad">Last 24 hours</text><text x="${L + 92}" y="11" font-size="11" fill="#8e44ad">P&amp;L at mark (left)</text><text x="${W - R}" y="11" font-size="11" text-anchor="end" fill="var(--mut)">BTC price (right)</text>`;
+  let g = `<text x="${L}" y="11" font-size="12" font-weight="700" fill="#8e44ad">Last 24 hours</text><text x="${L + 100}" y="11" font-size="11" fill="#8e44ad">P&amp;L at mark (left)</text><text x="${W - R}" y="11" font-size="11" text-anchor="end" fill="var(--mut)">BTC price (right)</text>`;
   for (let k = 0; k <= 4; k++){
     const v = vmin + (vmax - vmin) * k / 4, bv = bmin + (bmax - bmin) * k / 4, yy = Y(v);
     g += `<line x1="${L}" x2="${W - R}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)"/><text x="${L - 6}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="#8e44ad">${f(v, 0)}</text><text x="${W - R + 5}" y="${(yy + 4).toFixed(1)}" font-size="11" fill="var(--mut)">${f(bv, 0)}</text>`;
@@ -4114,7 +4111,7 @@ function drawH24(){
 }
 async function trailRefresh(force){
   const m = $("trailMsg"); if (!$("trailOn").checked){ m.textContent = ""; drawPosition(); return; }
-  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(shown next to the BTC SPOT card)"; }
+  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(shown next to the payoff chart)"; }
   catch (e) { m.textContent = "– could not load: " + e.message; }
   drawPosition();
 }
