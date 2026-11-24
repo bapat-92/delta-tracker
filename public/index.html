@@ -2062,21 +2062,17 @@ $("posChart").addEventListener("pointermove", e => {
   const svg = $("posChart").querySelector("svg"); if (!svg || !posGeom) return;
   const r = svg.getBoundingClientRect(); if (!r.width) return;
   const g = posGeom, xv = (e.clientX - r.left) / r.width * g.W, yp = (e.clientY - r.top) / r.height * g.H;
-  const lower = !!(g.y2 && yp > g.H1 + 18), fr = (xv - g.L) / (g.W - g.L - g.R);
-  const bv = lower ? g.lo2 + fr * (g.hi2 - g.lo2) : g.pr.lo + fr * (g.pr.hi - g.pr.lo);
-  showCursor(bv);
-  const hi = $("posTrHi"); if (hi) hi.setAttribute("visibility", "hidden");
-  if (posTrail.length && g.y2){
-    const yv = Math.min(g.T2 + g.PH, Math.max(g.T2, (e.clientY - r.top) / r.height * g.H)); let best = null, bd = 1e9;
-    // snap along the vertical cursor: take the points closest in BTC price (x), and among those the one nearest the pointer's height
-    const dx = p => Math.abs(g.x2(p.btc) - g.x2(bv)), mdx = Math.min(...posTrail.map(dx)), tol = mdx + 4;
-    posTrail.forEach(p => { if (dx(p) <= tol){ const d = Math.abs(g.y2(p.v) - yv); if (d < bd){ bd = d; best = p; } } });
-    if (best && mdx < 40){
-      hi.setAttribute("cx", g.x2(best.btc).toFixed(1)); hi.setAttribute("cy", g.y2(best.v).toFixed(1)); hi.setAttribute("visibility", "visible");
-      const tm = new Date(best.t * 1000).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
-      $("posTip").innerHTML += `<div style="margin-top:4px;color:#8e44ad"><b>Trail point ${tm}${best.live ? " (now)" : ""}</b>: BTC was <b>${f(best.btc, 0)}</b> · P&amp;L at mark <b class="${best.v >= 0 ? "g" : "l"}">${money(best.v)}</b></div>`;
-    }
+  const lower = !!(g.y2 && yp > g.H1 + 18), fr = (xv - g.L) / (g.W - g.L - g.R - (g.y2 && yp > g.H1 + 18 ? 44 : 0)), hi = $("posTrHi");
+  if (lower && posTrail.length){
+    const tt = g.tA + Math.min(1, Math.max(0, fr)) * (g.tB - g.tA); let best = posTrail[0];
+    posTrail.forEach(p => { if (Math.abs(p.t - tt) < Math.abs(best.t - tt)) best = p; });
+    showCursor(best.btc); if (hi){ hi.setAttribute("cx", g.x2(best.t).toFixed(1)); hi.setAttribute("cy", g.y2(best.v).toFixed(1)); hi.setAttribute("visibility", "visible"); }
+    const tm = new Date(best.t * 1000).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
+    $("posTip").innerHTML += `<div style="margin-top:4px;color:#8e44ad"><b>${tm}${best.live ? " (now)" : ""}</b>: BTC was <b>${f(best.btc, 0)}</b> · P&amp;L at mark <b class="${best.v >= 0 ? "g" : "l"}">${money(best.v)}</b></div>`;
+    return;
   }
+  if (hi) hi.setAttribute("visibility", "hidden");
+  showCursor(g.pr.lo + fr * (g.pr.hi - g.pr.lo));
 });
 $("posChart").addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideCursor(); });
 
@@ -2127,30 +2123,33 @@ function drawPosition(){
   const spotLine = `<line x1="${x(pr.spot).toFixed(1)}" x2="${x(pr.spot).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--acc)" stroke-dasharray="5 4"/><text x="${(x(pr.spot) + 4).toFixed(1)}" y="${T + 11}" font-size="11" fill="var(--acc)">spot ${f(pr.spot, 0)}</text>`;
   const nowDot = lastNet !== null && lastNet !== undefined && lastRes
     ? `<circle cx="${x(pr.spot).toFixed(1)}" cy="${y(lastNet + pr.off).toFixed(1)}" r="5" fill="var(--acc)"/><text x="${(x(pr.spot) + 8).toFixed(1)}" y="${(y(lastNet + pr.off) - 6).toFixed(1)}" font-size="11" fill="var(--acc)">now ${money(lastNet + pr.off)}</text>` : "";
-  let trailSvg = "", HT = H, y2 = null, x2 = null, lo2 = 0, hi2 = 1, T2 = H + 26, PH = 120;
+  let trailSvg = "", HT = H, y2 = null, x2 = null, tA = 0, tB = 1, T2 = H + 26, PH = 120, yb = null;
   if (trail.length > 1){
-    HT = H + 190;
+    HT = H + 200;
     const n = trail.length, tvs = trail.map(p => p.v), t0 = Math.min(...tvs), t1 = Math.max(...tvs), pd = (t1 - t0 || 1) * 0.12, v2min = t0 - pd, v2max = t1 + pd;
     y2 = v => T2 + PH * (1 - (v - v2min) / (v2max - v2min));
-    const bvs = trail.map(p => p.btc).concat([pr.spot]), b0 = Math.min(...bvs), b1 = Math.max(...bvs), bp = (b1 - b0 || pr.spot * 0.002) * 0.12; lo2 = b0 - bp; hi2 = b1 + bp;
-    x2 = S => L + (S - lo2) / (hi2 - lo2) * (W - L - R);
+    tA = trail[0].t; tB = trail[n - 1].t; if (tB <= tA) tB = tA + 1;
+    x2 = t => L + (t - tA) / (tB - tA) * (W - L - R - 44);
+    const bvs = trail.map(p => p.btc), b0 = Math.min(...bvs), b1 = Math.max(...bvs), bp = (b1 - b0 || 1) * 0.12;
+    yb = v => T2 + PH * (1 - (v - (b0 - bp)) / (b1 - b0 + 2 * bp));
     const B2 = T2 + PH;
-    trailSvg += `<text x="${L}" y="${H + 14}" font-size="12" font-weight="700" fill="#8e44ad">Last 24 hours: BTC price vs P&amp;L at mark (own price and P&amp;L scales, zoomed to the last 24 hours)</text>`;
+    trailSvg += `<text x="${L}" y="${H + 14}" font-size="12" font-weight="700" fill="#8e44ad">Last 24 hours: P&amp;L at mark over time (purple, left scale) · BTC price (grey, right scale)</text>`;
     for (let k = 0; k <= 3; k++){
-      const v = v2min + (v2max - v2min) * k / 3, yy = y2(v);
-      trailSvg += `<line x1="${L}" x2="${W - R}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)"/><text x="${L - 6}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--mut)">${f(v, 0)}</text>`;
+      const v = v2min + (v2max - v2min) * k / 3, yy = y2(v), bvv = (b0 - bp) + (b1 - b0 + 2 * bp) * k / 3;
+      trailSvg += `<line x1="${L}" x2="${W - R - 44}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)"/><text x="${L - 6}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="#8e44ad">${f(v, 0)}</text><text x="${W - R - 40}" y="${(yy + 4).toFixed(1)}" font-size="10" fill="var(--mut)">${f(bvv, 0)}</text>`;
     }
-    if (v2min < 0 && v2max > 0) trailSvg += `<line x1="${L}" x2="${W - R}" y1="${y2(0).toFixed(1)}" y2="${y2(0).toFixed(1)}" stroke="var(--mut)"/>`;
-    for (let k = 0; k <= 5; k++){ const S = lo2 + (hi2 - lo2) * k / 5; trailSvg += `<text x="${x2(S).toFixed(1)}" y="${B2 + 16}" text-anchor="middle" font-size="11" fill="var(--mut)">${f(S, 0)}</text>`; }
-    pr.be.forEach(b => { if (b >= lo2 && b <= hi2) trailSvg += `<line x1="${x2(b).toFixed(1)}" x2="${x2(b).toFixed(1)}" y1="${T2}" y2="${B2}" stroke="var(--mut)" stroke-dasharray="2 4" opacity="0.7"/>`; });
-    trailSvg += `<line x1="${x2(pr.spot).toFixed(1)}" x2="${x2(pr.spot).toFixed(1)}" y1="${T2}" y2="${B2}" stroke="var(--acc)" stroke-dasharray="5 4"/><text x="${(x2(pr.spot) + 4).toFixed(1)}" y="${T2 + 11}" font-size="10" fill="var(--acc)">spot ${f(pr.spot, 0)}</text>`;
-    for (let i = 1; i < n; i++){
-      const a = trail[i - 1], b = trail[i];
-      trailSvg += `<line x1="${x2(a.btc).toFixed(1)}" y1="${y2(a.v).toFixed(1)}" x2="${x2(b.btc).toFixed(1)}" y2="${y2(b.v).toFixed(1)}" stroke="#8e44ad" stroke-width="1.8" stroke-linecap="round" opacity="${(0.12 + 0.8 * i / n).toFixed(2)}"/>`;
+    if (v2min < 0 && v2max > 0) trailSvg += `<line x1="${L}" x2="${W - R - 44}" y1="${y2(0).toFixed(1)}" y2="${y2(0).toFixed(1)}" stroke="var(--mut)"/>`;
+    // time ticks every 4 hours on the viewer's clock
+    const step = 4 * 3600, tz = new Date(tA * 1000).getTimezoneOffset() * 60;
+    for (let t = Math.ceil((tA - tz) / step) * step + tz; t <= tB; t += step){
+      const hh = new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
+      trailSvg += `<line x1="${x2(t).toFixed(1)}" x2="${x2(t).toFixed(1)}" y1="${T2}" y2="${B2}" stroke="var(--line)"/><text x="${x2(t).toFixed(1)}" y="${B2 + 16}" text-anchor="middle" font-size="11" fill="var(--mut)">${hh}</text>`;
     }
+    trailSvg += `<polyline fill="none" stroke="var(--mut)" stroke-width="1.2" opacity="0.7" points="${trail.map(p => x2(p.t).toFixed(1) + "," + yb(p.btc).toFixed(1)).join(" ")}"/>`;
+    trailSvg += `<polyline fill="none" stroke="#8e44ad" stroke-width="2" stroke-linejoin="round" points="${trail.map(p => x2(p.t).toFixed(1) + "," + y2(p.v).toFixed(1)).join(" ")}"/>`;
     const f0 = trail[0], l0 = trail[n - 1];
-    trailSvg += `<circle cx="${x2(f0.btc).toFixed(1)}" cy="${y2(f0.v).toFixed(1)}" r="3.5" fill="none" stroke="#8e44ad" stroke-width="1.5"/><text x="${(x2(f0.btc) + 6).toFixed(1)}" y="${(y2(f0.v) - 5).toFixed(1)}" font-size="10" fill="#8e44ad">24h ago</text>`;
-    trailSvg += `<circle cx="${x2(l0.btc).toFixed(1)}" cy="${y2(l0.v).toFixed(1)}" r="4.5" fill="#8e44ad"/><text x="${(x2(l0.btc) + 8).toFixed(1)}" y="${(y2(l0.v) - 6).toFixed(1)}" font-size="10" fill="#8e44ad">now</text>`;
+    trailSvg += `<text x="${L}" y="${B2 + 30}" font-size="10" fill="#8e44ad">24h ago</text><text x="${W - R - 44}" y="${B2 + 30}" text-anchor="end" font-size="10" fill="#8e44ad">now</text>`;
+    trailSvg += `<circle cx="${x2(l0.t).toFixed(1)}" cy="${y2(l0.v).toFixed(1)}" r="4.5" fill="#8e44ad"/><text x="${(x2(l0.t) - 8).toFixed(1)}" y="${(y2(l0.v) - 7).toFixed(1)}" text-anchor="end" font-size="10" fill="#8e44ad">now ${money(l0.v)}</text>`;
   }
   posTrail = trail;
   const beMarks = pr.be.map(b => `<circle cx="${x(b).toFixed(1)}" cy="${y(0).toFixed(1)}" r="4" fill="var(--card)" stroke="var(--fg)" stroke-width="1.5"/>`).join("");
@@ -2161,7 +2160,7 @@ function drawPosition(){
     <line id="posCur" x1="0" x2="0" y1="${T}" y2="${y2 ? T2 + PH : H - B}" stroke="var(--fg)" stroke-width="1" visibility="hidden"/>
     <circle id="posCurDot" cx="0" cy="0" r="5" fill="var(--fg)" stroke="var(--card)" stroke-width="2" visibility="hidden"/>
     <text id="posCurTxt" x="0" y="0" font-size="12" font-weight="700" fill="var(--fg)" visibility="hidden"></text></svg>`;
-  posGeom = {pr, W, H: HT, H1: H, L, R, T, B, x, y, y2, x2, lo2, hi2, T2, PH};
+  posGeom = {pr, W, H: HT, H1: H, L, R, T, B, x, y, y2, x2, tA, tB, T2, PH};
   const cl = closedLegs();
   $("posClosed").innerHTML = cl.length ? `<p style="margin:10px 0 4px"><b>Closed legs of this expiry</b> <span class="note">(from the journal, included in the chart and totals)</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>` +
     cl.map(c => `<tr><td style="text-align:left">${esc(c.date)}</td><td style="text-align:left">${esc(c.s)}</td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry)}</td><td>${f(c.exit)}</td><td class="${sg(c.pnl)}">${money(c.pnl)}</td></tr>`).join("") +
