@@ -426,6 +426,7 @@ h1{padding-right:170px}
     <label>Strikes within ±% of BTC (the backtest needs 10 or more)<input id="hband" type="number" min="3" step="1" value="10"></label>
     <label>Strike step<input id="hstep" type="number" min="50" step="50" value="200"></label>
     <label>Parallel downloads (raise carefully, Delta rate-limits)<input id="hpar" type="number" min="1" max="6" step="1" value="3"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="hcal" type="checkbox" style="width:auto"> Calendar spreads: also download the NEXT day's expiry options over the same window (about twice the data and time)</label>
     <button id="hgo" type="button">Start download</button>
     <button id="hstop" type="button" disabled>Stop after this expiry</button>
     <button id="hbtc" type="button">Download BTC 5-minute prices with volume (CSV)</button>
@@ -3822,7 +3823,15 @@ $("hgo").onclick = async () => {
           await runPool(syms, par, async (x, i) => { const r = await candles15net(base, x[2], wa, wb, "1m"); if (r.failed) fail++; res[i] = r; });
           if (fail > syms.length * 0.2){ bad++; log.textContent += `  ${day}: ${fail}/${syms.length} downloads failed (rate limit?), skipped\n`; done++; continue; }
           let part = []; syms.forEach((x, i) => { for (const c of res[i]) part.push(`${day},${x[2]},${x[0]},${x[1]},${iso(c.t)},${c.t},${c.o},${c.c}\n`); rows += res[i].length; });
-          await write(part.join("")); done++;
+          await write(part.join(""));
+          if ($("hcal").checked && !hStop){                                    // calendar spreads: the next day's expiry, same strikes, same window; rows are tagged <day>_next
+            const code2 = ddmmyy((D + 86400) * 1000), syms2 = []; for (let K = lo; K <= hi; K += step){ syms2.push(["C", K, `C-BTC-${K}-${code2}`]); syms2.push(["P", K, `P-BTC-${K}-${code2}`]); }
+            const res2 = new Array(syms2.length); let fail2 = 0;
+            await runPool(syms2, par, async (x, i) => { const r = await candles15net(base, x[2], wa, wb, "1m"); if (r.failed) fail2++; res2[i] = r; });
+            if (fail2 > syms2.length * 0.2){ log.textContent += `  ${day}: next-day expiry, ${fail2}/${syms2.length} downloads failed, skipped\n`; }
+            else { let p2 = []; syms2.forEach((x, i) => { for (const c of res2[i]) p2.push(`${day}_next,${x[2]},${x[0]},${x[1]},${iso(c.t)},${c.t},${c.o},${c.c}\n`); rows += res2[i].length; }); await write(p2.join("")); }
+          }
+          done++;
           const el = (Date.now() - t0) / 1000, left = el / Math.max(1, done) * (days.length - done);
           msg.textContent = `File ${ci + 1}/${chunks.length}, expiry ${day}: ${done}/${days.length} done (${Math.round(done * 100 / days.length)}%), about ${Math.ceil(left / 60)} min left. ${saved} file${saved === 1 ? "" : "s"} saved.`;
         }
