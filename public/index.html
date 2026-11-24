@@ -82,7 +82,7 @@ h1{padding-right:170px}
   <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
 </div>
-<div class="card" id="h24Card" style="display:none"><div id="h24Tip2" style="font-size:13px;min-height:34px">–</div><div id="h24Chart"></div></div>
+<div class="card" id="h24Card" style="display:none"><div style="display:flex;justify-content:space-between;gap:8px"><div id="h24Tip2" style="font-size:13px;min-height:34px">–</div><button type="button" id="h24Hide" style="padding:2px 8px;font-size:12px;height:26px;flex:none">Hide</button></div><div id="h24Chart"></div></div>
 </div>
 
 <div class="card" id="syncCard">
@@ -2083,7 +2083,7 @@ $("posChart").addEventListener("pointermove", e => {
 $("posChart").addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideCursor(); });
 
 function drawPosition(){
-  try { drawH24(); } catch (e) {}
+  try { drawH24(); } catch (e) { const c = $("h24Card"); if (c){ c.style.display = ""; $("h24Chart").innerHTML = '<div class="note l">Could not draw the 24-hour graph: ' + esc(e.message) + "</div>"; } }
   const pr = positionProfile();
   if (!pr){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
@@ -4118,10 +4118,12 @@ async function trailRefresh(force){
   catch (e) { m.textContent = "– could not load: " + e.message; }
   drawPosition();
 }
-$("trailOn").addEventListener("change", () => { try { localStorage.setItem("trailOn", $("trailOn").checked ? "1" : "0"); } catch (e) {} trailRefresh(false); });
+$("h24Hide").onclick = () => { $("trailOn").checked = false; $("trailOn").dispatchEvent(new Event("change")); };
+$("trailOn").addEventListener("change", () => { try { localStorage.setItem("trailOn2", $("trailOn").checked ? "1" : "0"); } catch (e) {} trailRefresh(false); });
 setInterval(() => { if ($("trailOn").checked) trailRefresh(false); }, 60000);
-let trailPref = null; try { trailPref = localStorage.getItem("trailOn"); } catch (e) {}
-if (trailPref !== "0"){ $("trailOn").checked = true; setTimeout(() => trailRefresh(false), 3000); }
+let trailPref = null; try { trailPref = localStorage.getItem("trailOn2"); } catch (e) {}
+if (trailPref !== "0") $("trailOn").checked = true;
+drawPosition(); trailRefresh(false); setTimeout(() => trailRefresh(false), 3000); setTimeout(() => trailRefresh(false), 12000);
 setInterval(() => { if ($("h24auto").checked) h24Load(); }, 60000);
 $("h24auto").addEventListener("change", () => { try { localStorage.setItem("h24auto", $("h24auto").checked ? "1" : "0"); } catch (e) {} if ($("h24auto").checked) h24Load(); });
 try { if (localStorage.getItem("h24auto") === "1"){ $("h24auto").checked = true; setTimeout(h24Load, 4000); } } catch (e) {}
