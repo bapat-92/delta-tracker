@@ -29,6 +29,10 @@ td input{min-width:70px}
 #alert{display:none;background:var(--warn);color:var(--loss);border:1px solid var(--loss);border-radius:8px;padding:10px;margin-bottom:12px;font-weight:600}
 #status{color:var(--mut);font-size:13px}
 .spotcard{text-align:center;padding:18px 12px;border-width:2px}
+.spotrow{display:grid;grid-template-columns:1fr;gap:12px;align-items:stretch}
+.spotrow>.card{margin:0}
+@media(min-width:900px){.spotrow.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+#h24Card{padding:10px 12px}
 .spotlbl{font-size:13px;letter-spacing:.12em;color:var(--mut);font-weight:700}
 .spotnum{font-size:clamp(44px,13vw,84px);font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
 .spotsub{font-size:15px;color:var(--mut);margin-top:4px}
@@ -69,6 +73,7 @@ h1{padding-right:170px}
   <p><button id="secAll">Show all</button> <button id="secNone">Hide all</button></p>
 </details>
 
+<div class="spotrow" id="spotRow">
 <div class="card spotcard" id="spotCard">
   <div class="spotlbl">BTC SPOT</div>
   <div class="spotnum" id="spot">–</div>
@@ -77,6 +82,8 @@ h1{padding-right:170px}
   <div class="spotsub" id="spotTv" style="font-size:14px"></div>
   <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
+</div>
+<div class="card" id="h24Card" style="display:none"><div id="h24Tip2" style="font-size:13px;min-height:34px">–</div><div id="h24Chart"></div></div>
 </div>
 
 <div class="card" id="syncCard">
@@ -175,7 +182,7 @@ h1{padding-right:170px}
     <button id="rsil" type="button">Silence until back in range</button>
     <button id="rtest" type="button">Test alarm</button> <button id="rtest2" type="button">Test early warning</button> <button id="rtest3" type="button">Test back-in-range tone</button>
   </div>
-  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours path <span id="trailMsg" class="note"></span></label></div>
+  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours graph next to BTC SPOT <span id="trailMsg" class="note"></span></label></div>
   <div id="rbanner" style="margin:4px 0;font-size:15px"></div>
   <div id="posTip" style="min-height:44px;margin:4px 0"></div>
   <div id="posChart"></div>
@@ -2077,6 +2084,7 @@ $("posChart").addEventListener("pointermove", e => {
 $("posChart").addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideCursor(); });
 
 function drawPosition(){
+  try { drawH24(); } catch (e) {}
   const pr = positionProfile();
   if (!pr){
     $("posNote").textContent = "Add legs with lots to see the payoff."; $("posChart").innerHTML = ""; $("posStats").innerHTML = "";
@@ -2087,10 +2095,7 @@ function drawPosition(){
   }
   const W = 900, H = 300, L = 64, R = 14, T = 14, B = 34;
   const minP = Math.min(...pr.P, 0), maxP = Math.max(...pr.P, 0), pad = (maxP - minP || 1) * 0.08;
-  let trail = [];
-  if ($("trailOn").checked && h24Cache && h24Cache.key === h24Key()){
-    trail = h24Cache.pts.filter(p => p.btc && p.btc >= pr.lo && p.btc <= pr.hi).map(p => ({t: p.t, btc: p.btc, v: p.pnl + pr.off, live: p.live}));
-  }
+  const trail = [];
   const tv = trail.map(p => p.v);
   const vmin = minP - pad, vmax = maxP + pad;
   const x = S => L + (W - L - R) * (S - pr.lo) / (pr.hi - pr.lo);
@@ -4065,9 +4070,51 @@ setInterval(() => {
   if ($("h24out").innerHTML && h24Shown !== k && !h24Busy) h24Load();
   if ($("trailOn").checked && (!h24Cache || h24Cache.key !== k)) trailRefresh(true);
 }, 1500);
+
+// ---------- Last 24 hours: its own graph next to the BTC SPOT card (x = time; purple = P&L at mark, grey = BTC price, each with its own y axis) ----------
+let h24Pts = [];
+function drawH24(){
+  const card = $("h24Card"), row = $("spotRow"); if (!card) return;
+  const on = $("trailOn").checked; let pr = null; try { pr = positionProfile(); } catch (e) {}
+  if (!on || !pr){ card.style.display = "none"; row.classList.remove("two"); h24Pts = []; return; }
+  card.style.display = ""; row.classList.add("two");
+  if (!h24Cache || h24Cache.key !== h24Key()){ $("h24Chart").innerHTML = '<div class="note">Loading the last 24 hours…</div>'; return; }
+  const trail = h24Cache.pts.filter(p => p.btc).map(p => ({t: p.t, btc: p.btc, v: p.pnl + pr.off, live: p.live}));
+  h24Pts = trail; if (trail.length < 2){ $("h24Chart").innerHTML = '<div class="note">Not enough points yet.</div>'; return; }
+  const W = 560, H = 270, L = 54, R = 54, T = 16, B = 30, n = trail.length, tA = trail[0].t, tB = Math.max(trail[n - 1].t, tA + 1);
+  const vs = trail.map(p => p.v), v0 = Math.min(...vs), v1 = Math.max(...vs), vp = (v1 - v0 || 1) * 0.12, vmin = v0 - vp, vmax = v1 + vp;
+  const bs = trail.map(p => p.btc), b0 = Math.min(...bs), b1 = Math.max(...bs), bp = (b1 - b0 || 1) * 0.12, bmin = b0 - bp, bmax = b1 + bp;
+  const X = t => L + (t - tA) / (tB - tA) * (W - L - R), Y = v => T + (H - T - B) * (1 - (v - vmin) / (vmax - vmin)), YB = v => T + (H - T - B) * (1 - (v - bmin) / (bmax - bmin));
+  let g = `<text x="${L}" y="11" font-size="12" font-weight="700" fill="#8e44ad">Last 24 hours</text><text x="${L + 92}" y="11" font-size="11" fill="#8e44ad">P&amp;L at mark (left)</text><text x="${W - R}" y="11" font-size="11" text-anchor="end" fill="var(--mut)">BTC price (right)</text>`;
+  for (let k = 0; k <= 4; k++){
+    const v = vmin + (vmax - vmin) * k / 4, bv = bmin + (bmax - bmin) * k / 4, yy = Y(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)"/><text x="${L - 6}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="#8e44ad">${f(v, 0)}</text><text x="${W - R + 5}" y="${(yy + 4).toFixed(1)}" font-size="11" fill="var(--mut)">${f(bv, 0)}</text>`;
+  }
+  if (vmin < 0 && vmax > 0) g += `<line x1="${L}" x2="${W - R}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}" stroke="var(--mut)"/>`;
+  const step = 4 * 3600, tz = new Date(tA * 1000).getTimezoneOffset() * 60;
+  for (let t = Math.ceil((tA - tz) / step) * step + tz; t <= tB; t += step){
+    const hh = new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
+    g += `<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${T}" y2="${H - B}" stroke="var(--line)"/><text x="${X(t).toFixed(1)}" y="${H - B + 15}" text-anchor="middle" font-size="11" fill="var(--mut)">${hh}</text>`;
+  }
+  g += `<polyline fill="none" stroke="var(--mut)" stroke-width="1.3" opacity="0.75" points="${trail.map(p => X(p.t).toFixed(1) + "," + YB(p.btc).toFixed(1)).join(" ")}"/>`;
+  g += `<polyline fill="none" stroke="#8e44ad" stroke-width="2.2" stroke-linejoin="round" points="${trail.map(p => X(p.t).toFixed(1) + "," + Y(p.v).toFixed(1)).join(" ")}"/>`;
+  const l0 = trail[n - 1];
+  g += `<circle cx="${X(l0.t).toFixed(1)}" cy="${Y(l0.v).toFixed(1)}" r="4.5" fill="#8e44ad"/><circle cx="${X(l0.t).toFixed(1)}" cy="${YB(l0.btc).toFixed(1)}" r="3.5" fill="var(--mut)"/>`;
+  g += `<line id="h24v" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--fg)" opacity="0.5" visibility="hidden"/><circle id="h24d" r="5" fill="none" stroke="#8e44ad" stroke-width="2.5" visibility="hidden"/>`;
+  $("h24Chart").innerHTML = `<svg id="h24s" viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;touch-action:pan-y;cursor:crosshair">${g}</svg>`;
+  const tm = t => new Date(t * 1000).toLocaleString([], {day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false});
+  const tipFor = p => `<b>${tm(p.t)}${p.live ? " (now)" : ""}</b> · BTC <b>${f(p.btc, 0)}</b> · P&amp;L <b class="${p.v >= 0 ? "g" : "l"}">${money(p.v)}</b>`;
+  $("h24Tip2").innerHTML = "Now: " + tipFor(l0) + ` <span class="note">· 24 h range: P&amp;L ${money(v0)} to ${money(v1)}, BTC ${f(b0, 0)} to ${f(b1, 0)}. Hover to read a point.</span>`;
+  const sv = $("h24s"), mv = e => { const r = sv.getBoundingClientRect(); if (!r.width) return; const xv = (e.clientX - r.left) / r.width * W, tt = tA + Math.min(1, Math.max(0, (xv - L) / (W - L - R))) * (tB - tA);
+    let best = trail[0]; trail.forEach(p => { if (Math.abs(p.t - tt) < Math.abs(best.t - tt)) best = p; });
+    const vl = $("h24v"), dt = $("h24d"); vl.setAttribute("x1", X(best.t).toFixed(1)); vl.setAttribute("x2", X(best.t).toFixed(1)); vl.setAttribute("visibility", "visible");
+    dt.setAttribute("cx", X(best.t).toFixed(1)); dt.setAttribute("cy", Y(best.v).toFixed(1)); dt.setAttribute("visibility", "visible"); $("h24Tip2").innerHTML = tipFor(best); };
+  sv.addEventListener("pointermove", mv); sv.addEventListener("pointerdown", mv);
+  sv.addEventListener("pointerleave", () => { $("h24v").setAttribute("visibility", "hidden"); $("h24d").setAttribute("visibility", "hidden"); });
+}
 async function trailRefresh(force){
   const m = $("trailMsg"); if (!$("trailOn").checked){ m.textContent = ""; drawPosition(); return; }
-  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(purple path: BTC price vs P&L at mark, faint = older)"; }
+  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(shown next to the BTC SPOT card)"; }
   catch (e) { m.textContent = "– could not load: " + e.message; }
   drawPosition();
 }
