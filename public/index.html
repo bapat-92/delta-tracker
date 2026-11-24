@@ -350,6 +350,13 @@ h1{padding-right:170px}
         <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="21" style="width:auto"> 21 h</label>
         <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="22" style="width:auto"> 22 h</label>
         <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="23" style="width:auto"> 23 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="24" style="width:auto"> 24 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="26" style="width:auto"> 26 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="28" style="width:auto"> 28 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="30" style="width:auto"> 30 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="36" style="width:auto"> 36 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="42" style="width:auto"> 42 h</label>
+        <label style="flex-direction:row;align-items:center;gap:5px;white-space:nowrap"><input class="dbh" type="checkbox" value="48" style="width:auto"> 48 h</label>
         <button type="button" id="dbxhclr" style="grid-column:1/-1">Clear</button>
       </div>
     </details>
@@ -3117,12 +3124,13 @@ $("dbgo").onclick = async () => {
       if (rows.length) exps.push({D, tx, code: ddmmyy(D * 1000), rows, settle: byT.get(tx - 300).close});
     }
     if (!exps.length){ prog.className = "note l"; prog.textContent = "No completed expiries with BTC data for those times."; return; }
-    const results = []; let done = 0;
+    const results = []; let done = 0, maxHr = Math.max(0, ...slots.filter(x => /^H\d+$/.test(x)).map(x => Number(x.slice(1))));
+    if (maxHr * 3600 > 1900 * rs - 3600){ prog.className = "note l"; prog.textContent = `Entries ${maxHr} h before expiry need 5-minute or 15-minute prices (1-minute only reaches about 31 hours back). Pick a coarser price resolution and run again.`; return; }
     for (const E of exps){
       done++; prog.textContent = `Expiry ${E.code} (${done}/${exps.length}): loading option prices… (${dbCache.hits} from this browser, ${dbCache.cloud} from cloud, ${dbCache.miss} downloaded from Delta)`;
       const sp = E.rows.map(r => r.spot), loK = Math.floor(Math.min(...sp) * 0.9 / step) * step, hiK = Math.ceil(Math.max(...sp) * 1.1 / step) * step, tmin = Math.min(...E.rows.map(r => r.t0));
       const syms = []; for (let K = loK; K <= hiK; K += step){ syms.push({K, c: true, sym: `C-BTC-${K}-${E.code}`}); syms.push({K, c: false, sym: `P-BTC-${K}-${E.code}`}); }
-      dbCache.fail = 0; const ser = new Map(), cacheable = E.tx + rs < now - 3600, wa = Math.max(E.D - 43200, E.tx - 1900 * rs), wb = E.tx + rs, fresh = {};
+      dbCache.fail = 0; const ser = new Map(), cacheable = E.tx + rs < now - 3600, wa = Math.max(Math.min(E.D - 43200, E.tx - (maxHr + 1) * 3600), E.tx - 1900 * rs), wb = E.tx + rs, fresh = {};
       let cloud = null;
       if (cacheable && pw){
         const local = await Promise.all(syms.map(x => idbGet(resName + "|" + x.sym)));
@@ -3312,7 +3320,7 @@ const dbPick = ev => {
 ["dbout", "rpout"].forEach(id => { $(id).addEventListener("click", dbPick); window.dbBindChart($(id)); });
 $("rpgo").onclick = () => {
   const prog = $("dbprog"); if (dbRunning) return; const day = $("rpday").value;
-  const hrs = [...new Set($("rphours").value.split(/[\s,;]+/).map(Number).filter(x => x > 0 && x <= 23))];
+  const hrs = [...new Set($("rphours").value.split(/[\s,;]+/).map(Number).filter(x => x > 0 && x <= 72))];
   if (!day){ prog.className = "note l"; prog.textContent = "Choose the expiry date to replay."; return; }
   if (!hrs.length){ prog.className = "note l"; prog.textContent = "Enter start times as hours before expiry, e.g. 22,18,12,6."; return; }
   window.dbReplay = {day, hours: hrs}; $("dbgo").click();
