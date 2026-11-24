@@ -181,7 +181,7 @@ h1{padding-right:170px}
     <button id="rsil" type="button">Silence until back in range</button>
     <button id="rtest" type="button">Test alarm</button> <button id="rtest2" type="button">Test early warning</button> <button id="rtest3" type="button">Test back-in-range tone</button>
   </div>
-  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours graph next to BTC SPOT <span id="trailMsg" class="note"></span></label></div>
+  <div style="margin:6px 0"><label style="display:flex;flex-direction:row;align-items:center;gap:6px"><input id="trailOn" type="checkbox" style="width:auto"> Show the last 24 hours graph under BTC SPOT <span id="trailMsg" class="note"></span></label></div>
   <div id="rbanner" style="margin:4px 0;font-size:15px"></div>
   <div id="posTip" style="min-height:44px;margin:4px 0"></div>
   <div id="posChart"></div>
@@ -4075,7 +4075,8 @@ let h24Pts = [];
 function drawH24(){
   const card = $("h24Card"), row = $("spotRow"); if (!card) return;
   const on = $("trailOn").checked; let pr = null; try { pr = positionProfile(); } catch (e) {}
-  if (!on || !pr){ card.style.display = "none"; row.classList.remove("two"); h24Pts = []; return; }
+  if (!on){ card.style.display = "none"; row.classList.remove("two"); h24Pts = []; return; }
+  if (!pr){ card.style.display = ""; $("h24Tip2").textContent = "Last 24 hours"; $("h24Chart").innerHTML = '<div class="note">Add legs with lots in the position section and this graph (P&amp;L at mark and BTC price over the last 24 hours) will appear here.</div>'; h24Pts = []; return; }
   card.style.display = ""; row.classList.add("two");
   if (!h24Cache || h24Cache.key !== h24Key()){ $("h24Chart").innerHTML = '<div class="note">Loading the last 24 hours…</div>'; return; }
   const trail = h24Cache.pts.filter(p => p.btc).map(p => ({t: p.t, btc: p.btc, v: p.pnl + pr.off, live: p.live}));
@@ -4113,13 +4114,14 @@ function drawH24(){
 }
 async function trailRefresh(force){
   const m = $("trailMsg"); if (!$("trailOn").checked){ m.textContent = ""; drawPosition(); return; }
-  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(shown next to the BTC SPOT card)"; }
+  try { m.textContent = "loading…"; await h24Data(force); m.textContent = "(shown under the BTC SPOT card)"; }
   catch (e) { m.textContent = "– could not load: " + e.message; }
   drawPosition();
 }
 $("trailOn").addEventListener("change", () => { try { localStorage.setItem("trailOn", $("trailOn").checked ? "1" : "0"); } catch (e) {} trailRefresh(false); });
 setInterval(() => { if ($("trailOn").checked) trailRefresh(false); }, 60000);
-try { if (localStorage.getItem("trailOn") === "1"){ $("trailOn").checked = true; setTimeout(() => trailRefresh(false), 5000); } } catch (e) {}
+let trailPref = null; try { trailPref = localStorage.getItem("trailOn"); } catch (e) {}
+if (trailPref !== "0"){ $("trailOn").checked = true; setTimeout(() => trailRefresh(false), 3000); }
 setInterval(() => { if ($("h24auto").checked) h24Load(); }, 60000);
 $("h24auto").addEventListener("change", () => { try { localStorage.setItem("h24auto", $("h24auto").checked ? "1" : "0"); } catch (e) {} if ($("h24auto").checked) h24Load(); });
 try { if (localStorage.getItem("h24auto") === "1"){ $("h24auto").checked = true; setTimeout(h24Load, 4000); } } catch (e) {}
