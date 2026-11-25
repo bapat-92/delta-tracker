@@ -24,6 +24,9 @@ th{font-size:12px;color:var(--mut);font-weight:600}
 td:first-child,th:first-child{text-align:left}
 td input{min-width:70px}
 .g{color:var(--gain)}.l{color:var(--loss)}
+.mk{display:inline-block;padding:1px 8px;border-radius:9px;font-weight:700;font-size:12px;white-space:nowrap}.mk0{background:color-mix(in srgb,var(--gain) 16%,var(--card));color:var(--gain)}.mk1{background:color-mix(in srgb,#f0a000 24%,var(--card));color:#a86400}.mk2{background:color-mix(in srgb,var(--loss) 18%,var(--card));color:var(--loss)}
+#monCard.l2{border-color:var(--loss);border-width:2px}#monCard.l1{border-color:#f0a000;border-width:2px}
+#monTbl td,#monTbl th{padding:3px 8px;text-align:right;white-space:nowrap}#monTbl th:first-child,#monTbl td:first-child{text-align:left}
 .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .kpi div{font-size:12px;color:var(--mut)}.kpi b{display:block;font-size:20px;color:var(--fg)}
 #alert{display:none;background:var(--warn);color:var(--loss);border:1px solid var(--loss);border-radius:8px;padding:10px;margin-bottom:12px;font-weight:600}
@@ -80,6 +83,21 @@ h1{padding-right:170px}
   <div class="spotsub" id="spotTv" style="font-size:14px"></div>
   <div class="spotsub" id="spotVol" style="font-size:14px">Volume: <span id="vol15">–</span> 15m · <span id="vol60">–</span> 1h · <span id="vol120">–</span> 2h · <span id="vol240">–</span> 4h · <span id="vol1440">–</span> 24h</div>
   <div class="spotsub" style="font-size:12px">Spot updated <span id="spotTime">–</span> · P&amp;L updates with the legs refresh</div>
+</div>
+
+<div class="card" id="monCard">
+  <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:4px"><b>BTC spike monitor</b><span id="monPill" class="mk mk0">–</span></div>
+  <div id="monSum" style="font-size:14px;margin:2px 0 8px">Loading the last 24 hours of BTC prices…</div>
+  <div class="wrap"><table id="monTbl"><thead><tr><th>Window</th><th>Move</th><th>× normal move</th><th>Volume × 24h average</th><th>High-low range × normal</th></tr></thead><tbody id="monRows"></tbody></table></div>
+  <div id="monExtra" style="margin-top:8px;font-size:14px"></div>
+  <div class="row" style="margin:8px 0 2px">
+    <label>Amber from (× normal)<input id="monA" type="number" min="1" step="0.5" value="2" style="width:90px"></label>
+    <label>Red from (× normal)<input id="monR" type="number" min="1" step="0.5" value="3" style="width:90px"></label>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input id="monSnd" type="checkbox" style="width:auto"> Sound when the status turns red (uses the range alarm sound)</label>
+  </div>
+  <details style="margin-top:6px"><summary class="note" style="cursor:pointer">How each number is measured</summary>
+    <div class="note" style="margin-top:6px">All from Delta's BTCUSD 1-minute candles of the last 24 hours (refreshed every minute) plus the live price. <b>Move</b>: live price against the price that many minutes ago. <b>Normal move</b>: the average absolute move over every window of the same length in the last 24 hours, so "3×" means three times a typical move of that length in the current market. <b>Volume</b>: traded volume in the window divided by the average volume of a window of that length over 24 hours (the running minute is included). <b>Range</b>: high to low inside the window, against the average range of same-length windows. <b>Moving averages</b>: 20 and 100 five-minute candles. <b>Continuation</b>: the 1-hour and 2-hour moves point the same way and the 2-hour move is at least as big. <b>Range edges</b>: the break-evens of the position you entered; distance is also shown in "normal hours" (distance ÷ the normal 1-hour move). Status: green below the amber value, amber from it, red from the red value; for the range edges red means outside, closer than 1 normal hour, or reachable within 1 hour at the last hour's pace; amber means closer than 2 normal hours or reachable within 2 hours at that pace. The 24-hour baseline includes the current spike, so a very long spike lowers its own multiple a little. Alerts only, nothing is traded.</div>
+  </details>
 </div>
 
 <div class="card" id="syncCard">
@@ -4202,15 +4220,100 @@ $("hvgo").onclick = async () => {
 
 // ---------- BTC change over the last 15 min, 1 h and 2 h (1-minute candles, refreshed every minute) ----------
 let chgRef = null;
+// ---------- BTC spike monitor: move, volume, range, moving averages, continuation and distance to your range edges, each against the last 24 hours ----------
+const MON = {base: null, level: 0};
+const MON_W = [5, 15, 60];
+function monPrep(){
+  const a = chgRef && chgRef.arr; if (!a || a.length < 300){ MON.base = null; return; }
+  const t0 = a[0].t, t1 = a[a.length - 1].t, N = Math.floor((t1 - t0) / 60) + 1;
+  const O = new Float64Array(N), H = new Float64Array(N), L = new Float64Array(N), C = new Float64Array(N), V = new Float64Array(N), at = new Map();
+  a.forEach(c => at.set(Math.round((c.t - t0) / 60), c));
+  let prev = a[0].o;
+  for (let i = 0; i < N; i++){
+    const c = at.get(i);
+    if (c){ O[i] = c.o; C[i] = c.c > 0 ? c.c : c.o; H[i] = c.h > 0 ? c.h : Math.max(c.o, C[i]); L[i] = c.l > 0 ? c.l : Math.min(c.o, C[i]); V[i] = c.v; prev = C[i]; }
+    else { O[i] = H[i] = L[i] = C[i] = prev; V[i] = 0; }
+  }
+  const typ = {}, rng = {}, vol = {}; let sumV = 0; for (let i = 0; i < N; i++) sumV += V[i];
+  [5, 15, 60, 120].forEach(w => {
+    let sm = 0, sr = 0, n = 0;
+    for (let i = 0; i + w < N; i++){
+      sm += Math.abs(O[i + w] / O[i] - 1);
+      let hh = -Infinity, ll = Infinity; for (let k = i; k < i + w; k++){ if (H[k] > hh) hh = H[k]; if (L[k] < ll) ll = L[k]; }
+      sr += (hh - ll) / O[i]; n++;
+    }
+    typ[w] = n ? sm / n * 100 : 0; rng[w] = n ? sr / n * 100 : 0; vol[w] = sumV / N * w;
+  });
+  // 5-minute closes for the moving averages (the last, running bucket is replaced by the live price when shown)
+  const cl = []; let curB = null;
+  for (let i = 0; i < N; i++){ const b = Math.floor((t0 + i * 60) / 300); if (b !== curB){ cl.push(C[i]); curB = b; } else cl[cl.length - 1] = C[i]; }
+  MON.base = {t0, t1, N, O, H, L, C, V, typ, rng, vol, cl};
+}
+const monEma = (arr, n) => { const k = 2 / (n + 1); let e = arr[0]; for (let i = 1; i < arr.length; i++) e = arr[i] * k + e * (1 - k); return e; };
+const monLvl = (x, A, R) => x === null || !isFinite(x) ? 0 : x >= R ? 2 : x >= A ? 1 : 0;
+const monMk = (txt, lv) => `<span class="mk mk${lv}">${txt}</span>`;
+function monRender(){
+  const card = $("monCard"); if (!card) return;
+  const B = MON.base, sum = $("monSum"), pill = $("monPill");
+  if (!B){ sum.textContent = "Waiting for the last 24 hours of BTC prices (or Delta could not be reached)."; pill.className = "mk mk0"; pill.textContent = "–"; $("monRows").innerHTML = ""; $("monExtra").innerHTML = ""; return; }
+  const A = Math.max(1, Number($("monA").value) || 2), R = Math.max(A, Number($("monR").value) || 3);
+  const nowS = Math.floor(Date.now() / 1000), lastC = B.C[B.N - 1], cur = typeof lastSpotVal === "number" && lastSpotVal > 0 ? lastSpotVal : lastC;
+  const age = Math.round((nowS - B.t1) / 60), items = [];            // items: [level, text]
+  const mv = {}, rows = MON_W.map(w => {
+    const s = Math.max(0, Math.min(B.N - 1, Math.floor((nowS - B.t0) / 60) - w)), then = B.O[s];
+    let hh = cur, ll = cur, v = 0; for (let k = s; k < B.N; k++){ if (B.H[k] > hh) hh = B.H[k]; if (B.L[k] < ll) ll = B.L[k]; v += B.V[k]; }
+    const move = (cur / then - 1) * 100, mm = B.typ[w] > 0 ? Math.abs(move) / B.typ[w] : null, vm = B.vol[w] > 0 ? v / B.vol[w] : null, rg = (hh - ll) / then * 100, rm = B.rng[w] > 0 ? rg / B.rng[w] : null;
+    mv[w] = move; const lm = monLvl(mm, A, R), lv = monLvl(vm, A, R), lr = monLvl(rm, A, R), nm = w === 60 ? "1 hour" : w + " minutes";
+    if (lm) items.push([lm, `${nm} move ${move >= 0 ? "+" : ""}${f(move, 2)}% = ${f(mm, 1)}× normal`]);
+    if (lv) items.push([lv, `${nm} volume ${f(vm, 1)}× its 24h average`]);
+    if (lr) items.push([lr, `${nm} high-low range ${f(rm, 1)}× normal`]);
+    return `<tr><td>${nm}</td><td class="${move >= 0 ? "g" : "l"}"><b>${move >= 0 ? "+" : ""}${f(move, 2)}%</b></td><td>${monMk(mm === null ? "–" : f(mm, 1) + "×", lm)}</td><td>${monMk(vm === null ? "–" : f(vm, 1) + "×", lv)}</td><td>${monMk(rm === null ? "–" : f(rm, 1) + "×", lr)}</td></tr>`;
+  });
+  $("monRows").innerHTML = rows.join("");
+  // 2 hour move and continuation
+  const s2 = Math.max(0, Math.min(B.N - 1, Math.floor((nowS - B.t0) / 60) - 120)), m2 = (cur / B.O[s2] - 1) * 100, m1 = mv[60], typ1 = B.typ[60];
+  const cont = m1 * m2 > 0 && Math.abs(m2) >= Math.abs(m1), cm = typ1 > 0 ? Math.abs(m1) / typ1 : null, lc = cont ? monLvl(cm, A, R) : 0;
+  if (lc) items.push([lc, `1-hour and 2-hour moves continue ${m1 > 0 ? "up" : "down"} (${m1 >= 0 ? "+" : ""}${f(m1, 2)}% and ${m2 >= 0 ? "+" : ""}${f(m2, 2)}%)`]);
+  // moving averages
+  const cl = B.cl.slice(); cl[cl.length - 1] = cur; const e20 = monEma(cl, 20), e100 = monEma(cl, 100), d20 = (cur / e20 - 1) * 100, d100 = (cur / e100 - 1) * 100, sm = typ1 > 0 ? Math.abs(d20) / typ1 : null, ls = monLvl(sm, A, R);
+  if (ls) items.push([ls, `price ${f(Math.abs(d20), 2)}% ${d20 >= 0 ? "above" : "below"} its 20-candle average = ${f(sm, 1)}× a normal hour`]);
+  // distance to the range edges of the position
+  let edgeHtml = `<div>Range edges: <span class="note">enter your legs to see the distance to your profit range.</span></div>`, le = 0;
+  let pr = null; try { pr = positionProfile(); } catch (e) {}
+  const E = pr ? rngEdges(pr) : null;
+  if (E){
+    const dLo = isFinite(E.lo) ? (cur / E.lo - 1) * 100 : null, dHi = isFinite(E.hi) ? (E.hi / cur - 1) * 100 : null, inside = (dLo === null || dLo >= 0) && (dHi === null || dHi >= 0);
+    const nh = d => d !== null && typ1 > 0 ? d / typ1 : null, hLo = nh(dLo), hHi = nh(dHi);
+    const near = inside ? Math.min(...[hLo, hHi].filter(x => x !== null)) : -1;
+    const toD = m1 > 0 ? dHi : m1 < 0 ? dLo : null, etaM = inside && toD !== null && toD > 0 && Math.abs(m1) > 0 ? toD / Math.abs(m1) * 60 : null, leEta = etaM === null ? 0 : etaM < 60 ? 2 : etaM < 120 ? 1 : 0;
+    le = !inside ? 2 : Math.max(near < 1 ? 2 : near < 2 ? 1 : 0, leEta);
+    const eta = (d, toward) => toward && d !== null && d > 0 && d / Math.abs(m1) * 60 <= 720 ? ` · at the last hour's pace about ${f(d / Math.abs(m1) * 60, 0)} min` : "";
+    const side = (nm, edge, d, h, toward) => edge === Infinity || edge === -Infinity || d === null ? "" : `<div>${nm}: <b>${f(edge, 0)}</b> · ${d >= 0 ? f(d, 2) + "% away" : "<b class='l'>passed by " + f(-d, 2) + "%</b>"}${h !== null ? ` · ${f(h, 1)} normal hours` : ""}${d >= 0 ? eta(d, toward) : ""}</div>`;
+    edgeHtml = `<div>Range edges ${monMk(!inside ? "OUTSIDE the range" : le === 2 ? "very close" : le === 1 ? "close" : "comfortable", le)}</div>` + side("Lower edge", E.lo, dLo, hLo, m1 < 0) + side("Upper edge", E.hi, dHi, hHi, m1 > 0);
+    if (le) items.push([le, !inside ? "BTC is outside your profit range" : leEta >= (near < 1 ? 2 : near < 2 ? 1 : 0) && etaM !== null && leEta ? `at the last hour's pace BTC reaches your ${m1 > 0 ? "upper" : "lower"} range edge in about ${f(etaM, 0)} minutes` : `nearest range edge only ${f(near, 1)} normal hours away`]);
+  }
+  $("monExtra").innerHTML = `<div>Moving averages: price ${d20 >= 0 ? "+" : ""}${f(d20, 2)}% vs the 20-candle average, ${d100 >= 0 ? "+" : ""}${f(d100, 2)}% vs the 100-candle average · 20 is ${e20 >= e100 ? "above" : "below"} 100 ${monMk(sm === null ? "–" : f(sm, 1) + "× normal hour", ls)}</div>` +
+    `<div>Continuation (1 h ${m1 >= 0 ? "+" : ""}${f(m1, 2)}%, 2 h ${m2 >= 0 ? "+" : ""}${f(m2, 2)}%): ${cont ? monMk("moving the same way, " + f(cm, 1) + "× normal hour", lc) : monMk("not continuing", 0)}</div>` + edgeHtml +
+    `<div class="note" style="margin-top:4px">Normal moves in the last 24 h: 5 min ${f(B.typ[5], 2)}% · 15 min ${f(B.typ[15], 2)}% · 1 h ${f(B.typ[60], 2)}% · 2 h ${f(B.typ[120], 2)}%${age > 5 ? ` · <b class="l">price data is ${age} minutes old</b>` : ""}</div>`;
+  const lvl = items.reduce((m, x) => Math.max(m, x[0]), 0); items.sort((x, y) => y[0] - x[0]);
+  pill.className = "mk mk" + lvl; pill.textContent = lvl === 2 ? "RED" : lvl === 1 ? "AMBER" : "CALM"; card.className = "card" + (lvl ? " l" + lvl : "");
+  sum.innerHTML = items.length ? items.slice(0, 4).map(x => (x[0] === 2 ? "🔴 " : "🟠 ") + x[1]).join("<br>") + (items.length > 4 ? `<br><span class="note">+ ${items.length - 4} more</span>` : "") : "Nothing unusual against the last 24 hours.";
+  if (lvl === 2 && MON.level < 2 && $("monSnd").checked){ try { rngSiren(); } catch (e) {} }
+  MON.level = lvl;
+}
+["monA", "monR"].forEach(id => $(id).addEventListener("input", () => { try { localStorage.setItem(id, $(id).value); } catch (e) {} monRender(); }));
+$("monSnd").addEventListener("change", () => { try { localStorage.setItem("monSnd", $("monSnd").checked ? "1" : "0"); } catch (e) {} });
+try { ["monA", "monR"].forEach(id => { const v = localStorage.getItem(id); if (v) $(id).value = v; }); $("monSnd").checked = localStorage.getItem("monSnd") === "1"; } catch (e) {}
 async function loadChgRef(){
   try {
     const base = $("base").value.replace(/\/$/, ""), end = Math.floor(Date.now() / 1000), start = end - 24 * 3600 - 300;
     const u = new URL(base + "/v2/history/candles");
     u.searchParams.set("resolution", "1m"); u.searchParams.set("symbol", "BTCUSD"); u.searchParams.set("start", start); u.searchParams.set("end", end);
     const r = await fetch(u); if (!r.ok) throw new Error("HTTP " + r.status);
-    const arr = ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), o: Number(c.open), v: Number(c.volume) || 0})).filter(c => c.o > 0).sort((a, b) => a.t - b.t);
+    const arr = ((await r.json()).result || []).map(c => ({t: Number(c.time) > 1e12 ? Math.floor(Number(c.time) / 1000) : Number(c.time), o: Number(c.open), h: Number(c.high), l: Number(c.low), c: Number(c.close), v: Number(c.volume) || 0})).filter(c => c.o > 0).sort((a, b) => a.t - b.t);
     chgRef = {at: end, arr};
-  } catch (e) { chgRef = null; }
+    try { monPrep(); } catch (e) { MON.base = null; }
+  } catch (e) { chgRef = null; MON.base = null; }
   showChg();
 }
 function showChg(){
@@ -4229,6 +4332,7 @@ function showChg(){
   [15, 60, 120, 240, 1440].forEach(m => { sums[m] = chgRef ? chgRef.arr.filter(x => x.t >= nowS - m * 60).reduce((a, x) => a + x.v, 0) : 0; });
   const any = sums[1440] > 0, fmtV = v => f(v * lotV, v * lotV >= 100 ? 0 : 2) + " BTC";
   [15, 60, 120, 240, 1440].forEach(m => { const el = $("vol" + m); if (el){ el.textContent = any ? fmtV(sums[m]) : "–"; el.style.fontWeight = "700"; el.title = "Traded volume of BTCUSD in the last " + m + " minutes (contracts × BTC per lot)"; } });
+  try { monRender(); } catch (e) { const el = $("monSum"); if (el) el.textContent = "Monitor error: " + e.message; }
 }
 loadChgRef(); setInterval(loadChgRef, 60000);
 loadSeries();
