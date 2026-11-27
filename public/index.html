@@ -649,7 +649,7 @@ function drawClosedRows(){
   if (!incClosed) return;
   const list = closedLegs(); if (!list.length) return;
   const tot = list.reduce((a, c) => a + c.pnl, 0), dash = "<td>–</td>";
-  const rows = list.map(c => `<tr class="closedrow" style="background:rgba(128,128,128,.08)"><td style="text-align:left">${esc(c.s)} <span class="note">closed ${esc(c.date)}</span></td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry, 2)}</td><td><b>${f(c.exit, 2)}</b></td>${dash}${dash}${dash}<td class="${sg(c.pnl)}">${f(c.pnl)}</td><td class="${sg(c.pnl)}">${f(c.pnl)}</td>${dash}<td><span class="note">closed</span></td></tr>`).join("");
+  const rows = list.map(c => `<tr class="closedrow" style="background:rgba(128,128,128,.08)"><td style="text-align:left">${esc(c.s)} <span class="note">closed ${esc(c.date)}</span></td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry, 2)}</td><td><b>${f(c.exit, 2)}</b></td>${dash}${dash}${dash}<td class="${sg(c.pnl)}">${f(c.pnl)}</td><td class="${sg(c.pnl)}">${f(c.pnl)}</td>${dash}<td>${c.cid ? `<button data-cdel="${esc(c.cid)}" title="Remove this closed order from the position">✕</button>` : `<span class="note">closed</span>`}</td></tr>`).join("");
   body.insertAdjacentHTML("beforeend", rows + `<tr class="closedrow"><td colspan="8" style="text-align:left"><b>Closed legs, realised</b> <span class="note">(included in the combined P&amp;L above)</span></td><td class="${sg(tot)}"><b>${f(tot)}</b></td><td class="${sg(tot)}"><b>${f(tot)}</b></td><td></td><td></td></tr>`);
 }
 $("body").addEventListener("change", e => {
@@ -659,6 +659,7 @@ $("body").addEventListener("change", e => {
   save(); tick();
 });
 $("body").addEventListener("click", e => {
+  if (e.target.dataset.cdel !== undefined){ posCl = readPosCl().filter(c => c.id !== e.target.dataset.cdel); savePosCl(); drawInputs(); tick(); return; }
   if (e.target.dataset.del !== undefined){ legs.splice(Number(e.target.dataset.del), 1); save(); drawInputs(); tick(); }
 });
 $("add").onclick = () => { legs.push({s:"", side:-1, lots:0, entry:0}); drawInputs(); };
@@ -1083,6 +1084,11 @@ function readJournal(){
   try { return JSON.parse(localStorage.getItem("journal")) || []; } catch (e) { return journal; }
 }
 journal = readJournal();
+// closed orders imported from Delta order history: kept with the open position (entry and exit prices), NOT in the journal
+let posCl = [];
+function readPosCl(){ try { return JSON.parse(localStorage.getItem("posCl")) || []; } catch (e) { return posCl; } }
+posCl = readPosCl();
+function savePosCl(){ try { localStorage.setItem("posCl", JSON.stringify(posCl)); } catch (e) {} }
 function saveJournal(){
   try { localStorage.setItem("journal", JSON.stringify(journal)); } catch (e) {}
   if (pw) syncJournal().then(() => setSync("Saved to cloud " + new Date().toLocaleTimeString()))
@@ -1095,6 +1101,7 @@ function closedLegs(){
   const exps = new Set(legs.filter(L => Number(L.lots) > 0).map(L => String(L.s).split("-")[3]));
   const out = [];
   (journal || []).forEach(j => (j.legs || []).forEach(L => { if (exps.has(String(L.s).split("-")[3])) out.push({date: j.date, type: j.type, s: L.s, side: L.side, lots: L.lots, entry: L.entry, exit: L.exit, pnl: legPnl(L, L.exit, j.lot)}); }));
+  (posCl || []).forEach(c => { if (exps.has(String(c.s).split("-")[3])) out.push({date: c.date, type: "Order", s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit, pnl: legPnl(c, c.exit, c.lot || 0.001), cid: c.id}); });
   return out;
 }
 function closedOff(){ return closedLegs().reduce((a, c) => a + c.pnl, 0); }
@@ -2190,7 +2197,7 @@ function drawPosition(){
     <text id="posCurTxt" x="0" y="0" font-size="12" font-weight="700" fill="var(--fg)" visibility="hidden"></text></svg>`;
   posGeom = {pr, W, H: HT, H1: H, L, R, T, B, x, y, y2, x2, tA, tB, T2, PH};
   const cl = closedLegs();
-  $("posClosed").innerHTML = cl.length ? `<p style="margin:10px 0 4px"><b>Closed legs of this expiry</b> <span class="note">(from the journal, included in the chart and totals)</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>` +
+  $("posClosed").innerHTML = cl.length ? `<p style="margin:10px 0 4px"><b>Closed legs of this expiry</b> <span class="note">(imported orders and journal, included in the chart and totals)</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>` +
     cl.map(c => `<tr><td style="text-align:left">${esc(c.date)}</td><td style="text-align:left">${esc(c.s)}</td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry)}</td><td>${f(c.exit)}</td><td class="${sg(c.pnl)}">${money(c.pnl)}</td></tr>`).join("") +
     `<tr><td colspan="6" style="text-align:left"><b>Closed total</b></td><td class="${sg(pr.off)}"><b>${money(pr.off)}</b></td></tr></tbody></table></div>` : "";
   if (posCur !== null) showCursor(posCur); else hideCursor(true);
@@ -3432,16 +3439,17 @@ function importLog(){
   const lot = Number($("lot").value) || 0.001, rp = replayFills(fills, add ? legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s)) : null, lot);
   const prevLegs = legs.map(L => Object.assign({}, L));
   const newLegs = rp.open.map(o => ({s: o.s, side: o.side, lots: o.lots, entry: Math.round(o.entry * 1e6) / 1e6}));
-  journal = readJournal(); const jids = []; let realised = 0;
+  posCl = readPosCl(); const cids = []; let realised = 0;
   rp.closed.forEach(c => { const id = "imp-" + c.id + "-" + c.lots;
-    if (journal.some(j => j.id === id)) return;
-    const pnl = legPnl(c, c.exit, lot); realised += pnl;
-    journal.push({id, date: String(c.time).slice(0, 10) || todayStr(), type: "Closed", lot, pnl, legs: [{s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit}]}); jids.push(id); });
-  try { localStorage.setItem("legsPrev", JSON.stringify({legs: prevLegs, ids: jids, ts: Date.now()})); } catch (e) {}
+    if (posCl.some(j => j.id === id)) return;
+    realised += legPnl(c, c.exit, lot);
+    posCl.push({id, date: String(c.time).slice(0, 10) || todayStr(), time: c.time, lot, s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit, derived: !!c.derived}); cids.push(id); });
+  savePosCl();
+  try { localStorage.setItem("legsPrev", JSON.stringify({legs: prevLegs, ids: [], cids, ts: Date.now()})); } catch (e) {}
   try { const all = impIds(); r.fills.forEach(x => all.add(x.id)); localStorage.setItem("impIds", JSON.stringify([...all].slice(-2000))); } catch (e) {}
-  saveJournal(); legs = newLegs; save(); drawInputs(); renderJournal(); showUndo(); tick();
+  legs = newLegs; save(); drawInputs(); renderJournal(); showUndo(); tick();
   const nl = legs.filter(L => Number(L.lots) > 0).length;
-  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${jids.length} closed leg(s) saved to the journal (${money(realised)} realised${rp.closed.some(c => c.derived) ? "; " + rp.closed.filter(c => c.derived).length + " rebuilt from Delta's realised P&L because the opening order was not in the paste" : ""}). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
+  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${cids.length} closed order(s) kept in the position with entry and exit prices, not in the journal (${money(realised)} realised${rp.closed.some(c => c.derived) ? "; " + rp.closed.filter(c => c.derived).length + " rebuilt from Delta's realised P&L because the opening order was not in the paste" : ""}). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
   out.innerHTML = `<table><thead><tr><th style="text-align:left">Contract</th><th>Side</th><th>Lots</th><th>Avg entry</th></tr></thead><tbody>` +
     rp.open.map(o => `<tr><td style="text-align:left">${esc(o.s)}</td><td>${o.side === -1 ? "Sell" : "Buy"}</td><td>${f(o.lots, 0)}</td><td>${f(o.entry, 2)}</td></tr>`).join("") + `</tbody></table>`;
 }
@@ -3483,11 +3491,18 @@ $("wundo").onclick = () => {
   const pv = readPrev(); if (!pv) return;
   if (!confirm("Restore the legs table to before the last apply, and remove the journal entries it added?")) return;
   journal = readJournal().filter(j => !pv.ids.includes(j.id)); pv.ids.forEach(id => addDel(id));
+  posCl = readPosCl().filter(c => !(pv.cids || []).includes(c.id)); savePosCl();
   saveJournal(); legs = pv.legs; try { localStorage.removeItem("legsPrev"); } catch (e) {}
   save(); drawInputs(); renderJournal(); renderWhatIf(); showUndo(); tick();
   $("wmsg").textContent = "Undone: the legs table and journal are back as they were.";
 };
 showUndo();
+// one-time tidy: orders an earlier import put into the journal move to the position's closed orders
+(function(){ try {
+  const m = (journal || []).filter(j => /^imp-/.test(String(j.id))); if (!m.length) return;
+  m.forEach(j => { (j.legs || []).forEach(L => { if (!posCl.some(c => c.id === j.id)) posCl.push({id: j.id, date: j.date, lot: j.lot, s: L.s, side: L.side, lots: L.lots, entry: L.entry, exit: L.exit}); }); addDel(j.id); });
+  journal = journal.filter(j => !/^imp-/.test(String(j.id))); savePosCl(); saveJournal(); renderJournal(); drawInputs();
+} catch (e) {} })();
 
 // ---------- Order list ----------
 let lastTicket = null;
@@ -4013,7 +4028,7 @@ function h24Key(){
 }
 async function h24Data(force){
   const open = legs.filter(L => Number(L.lots) > 0 && /^[CP]-/.test(L.s));
-  if (!open.length) throw new Error("Add legs with lots first.");
+  if (!open.length) throw new Error("No open legs yet. Paste your order history into the Import box above, or add legs with lots in the table.");
   const key = h24Key();
   if (!force && h24Cache && h24Cache.key === key && Date.now() - h24Cache.at < 55000) return h24Cache;
   if (h24Fetching) return h24Fetching;
