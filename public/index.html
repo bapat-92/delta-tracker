@@ -649,7 +649,7 @@ function drawClosedRows(){
   if (!incClosed) return;
   const list = closedLegs(); if (!list.length) return;
   const tot = list.reduce((a, c) => a + c.pnl, 0), dash = "<td>–</td>";
-  const rows = list.map(c => `<tr class="closedrow" style="background:rgba(128,128,128,.08)"><td style="text-align:left">${esc(c.s)} <span class="note">closed ${esc(c.date)}</span></td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry, 2)}</td><td><b>${f(c.exit, 2)}</b></td>${dash}${dash}${dash}<td class="${sg(c.pnl)}">${f(c.pnl)}</td><td class="${sg(c.pnl)}">${f(c.pnl)}</td>${dash}<td>${c.cid ? `<button data-cdel="${esc(c.cid)}" title="Remove this closed order from the position">✕</button>` : `<span class="note">closed</span>`}</td></tr>`).join("");
+  const rows = list.map(c => `<tr class="closedrow" style="background:rgba(128,128,128,.08)"><td style="text-align:left">${esc(c.s)} <span class="note">closed ${esc(c.date)}${c.fee ? ", fees " + f(c.fee, 2) + " paid" : ""}</span></td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry, 2)}</td><td><b>${f(c.exit, 2)}</b></td>${dash}${dash}${dash}<td class="${sg(c.pnl)}">${f(c.pnl)}</td><td class="${sg(c.pnl)}">${f(c.pnl)}</td>${dash}<td>${c.cid ? `<button data-cdel="${esc(c.cid)}" title="Remove this closed order from the position">✕</button>` : `<span class="note">closed</span>`}</td></tr>`).join("");
   body.insertAdjacentHTML("beforeend", rows + `<tr class="closedrow"><td colspan="8" style="text-align:left"><b>Closed legs, realised</b> <span class="note">(included in the combined P&amp;L above)</span></td><td class="${sg(tot)}"><b>${f(tot)}</b></td><td class="${sg(tot)}"><b>${f(tot)}</b></td><td></td><td></td></tr>`);
 }
 $("body").addEventListener("change", e => {
@@ -1101,7 +1101,7 @@ function closedLegs(){
   const exps = new Set(legs.filter(L => Number(L.lots) > 0).map(L => String(L.s).split("-")[3]));
   const out = [];
   (journal || []).forEach(j => (j.legs || []).forEach(L => { if (exps.has(String(L.s).split("-")[3])) out.push({date: j.date, type: j.type, s: L.s, side: L.side, lots: L.lots, entry: L.entry, exit: L.exit, pnl: legPnl(L, L.exit, j.lot)}); }));
-  (posCl || []).forEach(c => { if (exps.has(String(c.s).split("-")[3])) out.push({date: c.date, type: "Order", s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit, pnl: legPnl(c, c.exit, c.lot || 0.001), cid: c.id}); });
+  (posCl || []).forEach(c => { if (exps.has(String(c.s).split("-")[3])) out.push({date: c.date, type: "Order", s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit, pnl: legPnl(c, c.exit, c.lot || 0.001) - (c.fee || 0), fee: c.fee || 0, cid: c.id}); });
   return out;
 }
 function closedOff(){ return closedLegs().reduce((a, c) => a + c.pnl, 0); }
@@ -2197,7 +2197,7 @@ function drawPosition(){
     <text id="posCurTxt" x="0" y="0" font-size="12" font-weight="700" fill="var(--fg)" visibility="hidden"></text></svg>`;
   posGeom = {pr, W, H: HT, H1: H, L, R, T, B, x, y, y2, x2, tA, tB, T2, PH};
   const cl = closedLegs();
-  $("posClosed").innerHTML = cl.length ? `<p style="margin:10px 0 4px"><b>Closed legs of this expiry</b> <span class="note">(imported orders and journal, included in the chart and totals)</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>` +
+  $("posClosed").innerHTML = cl.length ? `<p style="margin:10px 0 4px"><b>Closed legs of this expiry</b> <span class="note">(imported orders and journal, included in the chart and totals; imported orders show P&amp;L after the fees you paid on them)</span></p><div class="wrap"><table><thead><tr><th style="text-align:left">Date</th><th style="text-align:left">Symbol</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>P&amp;L</th></tr></thead><tbody>` +
     cl.map(c => `<tr><td style="text-align:left">${esc(c.date)}</td><td style="text-align:left">${esc(c.s)}</td><td>${c.side === -1 ? "Sell" : "Buy"}</td><td>${f(c.lots, 0)}</td><td>${f(c.entry)}</td><td>${f(c.exit)}</td><td class="${sg(c.pnl)}">${money(c.pnl)}</td></tr>`).join("") +
     `<tr><td colspan="6" style="text-align:left"><b>Closed total</b></td><td class="${sg(pr.off)}"><b>${money(pr.off)}</b></td></tr></tbody></table></div>` : "";
   if (posCur !== null) showCursor(posCur); else hideCursor(true);
@@ -3407,11 +3407,12 @@ function replayFills(fills, seed, lot){
   const pos = {}, closed = []; let fees = 0;
   (seed || []).forEach(L => { const q = (L.side === -1 ? -1 : 1) * Number(L.lots); if (q && L.s){ const P = pos[L.s] || (pos[L.s] = {q: 0, e: 0}); const cur = Math.abs(P.q); P.e = cur + Math.abs(q) ? (P.e * cur + (Number(L.entry) || 0) * Math.abs(q)) / (cur + Math.abs(q)) : 0; P.q += q; } });
   ord.forEach(x => {
-    fees += x.fee; const P = pos[x.s] || (pos[x.s] = {q: 0, e: 0});
+    fees += x.fee; const P = pos[x.s] || (pos[x.s] = {q: 0, e: 0}), pf = x.n > 0 ? (x.fee || 0) / x.n : 0;   // pf = this fill's fee per lot
     let n = x.n, matched = 0;
     if (P.q !== 0 && Math.sign(P.q) !== x.side){
       const m = Math.min(n, Math.abs(P.q)), ps = Math.sign(P.q);
-      closed.push({s: x.s, side: ps, lots: m, entry: P.e, exit: x.px, time: x.time, id: x.id + ":" + x.s});
+      const ef = (P.fa || 0) * (m / Math.abs(P.q)); P.fa = (P.fa || 0) - ef;                      // entry fee share of the lots being closed
+      closed.push({s: x.s, side: ps, lots: m, entry: P.e, exit: x.px, time: x.time, id: x.id + ":" + x.s, fee: ef + pf * m});
       matched = (ps === -1 ? (P.e - x.px) : (x.px - P.e)) * m * lot;
       P.q += x.side * m; n -= m; if (P.q === 0) P.e = 0;
     }
@@ -3419,11 +3420,11 @@ function replayFills(fills, seed, lot){
     if (n > 0 && P.q === 0 && Math.abs(x.real || 0) > 0.02){
       const left = x.real - matched, E = x.side === 1 ? x.px + left / (n * lot) : x.px - left / (n * lot);
       if (Math.abs(left) > 0.02 && E > 0){
-        closed.push({s: x.s, side: -x.side, lots: n, entry: Math.round(E * 1e6) / 1e6, exit: x.px, time: x.time, id: x.id + ":" + x.s, derived: true});
+        closed.push({s: x.s, side: -x.side, lots: n, entry: Math.round(E * 1e6) / 1e6, exit: x.px, time: x.time, id: x.id + ":" + x.s, derived: true, fee: pf * n});
         n = 0;
       }
     }
-    if (n > 0){ const cur = Math.abs(P.q); P.e = (P.e * cur + x.px * n) / (cur + n); P.q += x.side * n; }
+    if (n > 0){ const cur = Math.abs(P.q); P.e = (P.e * cur + x.px * n) / (cur + n); P.q += x.side * n; P.fa = (P.fa || 0) + pf * n; }
   });
   const open = Object.keys(pos).filter(k => pos[k].q !== 0).map(k => ({s: k, side: pos[k].q > 0 ? 1 : -1, lots: Math.abs(pos[k].q), entry: pos[k].e}));
   return {open, closed, fees};
@@ -3441,15 +3442,15 @@ function importLog(){
   const newLegs = rp.open.map(o => ({s: o.s, side: o.side, lots: o.lots, entry: Math.round(o.entry * 1e6) / 1e6}));
   posCl = readPosCl(); const cids = []; let realised = 0;
   rp.closed.forEach(c => { const id = "imp-" + c.id + "-" + c.lots;
-    if (posCl.some(j => j.id === id)) return;
-    realised += legPnl(c, c.exit, lot);
-    posCl.push({id, date: String(c.time).slice(0, 10) || todayStr(), time: c.time, lot, s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit, derived: !!c.derived}); cids.push(id); });
+    posCl = posCl.filter(j => j.id !== id);                                                    // re-importing refreshes the entry (fees included)
+    realised += legPnl(c, c.exit, lot) - (c.fee || 0);
+    posCl.push({id, fee: Math.round((c.fee || 0) * 1e4) / 1e4, date: String(c.time).slice(0, 10) || todayStr(), time: c.time, lot, s: c.s, side: c.side, lots: c.lots, entry: c.entry, exit: c.exit, derived: !!c.derived}); cids.push(id); });
   savePosCl();
   try { localStorage.setItem("legsPrev", JSON.stringify({legs: prevLegs, ids: [], cids, ts: Date.now()})); } catch (e) {}
   try { const all = impIds(); r.fills.forEach(x => all.add(x.id)); localStorage.setItem("impIds", JSON.stringify([...all].slice(-2000))); } catch (e) {}
   legs = newLegs; save(); drawInputs(); renderJournal(); showUndo(); tick();
   const nl = legs.filter(L => Number(L.lots) > 0).length;
-  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${cids.length} closed order(s) kept in the position with entry and exit prices, not in the journal (${money(realised)} realised${rp.closed.some(c => c.derived) ? "; " + rp.closed.filter(c => c.derived).length + " rebuilt from Delta's realised P&L because the opening order was not in the paste" : ""}). Fees in the paste: $${f(rp.fees, 4)} (not included in P&L). Use "Undo last apply" in the What-if card to go back.`;
+  msg.textContent = `Loaded ${fills.length} order(s): ${rp.open.length} open leg(s) ${add ? "after merging with" : "now in"} your legs table (${nl} total), ${cids.length} closed order(s) kept in the position with entry and exit prices, not in the journal (${money(realised)} realised${rp.closed.some(c => c.derived) ? "; " + rp.closed.filter(c => c.derived).length + " rebuilt from Delta's realised P&L because the opening order was not in the paste" : ""}). Fees in the paste: $${f(rp.fees, 2)}; the part paid on the closed orders is already taken off their P&L, and the open legs' entry fees are the page's own estimate. Use "Undo last apply" in the What-if card to go back.`;
   out.innerHTML = `<table><thead><tr><th style="text-align:left">Contract</th><th>Side</th><th>Lots</th><th>Avg entry</th></tr></thead><tbody>` +
     rp.open.map(o => `<tr><td style="text-align:left">${esc(o.s)}</td><td>${o.side === -1 ? "Sell" : "Buy"}</td><td>${f(o.lots, 0)}</td><td>${f(o.entry, 2)}</td></tr>`).join("") + `</tbody></table>`;
 }
