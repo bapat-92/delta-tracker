@@ -148,7 +148,7 @@ h1{padding-right:170px}
 
 <div class="card" id="impCard">
   <b>Import from Delta order history</b>
-  <p class="note" style="margin:4px 0 8px">Paste your Delta order history. Orders are replayed in time order to build the current position and the journal. Nothing is sent anywhere.</p>
+  <p class="note" style="margin:4px 0 8px">Paste your Delta order history, or the app's order cards, or order-ticket text such as <code>S P 56800 301126 ... L price Lot</code> to add legs. Orders are replayed in time order to build the current position and the journal. Nothing is sent anywhere.</p>
   <textarea id="impText" rows="5" style="width:100%;font:12px/1.4 ui-monospace,monospace;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg)" placeholder="Time,Contract,Qty,Side,Filled/Remaining,Exec.Price,..."></textarea>
   <div class="row" style="margin:8px 0">
     <label>When loading<select id="impMode"><option value="replace">Replace my legs table</option><option value="add">Add to my legs (skip orders already loaded)</option></select></label>
@@ -3381,7 +3381,35 @@ function csvSplit(line, sep){
     else if (ch === '"') q = true; else if (ch === sep){ out.push(cur); cur = ""; } else cur += ch; }
   out.push(cur); return out.map(x => x.trim());
 }
+// Delta's order cards (the app view): contract, qty, "Close buy", Filled/Cancelled, filled qty, Limit/Market, limit, stop, avg price, size BTC, value USD, realised USD, order id, fee USD, net USD, ..., "28 - Nov - 26, 8:13:12 am"
+function parseDeltaCards(text){
+  const t = String(text).split(/\r?\n/).map(x => x.trim()).filter(Boolean), MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12}, out = [];
+  const idx = []; t.forEach((l, i) => { if (/^[CP]-[A-Z]+-\d+-\d{6}$/.test(l)) idx.push(i); });
+  const num = x => { const v = Number(String(x).replace(/[^\d.\-+]/g, "")); return isFinite(v) && /\d/.test(x) ? v : null; };
+  idx.forEach((i0, k) => {
+    const B = t.slice(i0 + 1, k + 1 < idx.length ? idx[k + 1] : t.length), sym = t[i0];
+    const act = B.findIndex(l => /^(open|close)\s+(buy|sell)$/i.test(l)), st = B.findIndex(l => /^(filled|cancelled|canceled|partially filled|rejected|open|pending)$/i.test(l));
+    if (act < 0 || st < 0) return;
+    const side = /buy/i.test(B[act]) ? 1 : -1; let j = st + 1;
+    const filled = num(B[j] || ""); if (!(filled > 0)) return;
+    j++; const ty = B.findIndex((l, n) => n >= j && /^(limit|market|stop.*)$/i.test(l)); if (ty < 0) return;
+    const avg = num(B[ty + 3] || ""); if (!(avg > 0)) return;
+    const usd = []; let id = "", tm = "";
+    for (let n = ty + 4; n < B.length; n++){ const l = B[n];
+      if (/USD$/i.test(l)) usd.push(num(l));
+      else if (/^\d{7,}$/.test(l) && !id){ id = l; usd.length = Math.max(0, usd.length); id = l; usd.idLen = usd.length; }
+      else if (/^\d{1,2}\s*-\s*[A-Za-z]{3}\s*-\s*\d{2},\s*\d{1,2}:\d{2}(:\d{2})?\s*[ap]m$/i.test(l)){
+        const m = l.match(/^(\d{1,2})\s*-\s*([A-Za-z]{3})\s*-\s*(\d{2}),\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])m$/i);
+        let h = Number(m[4]) % 12; if (/p/i.test(m[7])) h += 12;
+        tm = `20${m[3]}-${String(MON[m[2].toLowerCase()] || 0).padStart(2, "0")}-${m[1].padStart(2, "0")} ${String(h).padStart(2, "0")}:${m[5]}:${m[6] || "00"}`; }
+    }
+    const nb = usd.idLen !== undefined ? usd.idLen : 2, real = nb >= 2 ? usd[1] || 0 : 0, fee = usd[nb] || 0;   // USD values before the order id: value, realised; after it: fee, net
+    out.push({s: sym, side, n: filled, px: avg, time: tm, fee, real, id: id || ("n" + k + sym + avg)});
+  });
+  return out;
+}
 function parseDeltaLog(text){
+  { const cd = parseDeltaCards(text); if (cd.length) return {fills: cd}; }
   const lines = String(text).split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 2) return {err: "Paste the header row and at least one order."};
   const sep = lines[0].includes("\t") ? "\t" : ",";
@@ -3430,8 +3458,41 @@ function replayFills(fills, seed, lot){
   return {open, closed, fees};
 }
 function impIds(){ try { return new Set(JSON.parse(localStorage.getItem("impIds")) || []); } catch (e) { return new Set(); } }
+// Order-ticket text, e.g.  S / P / 56800 / 301126 / 100 x / L / <price> / Lot / <lots>  (side, type, strike, expiry ddmmyy, ..., price after "L", lots near "Lot")
+function parseTicketLegs(text){
+  const t = String(text).split(/\r?\n/).map(x => x.trim()).filter(Boolean), num = x => /^\d[\d,]*(\.\d+)?$/.test(x) ? Number(x.replace(/,/g, "")) : null, out = [];
+  let cur = null, st = "";
+  for (let i = 0; i < t.length; i++){
+    const a = t[i];
+    if (/^[SB]$/i.test(a) && /^[PC]$/i.test(t[i + 1] || "") && num(t[i + 2] || "x") !== null && /^\d{6}$/.test(t[i + 3] || "")){
+      cur = {s: t[i + 1].toUpperCase() + "-BTC-" + num(t[i + 2]) + "-" + t[i + 3], side: /^s/i.test(a) ? -1 : 1, lots: 0, entry: 0}; out.push(cur); i += 3; st = "pre"; continue;
+    }
+    if (!cur) continue;
+    let m;
+    if (/^L$/i.test(a)){ st = "px"; continue; }
+    if (/^lots?$/i.test(a)){ st = "lots"; continue; }
+    if ((m = a.match(/^L\s+(\d[\d,]*(\.\d+)?)$/i))){ cur.entry = num(m[1]); st = "px2"; continue; }
+    if ((m = a.match(/^(\d[\d,]*(\.\d+)?)\s*lots?$/i))){ cur.lots = num(m[1]); continue; }
+    if (/^\d+\s*x$/i.test(a)) continue;                                     // leverage, e.g. "100 x"
+    const v = num(a); if (v === null) continue;
+    if (st === "px" && !cur.entry) cur.entry = v; else if (st === "lots" && !cur.lots) cur.lots = v; else if (st === "pre" && !cur.lots) cur.lots = v;
+  }
+  return out.filter(L => L.s);
+}
+function importTicket(tk){
+  const msg = $("impMsg"), out = $("impOut"), prevLegs = legs.map(L => Object.assign({}, L));
+  tk.forEach(n => { const o = legs.find(L => L.s === n.s && (L.side === -1 ? -1 : 1) === n.side);
+    if (o){ o.lots = n.lots || o.lots; o.entry = n.entry || o.entry; } else legs.push({s: n.s, side: n.side, lots: n.lots, entry: n.entry}); });
+  try { localStorage.setItem("legsPrev", JSON.stringify({legs: prevLegs, ids: [], cids: [], ts: Date.now()})); } catch (e) {}
+  save(); drawInputs(); showUndo(); tick();
+  const miss = tk.filter(L => !(L.lots > 0) || !(L.entry > 0)).length;
+  msg.className = "note"; msg.textContent = `Read ${tk.length} leg(s) from the order ticket text and put them in your legs table.` + (miss ? ` ${miss} of them have no lots or no price in the text, so fill those in the table.` : "") + ` Use "Undo last apply" in the What-if card to go back.`;
+  out.innerHTML = `<table><thead><tr><th style="text-align:left">Contract</th><th>Side</th><th>Lots</th><th>Price</th></tr></thead><tbody>` +
+    tk.map(o => `<tr><td style="text-align:left">${esc(o.s)}</td><td>${o.side === -1 ? "Sell" : "Buy"}</td><td>${o.lots ? f(o.lots, 0) : "–"}</td><td>${o.entry ? f(o.entry, 2) : "–"}</td></tr>`).join("") + `</tbody></table>`;
+}
 function importLog(){
   const msg = $("impMsg"), out = $("impOut"); msg.className = "note"; out.innerHTML = "";
+  { const tk = parseTicketLegs($("impText").value); if (tk.length && !/contract/i.test(($("impText").value.split(/\r?\n/)[0] || ""))){ importTicket(tk); return; } }
   const r = parseDeltaLog($("impText").value);
   if (r.err){ msg.className = "note l"; msg.textContent = r.err; return; }
   const add = $("impMode").value === "add", seen = add ? impIds() : new Set();
